@@ -69,27 +69,33 @@ Narrative architecture:
 
 Spoken Korean craft:
 - Write as a calm, perceptive narrator speaking to one viewer in consistent,
-  natural formal-polite Korean (습니다체). Do not mix banmal or 해요체.
+  natural polite Korean. Formal declarative endings such as ``~습니다/~입니다``
+  are the default, but limited conversational honorific endings such as
+  ``~인 겁니다``, ``~겠죠``, ``~고요``, ``~해볼까요?`` may be used when they
+  improve spoken rhythm. Never mix banmal or casual ``해요체`` into the script.
 - Write for one continuous TTS performance, not for line-by-line reading.
-  Keep periods and question marks in the narration text; never replace a
-  sentence boundary with a comma merely to make the delivery faster.
-- Let most spoken sentences land in a natural 15-20 Korean-character range
-  excluding spaces, and never exceed 26 characters. Use a short emphasis line
-  only as an occasional beat, and never stack three short lines in a row.
+  Sentence length is determined by natural Korean breathing and meaning, not
+  by caption width. A spoken sentence may contain a comma at a real thought
+  boundary when the speaker would naturally take a light breath.
+- For long-form narration, mix short emphasis sentences with medium explanatory
+  sentences. Most explanatory sentences should naturally fall around 24-42
+  Korean characters excluding spaces; allow up to 52 characters when one idea
+  is clearer as a single sentence. Do not force a complete thought into 15-20
+  characters merely to fit a subtitle line.
+- Avoid three or more consecutive sentences with the same declarative function
+  or the same ``~습니다/~입니다`` cadence. Change sentence function only when the
+  facts support it: explanation → question → reversal → emphasis → reason.
 - A real question must end in ``?`` and use a Korean interrogative ending such
   as ``~까요?`` or ``~습니까?`` so the narrator can lift the final intonation.
   Follow it immediately with a fact-based answer. Do not turn statements into
   questions just to add rhythm.
 - Captions are a separate display layer: they will be split after synthesis at
-  comma and meaning boundaries into 15-20-character phrases. Do not insert
-  unnatural line breaks, extra punctuation, or filler into the narration to
-  control caption length.
-- Keep most sentences around 15–20 Korean characters excluding spaces. Do not
-  split a short, semantically complete sentence merely to meet a length target.
-- Do not place three descriptive declarative sentences in a row. Alternate
-  the factual role where appropriate: explanation → question → reversal →
-  emphasis → reason. A question must receive its evidence-based answer in the
-  immediately following sentence or scene.
+  comma and meaning boundaries into roughly 15-20-character phrases. Do not
+  insert unnatural punctuation, sentence endings, filler, or line breaks into
+  the narration merely to control caption length.
+- Keep short emphasis sentences as occasional beats, but never stack three
+  short fragments in a row. If several adjacent facts belong to one thought,
+  connect them into a natural spoken sentence instead of producing a checklist.
 - Mix short emphasis sentences with medium explanatory sentences. One scene
   must carry one idea, one emotional beat, and one transition to the next.
 - Translate a number into scale, comparison, cause, or consequence in the
@@ -128,7 +134,9 @@ def get_script_style_guide(
 이 규칙은 특정 창작자의 문장이나 시그니처를 따라 하라는 뜻이 아니다.
 검증된 사실을 설명하는 우리 채널의 편집 규칙으로만 사용한다.
 
-- 레지스터: 자연스러운 존댓말·습니다체로 말한다. "여러분", "우리"를 과용하지 말고,
+- 레지스터: 반말·해요체를 섞지 않는 자연스러운 존댓말을 유지한다. 기본은 ``~습니다/~입니다``지만,
+  실제 설명 흐름에 필요한 구간에서는 ``~인 겁니다``, ``~겠죠``, ``~고요``, ``~해볼까요?`` 같은
+  준구어 존댓말을 제한적으로 사용해 동일 종결의 연속을 피한다. "여러분", "우리"를 과용하지 말고,
   사실의 영향을 "우리 계좌" 또는 "내 돈" 관점으로 연결할 때만 사용한다.
 - 필수 장치: {", ".join(required)}.
 - D1은 첫 3초 안에 검증된 숫자 하나와 질문 또는 대조를 함께 둔다. 숫자는 verified_facts의 값만 쓴다.
