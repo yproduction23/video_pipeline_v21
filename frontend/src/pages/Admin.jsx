@@ -21,6 +21,14 @@ const PERSON_LICENSES = [
   ['PUBLIC_DOMAIN', '퍼블릭 도메인'],
 ]
 
+/** 채널 성격 필터의 기준이 되는 주요 분야 프리셋. STEP 01 트렌드 추천 필터가 이 값을 사용한다. */
+const GENRE_OPTIONS = [
+  '경제/역사/시사',
+  '노인/생활정보',
+  '건강/제품판매',
+  '기타',
+]
+
 export default function Admin() {
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -44,6 +52,8 @@ export default function Admin() {
   // 채널 프로필 편집 상태
   const [editedVoices, setEditedVoices] = useState({})
   const [characterDescriptions, setCharacterDescriptions] = useState({})
+  const [editedGenrePrimary, setEditedGenrePrimary] = useState({})
+  const [editedGenreExcluded, setEditedGenreExcluded] = useState({})
   const [channelPreviewText, setChannelPreviewText] = useState({})
   const [channelPreviewUrls, setChannelPreviewUrls] = useState({})
   const [channelPreviewLoading, setChannelPreviewLoading] = useState({})
@@ -556,14 +566,40 @@ export default function Admin() {
                           onChange={e => setEditedVoices({ ...editedVoices, [channel.channelId]: e.target.value })}
                           className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900 mb-2"
                         />
-                        <button
-                          onClick={() => saveChannelMutation.mutate({ ...channel, characterStylePrompt: characterDescription, voiceId: editedVoices[channel.channelId] ?? channel.voiceId })}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-sm hover:bg-emerald-700"
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">주요 분야 (트렌드 추천 필터 기준)</label>
+                        <select
+                          value={editedGenrePrimary[channel.channelId] ?? (channel.genrePrimary || '')}
+                          onChange={e => setEditedGenrePrimary({ ...editedGenrePrimary, [channel.channelId]: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900"
                         >
-                          설정 저장
-                        </button>
+                          <option value="">선택 안 함</option>
+                          {GENRE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">제외 분야 (쉼표로 구분, 검색 결과에서 자동 제외)</label>
+                        <input
+                          value={editedGenreExcluded[channel.channelId] ?? (channel.genreExcluded || '')}
+                          onChange={e => setEditedGenreExcluded({ ...editedGenreExcluded, [channel.channelId]: e.target.value })}
+                          placeholder="예: 건강식품, 다이어트"
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900"
+                        />
                       </div>
                     </div>
+                    <button
+                      onClick={() => saveChannelMutation.mutate({
+                        ...channel,
+                        characterStylePrompt: characterDescription,
+                        voiceId: editedVoices[channel.channelId] ?? channel.voiceId,
+                        genrePrimary: editedGenrePrimary[channel.channelId] ?? channel.genrePrimary,
+                        genreExcluded: editedGenreExcluded[channel.channelId] ?? channel.genreExcluded,
+                      })}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-sm hover:bg-emerald-700"
+                    >
+                      설정 저장
+                    </button>
 
                     {/* 캐릭터 포즈 15종 및 역할 의상 생성 */}
                     <div className="pt-2 flex items-center gap-3">

@@ -20,8 +20,8 @@ export const jobsApi = {
     apiClient.post(`/jobs/${id}/keyword/confirm`, { selectedKeyword: keyword }).then(r => r.data),
 
   // 트렌딩
-  trendingYoutube: (keyword, { ranking = 'evidence', minSubscribers = 0 } = {}) =>
-    apiClient.get(`/trending/youtube`, { params: { keyword, ranking, minSubscribers } }).then(r => r.data),
+  trendingYoutube: (keyword, { ranking = 'evidence', minSubscribers = 0, channelId = '' } = {}) =>
+    apiClient.get(`/trending/youtube`, { params: { keyword, ranking, minSubscribers, channelId: channelId || undefined } }).then(r => r.data),
 
   // 스크립트
   generateScript: (id) => apiClient.post(`/jobs/${id}/script/generate`).then(r => r.data),

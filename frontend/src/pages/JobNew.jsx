@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ChevronLeft, ChevronRight, Sparkles, Target, Sliders, DollarSign,
-  Check, Zap, Users, Loader, Search, AlertTriangle
+  Check, Zap, Users, Loader, Search, AlertTriangle, Tv
 } from 'lucide-react'
 import Layout from '../components/Layout'
 import Pagination from '../components/Pagination'
@@ -70,12 +70,18 @@ export default function JobNew() {
 
   useEffect(() => {
     apiClient.get('/channels')
-      .then(r => setChannels(r.data))
+      .then(r => {
+        setChannels(r.data)
+        if (r.data.length > 0) {
+          setForm(current => current.channelId ? current : { ...current, channelId: r.data[0].channelId })
+        }
+      })
       .catch(e => console.error('채널 조회 실패:', e))
   }, [])
 
   const [form, setForm] = useState({
     title: '',
+    channelId: '',
     category: 'KOSPI',
     autonomy: 'GUIDED',
     longformTargetMinutes: 15,
@@ -85,6 +91,8 @@ export default function JobNew() {
     shortsCount: 3,
     dataVisualsEnabled: false,
   })
+
+  const selectedChannel = channels.find(c => c.channelId === form.channelId) || null
 
   const macroSkipCategories = ['GLOBAL_MACRO', 'CUSTOM', 'CRYPTO']
   const detectedMacroTerms = macroSkipCategories.includes(form.category)
@@ -109,7 +117,7 @@ export default function JobNew() {
   }, [searchParams, location.state])
 
   const canProceed = () => {
-    if (step === 1) return form.title.trim().length > 0
+    if (step === 1) return form.title.trim().length > 0 && !!form.channelId
     if (step === 2) return true
     if (step === 3) return true
     return false
@@ -121,7 +129,7 @@ export default function JobNew() {
     setResearchLoading(true)
     setResearchError(null)
     try {
-      const result = await jobsApi.trendingYoutube(keyword)
+      const result = await jobsApi.trendingYoutube(keyword, { channelId: form.channelId })
       setResearchVideos(Array.isArray(result) ? result : (result?.videos || []))
       setResearchPage(1)
     } catch (err) {
@@ -233,6 +241,61 @@ export default function JobNew() {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-bold text-slate-900">
+                    제작 채널 선택 <span className="text-cyan-600">*</span>
+                  </label>
+                  <span className="text-xs font-semibold text-slate-500">이 작업은 선택한 채널에 고정됩니다</span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {channels.map(ch => {
+                    const isSelected = form.channelId === ch.channelId
+                    return (
+                      <button
+                        key={ch.channelId}
+                        type="button"
+                        onClick={() => setForm({ ...form, channelId: ch.channelId })}
+                        className={`relative text-left p-4 rounded-xl border-2 transition-all ${
+                          isSelected
+                            ? 'border-cyan-600 bg-cyan-50/80 shadow-md'
+                            : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <Tv size={16} className={isSelected ? 'text-cyan-700' : 'text-slate-500'} />
+                            <span className={`text-xs font-bold ${isSelected ? 'text-cyan-900' : 'text-slate-900'}`}>
+                              {ch.channelName}
+                            </span>
+                          </div>
+                          {isSelected && (
+                            <span className="w-5 h-5 rounded-full bg-cyan-600 text-white flex items-center justify-center shadow-xs">
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                          )}
+                        </div>
+                        {ch.genrePrimary && (
+                          <p className={`text-[11px] font-semibold mt-1.5 ${isSelected ? 'text-cyan-800' : 'text-slate-500'}`}>
+                            분야: {ch.genrePrimary}
+                          </p>
+                        )}
+                      </button>
+                    )
+                  })}
+                  {channels.length === 0 && (
+                    <p className="text-xs font-semibold text-slate-500 col-span-2">
+                      등록된 채널이 없습니다. 관리자 화면에서 채널 프로필을 먼저 생성해 주세요.
+                    </p>
+                  )}
+                </div>
+                {selectedChannel?.genreExcluded && (
+                  <p className="text-xs font-semibold text-amber-700 mt-2">
+                    제외 분야: {selectedChannel.genreExcluded} (검색 결과에서 자동 제외됩니다)
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-bold text-slate-900">
                     영상 주제 입력 <span className="text-cyan-600">*</span>
                   </label>
                   <span className="text-xs font-semibold text-slate-500">구체적 명사·소재 작성 권장</span>
@@ -282,7 +345,7 @@ export default function JobNew() {
                 >
                   <div className="flex items-center gap-2.5">
                     <Search size={16} className="text-cyan-700" />
-                    <span className="text-xs font-bold text-slate-800">유튜브 트렌드 검색 및 관련 영상 성과 비교 (선택사항)</span>
+                    <span className="text-xs font-bold text-slate-800">유튜브 트렌드 검색 (선택한 채널 성격에 맞는 인기 영상만 추천, 선택사항)</span>
                   </div>
                   <span className="text-xs font-bold text-cyan-700">
                     {showResearch ? '접기 ▲' : '열기 ▼'}

@@ -25,8 +25,9 @@ public class TrendingController {
     public ResponseEntity<List<TrendingVideoDto>> getTrendingYoutube(
             @RequestParam(required = false, defaultValue = "") String keyword,
             @RequestParam(required = false, defaultValue = "evidence") String ranking,
-            @RequestParam(required = false) Long minSubscribers) {
-        return ResponseEntity.ok(trendingService.getTrendingVideos(keyword, ranking, minSubscribers));
+            @RequestParam(required = false) Long minSubscribers,
+            @RequestParam(required = false) String channelId) {
+        return ResponseEntity.ok(trendingService.getTrendingVideos(keyword, ranking, minSubscribers, channelId));
     }
 
     @GetMapping({"/api/youtube/channels/benchmark", "/api/trending/youtube/channels/benchmark"})

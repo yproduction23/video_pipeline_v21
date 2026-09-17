@@ -85,6 +85,16 @@ public class ChannelProfile {
     @Column(name = "voice_id", length = 100)
     private String voiceId;
 
+    /** 채널의 주요 콘텐츠 분야 (예: 경제/역사/시사, 노인/생활정보, 건강/제품판매).
+     *  키워드 검색 시 이 분야에 맞는 인기 영상만 추천하는 필터의 기준값. */
+    @Column(name = "genre_primary", length = 50)
+    private String genrePrimary;
+
+    /** 이 채널에서 다루지 않는 제외 분야·키워드 (쉼표로 구분).
+     *  트렌드 검색 결과에서 제목·태그에 이 키워드가 포함된 영상을 제외한다. */
+    @Column(name = "genre_excluded", columnDefinition = "TEXT")
+    private String genreExcluded;
+
     @CreationTimestamp
     private LocalDateTime createdAt;
 }
