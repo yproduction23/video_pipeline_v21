@@ -58,6 +58,8 @@ def plan_narrative(
 고정 순서를 강요하지 말고 소재의 성격에 맞춰 훅과 전환 위치를 선택하세요.
 첫 비트(훅)에는 제공된 사실 중 가장 눈길을 끄는 사실(가장 큰 수치, 가장 의외인 반전, 가장 구체적인 인물·사건)을 배정하세요.
 소재가 시장·지수와 직접 관련이 없다면, 카테고리가 경제 채널이라는 이유만으로 시장 지수·거시 지표를 story_beats에 끼워 넣지 마세요.
+관련 지표를 여러 개 다뤄야 한다면, 모두 나열부터 한 뒤 마지막에 주제를 설명하지 마세요. 각 지표는 주제에 대한 하나의 주장을 뒷받침하는 근거로, 주제 설명과 번갈아 나오게 배치하세요.
+전체 플랜은 하나의 긴장(시청자가 끝까지 보게 만드는 질문이나 불확실성)을 중심으로 짜고, 그 긴장을 어느 비트에서 해소하는지 명확히 하세요. 사실을 순서대로 나열하기만 하는 정보 목록이 되면 안 됩니다.
 JSON 객체만 반환하세요."""
     prompt = f"""선택 키워드: {json.dumps(selected_terms, ensure_ascii=False)}
 형식: {format_name}
@@ -69,12 +71,14 @@ JSON 객체만 반환하세요."""
   "plan_id":"간결한 영문 식별자",
   "hook_type":"number_context|belief_reversal|time_contrast|hidden_context|direct_question|human_stake 중 하나",
   "selection_reason":"이 소재에 이 훅이 자연스러운 이유",
+  "tension":"이 영상을 끝까지 보게 만드는 긴장·질문 한 문장",
   "story_beats":[{{"role":"자유로운 역할명","fact_ids":["F1"],"transition_goal":"앞 문장과 어떻게 이어지는지"}}],
   "checkpoint_fact_ids":["F1"],
   "transition_rules":["질문 직후에는 근거로 답한다"],
   "avoid":["같은 수치를 새 역할 없이 반복"]
 }}
-story_beats는 3~6개로 만들고 역할명은 내용에 맞게 정하세요. fact_ids는 제공 ID만 사용하세요."""
+story_beats는 3~6개로 만들고 역할명은 내용에 맞게 정하세요. fact_ids는 제공 ID만 사용하세요.
+마지막 비트의 transition_goal에는 tension을 어떻게 해소하는지 명시하세요."""
     raw = llm_call(system, [{"role": "user", "content": prompt}], 1400)
     plan = _json_object(raw)
     valid_ids = {row["id"] for row in indexed_facts}

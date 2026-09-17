@@ -91,6 +91,45 @@ def _topic_terms_for_evidence(terms: list[str]) -> list[str]:
     return meaningful or terms[:1]
 
 
+_KEYWORD_COVERAGE_KIWI = None
+_KEYWORD_COVERAGE_KIWI_UNAVAILABLE = False
+
+
+def _get_keyword_coverage_kiwi():
+    """지연 로드된 kiwipiepy 인스턴스. 미설치 시 None을 반환해 기존 동작으로 폴백한다."""
+    global _KEYWORD_COVERAGE_KIWI, _KEYWORD_COVERAGE_KIWI_UNAVAILABLE
+    if _KEYWORD_COVERAGE_KIWI is None and not _KEYWORD_COVERAGE_KIWI_UNAVAILABLE:
+        try:
+            from kiwipiepy import Kiwi
+            _KEYWORD_COVERAGE_KIWI = Kiwi()
+        except Exception:
+            _KEYWORD_COVERAGE_KIWI_UNAVAILABLE = True
+    return _KEYWORD_COVERAGE_KIWI
+
+
+def _token_is_pure_function_word(token: str) -> bool:
+    """명사 형태소가 하나도 없는 순수 용언·부사 토큰만 걸러낸다.
+
+    job 2/3(2026-09-17): "애프터마켓 오픈 후 달러·환율 변수, 주식패턴
+    어떻게 달라지나" 같은 클릭베이트형 키워드에서 "어떻게", "달라지나"
+    같은 의문사·용언 활용형까지 "반드시 다뤄야 할 개념"으로 취급되어,
+    실제 주제(애프터마켓)보다 훨씬 많은 문장이 무관한 거시 데이터를
+    채우는 데 쓰였다. 분석기가 없거나 실패하면 과소 필터보다 과다 필터가
+    더 위험하므로(실제 개체명을 놓치면 됨) 안전하게 False(유지)를 반환한다.
+    """
+    kiwi = _get_keyword_coverage_kiwi()
+    if not kiwi or not token:
+        return False
+    try:
+        result = kiwi.analyze(token)
+        morphs = result[0][0] if result else []
+        if not morphs:
+            return False
+        return not any(morph.tag.startswith("NN") or morph.tag.startswith("SL") for morph in morphs)
+    except Exception:
+        return False
+
+
 def _keyword_coverage_terms(terms: list[str]) -> list[str]:
     """Turn a selected topic phrase into verifiable subject components.
 
@@ -115,7 +154,10 @@ def _keyword_coverage_terms(terms: list[str]) -> list[str]:
             # Topic inputs are usually natural Korean phrases.  A postposition
             # such as 반등'과' must not become a separate mandatory keyword.
             token = re.sub(r"(으로|에서|에게|부터|까지|보다|처럼|과|와|은|는|이|가|을|를|의)$", "", token)
-            if token and token not in generic and token not in result:
+            if (
+                token and token not in generic and token not in result
+                and not _token_is_pure_function_word(token)
+            ):
                 result.append(token)
     # Keep the same canonical entities/time labels used when ranking keyword
     # candidates (삼전=삼성전자, 3분기=Q3).  This prevents a valid script from
@@ -124,7 +166,10 @@ def _keyword_coverage_terms(terms: list[str]) -> list[str]:
     for phrase in terms:
         for canonical in sorted(normalise_terms(phrase)):
             cleaned = re.sub(r"(으로|에서|에게|부터|까지|보다|처럼|과|와|은|는|이|가|을|를|의)$", "", canonical)
-            if cleaned and cleaned not in generic and cleaned not in aliases:
+            if (
+                cleaned and cleaned not in generic and cleaned not in aliases
+                and not _token_is_pure_function_word(cleaned)
+            ):
                 aliases.append(cleaned)
     return aliases or result or _topic_terms_for_evidence(terms)
 
@@ -1877,6 +1922,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 - [대사] 블록만 합산해 공백 제외 약 {draft_target_chars}자로 작성. 비주얼 설명·영문 프롬프트·메타데이터는 이 분량에 포함하지 않음. 후단에서 실제 5분 승인 범위 {int((length_contract or {}).get('min_chars', target_chars))}~{int((length_contract or {}).get('max_chars', target_chars))}자로 정밀 보정하므로 짧게 쓰지 마세요.
 - The selected keywords are mandatory subjects, not optional context. Every section must directly explain a selected keyword, its verified impact, or the relationship between the selected keyword and the category. Do not replace this with a generic market crash, geopolitical event, or index recap unless the supplied evidence explicitly connects it.
 - Mention every distinctive entity, concept, and time qualifier contained in the selected topic naturally at least once. The category is the analytical lens, not a substitute for the selected topic.
+- 주제를 설명하는 타이밍이 중요합니다. 관련된 시장 지표(환율, 지수, VIX 등)를 먼저 전부 나열한 뒤 마지막에야 "이제 핵심 주제 얘기를 해보겠습니다"로 넘어가지 마세요. 대신 주제가 무엇이고 왜 지금 중요한지부터 이른 비트에서 밝히고, 각 지표는 그 주제에 대한 구체적 주장을 뒷받침하는 근거로 그때그때 하나씩 엮어 쓰세요. "증거 나열 → 설명"이 아니라 "주장 → 그 주장의 근거"가 반복되는 구조여야 합니다.
 - Use unit-safe facts only: percentages use '퍼센트', index or price changes use '포인트'; never call a percentage a point value.
 - YouTube 영상은 주제·관심도 문맥으로만 사용한다. 영상 제목·조회수·좋아요 수를 금융 사실이나 수치의 검증 근거로 인용하지 않는다.
 - Write continuous, readable narration. Image scenes are derived after narration is complete; do not pad, shorten, or duplicate narration to reach a scene count.
