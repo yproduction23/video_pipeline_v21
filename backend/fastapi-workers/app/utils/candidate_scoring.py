@@ -206,11 +206,17 @@ def _calculate_global_macro(category: str, candidate: dict) -> tuple[int, float,
     found_events = [event for kw, event in global_keywords.items() if kw in text]
 
     category_upper = (category or "").upper()
-    if category_upper in {"US_STOCKS", "GLOBAL_MACRO"} or found_events:
-        relevance = 1.0 if found_events else 0.8
-        bonus = 5 if relevance >= 0.8 else 0
-        return bonus, relevance, found_events
-    return 0, 0.0, []
+    if category_upper not in {"US_STOCKS", "GLOBAL_MACRO"}:
+        # KOSPI/CUSTOM 등 비거시 카테고리 후보는 본문에 "환율", "금리" 같은
+        # 단어가 우연히 섞였다는 이유만으로 가산점을 받으면 안 된다. 이
+        # 가산점이 있으면 "애프터마켓"처럼 특정 주제를 다루는 후보가, 같은
+        # 주제에 무관한 거시 키워드를 곁들인 경쟁 후보에게 점수로 밀려서
+        # 사용자가 고른 좁은 주제 대신 시장 전반을 다루는 후보가 자동으로
+        # 상위 랭크되는 문제가 있었다(2026-09-17, 애프터마켓 대본 사고).
+        return 0, 0.0, found_events
+    relevance = 1.0 if found_events else 0.8
+    bonus = 5 if relevance >= 0.8 else 0
+    return bonus, relevance, found_events
 
 
 def score_candidates(candidates: list[dict], news_keywords: list[dict], market_data: dict,

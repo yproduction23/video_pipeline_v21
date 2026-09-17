@@ -75,6 +75,27 @@ def test_global_macro_relevance():
     assert "FOMC 일정" in res[0]["evidence"]["related_global_events"]
 
 
+def test_global_macro_bonus_does_not_leak_into_non_macro_categories():
+    """2026-09-17 사용자 재현: CUSTOM/KOSPI 같은 비거시 카테고리에서, 사용자가
+    고른 좁은 주제("애프터마켓")의 후보가 그 주제와 무관하게 "환율"·"금리"
+    단어만 곁들인 경쟁 후보에게 거시 가산점 때문에 점수로 밀려서는 안 된다.
+    실제로 이 버그 때문에 '애프터마켓' 대본 대신 환율·금리 위주 대본이 나왔다."""
+    plain = {"keyword": "애프터마켓 오픈 시대", "reason": "애프터마켓 거래 시간 확대 효과를 설명한다"}
+    diluted = {
+        "keyword": "애프터마켓 오픈 시대 — 나스닥 ETF 웃돈 현상과 달러/원 환율 주목해야 하는 이유",
+        "reason": "환율과 금리 변수도 함께 짚는다",
+    }
+    extractor = DummyExtractor([], fail=False)
+
+    res = score_candidates([plain, diluted], [], {}, "CUSTOM", "애프터마켓", extractor=extractor)
+
+    assert res[0]["evidence"]["global_macro_relevance"] == 0.0
+    assert res[1]["evidence"]["global_macro_relevance"] == 0.0
+    assert res[0]["category_score"] == res[1]["category_score"]
+    # 거시 단어가 감지는 되지만(감사용), 비거시 카테고리에서는 점수에 반영되지 않는다.
+    assert res[1]["evidence"]["related_global_events"]
+
+
 def test_graceful_degradation_on_api_failure():
     candidates = [{"keyword": "테스트", "reason": "설명"}]
     extractor_fail = DummyExtractor([], fail=True)
