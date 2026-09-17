@@ -1881,13 +1881,14 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 - YouTube 영상은 주제·관심도 문맥으로만 사용한다. 영상 제목·조회수·좋아요 수를 금융 사실이나 수치의 검증 근거로 인용하지 않는다.
 - Write continuous, readable narration. Image scenes are derived after narration is complete; do not pad, shorten, or duplicate narration to reach a scene count.
 - 내러티브 플랜의 story_beats 순서·전환 목표를 따른다. 플랜은 고정 문구나 고정 비율이 아니라 소재에 맞춘 편집 의도다. 사실의 자연스러운 설명에 필요하면 인접 비트를 합치거나 짧게 조절할 수 있지만, 새 사실을 만들지 않는다. {style_instruction}
+- 첫 비트(훅)는 검증 사실 중 가장 눈길을 끄는 사실(가장 큰 수치, 가장 의외인 반전, 가장 구체적인 인물·사건)로 문을 여세요. "~는 ~했습니다" 식 배경 설명이나 일반적 도입으로 시작하지 마세요. 시청자가 15초 안에 "이걸 왜 봐야 하는지" 알 수 있어야 합니다.
 - 앞 문장이 질문이면 바로 다음 문장 또는 다음 씬에서 검증 사실로 답한다. 같은 사실은 역할이 달라질 때만 다시 언급한다. 마지막은 도입을 반복하지 말고, 플랜의 체크포인트를 자연스럽게 정리한다.
 - 낭독 리듬을 검사하므로, 설명형 ``~습니다`` 문장을 세 개 이상 연속하지 마세요. 사실에 맞는 범위에서 질문·전환·이유·강조를 섞고, 질문에는 물음표를 사용한 뒤 곧바로 근거로 답하세요.
 - [대사]는 짧고 자연스러운 구어체 완결 문장 약 {max(1, round(draft_target_chars / _SENTENCE_AVG_CHARS_FOR_COUNT))}개로 작성하세요(문장 수는 초안 분량 {draft_target_chars}자에 맞춘 목표치입니다). 각 문장은 공백 제외 {_SENTENCE_TARGET_MIN_CHARS}~{_SENTENCE_TARGET_MAX_CHARS}자, 최대 {_SENTENCE_HARD_CAP_CHARS}자·띄어쓰기 단위 {_SENTENCE_HARD_CAP_WORDS}단어 이내의 한 호흡이어야 합니다.
 - 한 문장이 길어질 경우 단어 중간이나 조사 앞에서 자르지 말고, 원인·전환·결론이 완결된 두 문장으로 자연스럽게 나누세요. 이미지 장면은 이후 여러 짧은 문장을 5~6초 단위로 자동으로 묶어 결정되므로, 지금은 문장 길이 계약만 지키면 됩니다.
 - 화면 자막은 공백 포함 18자 안팎에서 단어 경계로 나뉩니다. 긴 문장을 나눴을 때 마지막에 8자 미만의 짧은 자막 파편이 남지 않도록 문장 자체를 자연스럽게 다듬으세요.
 - 세 문장 이상을 단순 설명형으로 나열하지 마세요.
-- Improve only voice, pacing, transitions, and listener comprehension. You MUST add helpful background context, causal explanations, or market implications to meet the required length ({target_minutes} minutes, {target_chars} characters), but NEVER invent or substitute numerical facts, dates, or company names.
+- Improve only voice, pacing, transitions, and listener comprehension. If more length is needed, add background context, causal explanations, related reactions, or precedent cases that are directly about the selected keyword ({target_minutes} minutes, {target_chars} characters) — never invent or substitute numerical facts, dates, or company names. Do NOT add market-wide index, rate, or macro commentary purely to reach the target length; that is only allowed when the supplied evidence explicitly connects the selected keyword to the market data (per the mandatory-subject rule above). A topic that is not about the market should stay off the market for its entire runtime.
 - 마지막에 ## 메타데이터 섹션 추가 ([추천 제목], [추천 썸네일], [더보기 설명], [쇼츠 대본])
 - 쇼츠 대본은 본 영상의 핵심만 30초 내외로 요약한 강렬한 문장으로 작성
 목표 영상 길이: {target_minutes}분 / TTS 배속: {(length_contract or {}).get('tts_speed', 1.0)}x"""
