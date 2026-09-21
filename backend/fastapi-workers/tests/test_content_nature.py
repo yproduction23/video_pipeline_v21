@@ -104,3 +104,8 @@ def test_explainer_directive_forbids_invented_specifics():
     directive = cn.nature_directive(cn.EXPLAINER)
     assert "만들지 마세요" in directive
     assert "화제가 된 영상" in directive
+
+
+def test_explainer_prompts_forbid_using_video_performance_numbers():
+    assert "성과 수치" in cn.fact_check_prompt(cn.EXPLAINER, "x")
+    assert "성과 수치" in cn.nature_directive(cn.EXPLAINER)
