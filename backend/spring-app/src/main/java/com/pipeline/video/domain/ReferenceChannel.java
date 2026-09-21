@@ -69,6 +69,10 @@ public class ReferenceChannel {
     @Column(name = "display_order", nullable = false)
     private int displayOrder = 0;
 
+    /** null이면 모든 제작 채널이 함께 쓰는 공용 벤치마크 채널이다. */
+    @Column(name = "owner_channel_id", length = 50)
+    private String ownerChannelId;
+
     @Column(name = "last_validated_at")
     private LocalDateTime lastValidatedAt;
 
