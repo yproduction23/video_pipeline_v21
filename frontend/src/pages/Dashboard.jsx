@@ -137,7 +137,7 @@ export default function Dashboard() {
 
         <ChannelBenchmark />
 
-        <BenchmarkDiscovery />
+        <BenchmarkDiscovery compact />
 
         {(jobsQuery.isError || shortsQuery.isError) && <div className="rounded-xl border border-accent-gold/40 bg-accent-gold/10 px-4 py-3 text-sm text-accent-gold">일부 목록을 불러오지 못했습니다. 서버가 실행 중인지 확인한 뒤 새로고침해 주세요.</div>}
 

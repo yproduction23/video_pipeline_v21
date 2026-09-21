@@ -4,7 +4,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Jobs from './pages/Jobs'
-import JobNew from './pages/JobNew'
+import NewLongform from './pages/NewLongform'
 import JobDetail from './pages/JobDetail'
 import Shorts from './pages/Shorts'
 import ShortsLibrary from './pages/ShortsLibrary'
@@ -35,7 +35,7 @@ export default function App() {
             <ProtectedRoute><Jobs /></ProtectedRoute>
           } />
           <Route path="/longform/new" element={
-            <ProtectedRoute><JobNew /></ProtectedRoute>
+            <ProtectedRoute><NewLongform /></ProtectedRoute>
           } />
           <Route path="/longform/:id" element={
             <ProtectedRoute><JobDetail /></ProtectedRoute>

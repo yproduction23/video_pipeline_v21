@@ -45,7 +45,7 @@ function PersistenceBadge({ persistence }) {
   return null
 }
 
-export default function BenchmarkDiscovery() {
+export default function BenchmarkDiscovery({ compact = false }) {
   const navigate = useNavigate()
   const [tab, setTab] = useState('hot')
   const [category, setCategory] = useState('ALL')
@@ -130,7 +130,7 @@ export default function BenchmarkDiscovery() {
           </div>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto">
+        <div className={`${compact ? 'hidden' : 'flex'} gap-2 overflow-x-auto`}>
           {TABS.map(item => (
             <button key={item.id} type="button" onClick={() => { setTab(item.id); setSelected(null) }}
               className={`shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${tab === item.id ? 'border-red-500 bg-red-500 text-white' : 'border-slate-300 text-slate-500 hover:border-red-500/60'}`}>
@@ -141,7 +141,7 @@ export default function BenchmarkDiscovery() {
 
         {tab === 'hot' && (
           <>
-            <div className="flex gap-2 flex-wrap">
+            <div className={`${compact ? 'hidden' : 'flex'} gap-2 flex-wrap`}>
               {categories.map(item => (
                 <button key={item.key} type="button" onClick={() => { setCategory(item.key); setKeywordFilter(''); setSelected(null) }}
                   className={`rounded-full border px-3 py-1 text-xs font-semibold ${category === item.key ? 'border-cyan-600 bg-cyan-50 text-cyan-800' : 'border-slate-300 text-slate-600 hover:border-cyan-500'}`}>
@@ -149,7 +149,7 @@ export default function BenchmarkDiscovery() {
                 </button>
               ))}
             </div>
-            <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
+            <div className={`${compact ? 'hidden' : 'inline-flex'} overflow-hidden rounded-lg border border-slate-300`}>
               {WINDOWS.map(item => (
                 <button key={item.id} type="button" onClick={() => { setWindowId(item.id); setKeywordFilter('') }}
                   className={`px-3 py-1.5 text-xs font-semibold ${windowId === item.id ? 'bg-cyan-50 text-cyan-800' : 'text-slate-600'}`}>
@@ -159,7 +159,7 @@ export default function BenchmarkDiscovery() {
             </div>
             {hotQuery.data?.keywords?.length > 0 && (
               <div className="flex gap-2 flex-wrap">
-                {hotQuery.data.keywords.slice(0, 16).map(item => (
+                {hotQuery.data.keywords.slice(0, compact ? 8 : 16).map(item => (
                   <button key={item.keyword} type="button" onClick={() => setKeywordFilter(keywordFilter === item.keyword ? '' : item.keyword)}
                     className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${keywordFilter === item.keyword ? 'border-red-500 bg-red-50 text-red-700' : 'border-slate-300 text-slate-700 hover:border-red-400'}`}>
                     {item.keyword}<PersistenceBadge persistence={item.persistence} />
@@ -207,7 +207,7 @@ export default function BenchmarkDiscovery() {
 
       {!activeQuery.isFetching && videos.length > 0 && (
         <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
-          {videos.map((video, index) => (
+          {(compact ? videos.slice(0, 4) : videos).map((video, index) => (
             <button key={video.videoId || index} type="button" onClick={() => setSelected(video)}
               className={`text-left rounded-lg border p-2 transition ${selected?.videoId === video.videoId ? 'border-2 border-cyan-600' : 'border-slate-200 hover:border-red-400'}`}>
               <div className="relative aspect-video overflow-hidden rounded bg-navy-900">
@@ -250,6 +250,15 @@ export default function BenchmarkDiscovery() {
               이 영상으로 롱폼 제작 시작
             </button>
           </div>
+        </div>
+      )}
+
+      {compact && (
+        <div className="px-4 pb-4">
+          <button type="button" onClick={() => navigate('/longform/new')}
+            className="w-full rounded-xl border border-slate-300 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">
+            카테고리·직접 검색·벤치마크 채널까지 전체 보기
+          </button>
         </div>
       )}
     </section>
