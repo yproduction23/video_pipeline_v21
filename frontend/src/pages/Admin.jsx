@@ -12,6 +12,7 @@ import Pagination from '../components/Pagination'
 import StatusBadge from '../components/StatusBadge'
 import ReferenceChannelManager from '../components/admin/ReferenceChannelManager'
 import apiClient from '../api/client'
+import { NATURE_OPTIONS } from '../lib/contentNature'
 import { formatAutonomy, formatCategory, isCompleted } from '../constants/jobStatus'
 
 const PERSON_LICENSES = [
@@ -54,6 +55,7 @@ export default function Admin() {
   const [characterDescriptions, setCharacterDescriptions] = useState({})
   const [editedGenrePrimary, setEditedGenrePrimary] = useState({})
   const [editedGenreExcluded, setEditedGenreExcluded] = useState({})
+  const [editedContentNature, setEditedContentNature] = useState({})
   const [channelPreviewText, setChannelPreviewText] = useState({})
   const [channelPreviewUrls, setChannelPreviewUrls] = useState({})
   const [channelPreviewLoading, setChannelPreviewLoading] = useState({})
@@ -579,6 +581,16 @@ export default function Admin() {
                         </select>
                       </div>
                       <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">콘텐츠 성격 기본값 (작업 생성 시 미리 선택됨)</label>
+                        <select
+                          value={editedContentNature[channel.channelId] ?? (channel.contentNature || 'FACTUAL')}
+                          onChange={e => setEditedContentNature({ ...editedContentNature, [channel.channelId]: e.target.value })}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 text-xs font-bold text-slate-900"
+                        >
+                          {NATURE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label} — {o.desc}</option>)}
+                        </select>
+                      </div>
+                      <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1">제외 분야 (쉼표로 구분, 검색 결과에서 자동 제외)</label>
                         <input
                           value={editedGenreExcluded[channel.channelId] ?? (channel.genreExcluded || '')}
@@ -595,6 +607,7 @@ export default function Admin() {
                         voiceId: editedVoices[channel.channelId] ?? channel.voiceId,
                         genrePrimary: editedGenrePrimary[channel.channelId] ?? channel.genrePrimary,
                         genreExcluded: editedGenreExcluded[channel.channelId] ?? channel.genreExcluded,
+                        contentNature: editedContentNature[channel.channelId] ?? channel.contentNature ?? 'FACTUAL',
                       })}
                       className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white font-bold text-xs shadow-sm hover:bg-emerald-700"
                     >

@@ -11,6 +11,7 @@ import Layout from '../components/Layout'
 import { jobsApi } from '../api/jobs'
 import { authStore } from '../store/auth'
 import apiClient from '../api/client'
+import { natureLabel } from '../lib/contentNature'
 import { formatAutonomy, formatCategory } from '../constants/jobStatus'
 
 const PIPELINE_STEPS = [
@@ -611,6 +612,7 @@ export default function JobDetail() {
             <h1 className="text-2xl font-bold">{job.title}</h1>
             <div className="text-sm text-navy-400 mt-1 flex items-center gap-2 flex-wrap">
               <span>{formatCategory(job.category)}</span><span>·</span><span>{job.longformTargetMinutes}분</span><span>·</span>
+              <span className="text-sm px-2.5 py-1 rounded-full border border-cyan-300 bg-cyan-50 font-medium text-cyan-800">{natureLabel(job.contentNature)}</span>
               <span className={`text-sm px-2.5 py-1 rounded-full border font-medium ${AUTONOMY_STYLE[job.autonomy]}`}>{formatAutonomy(job.autonomy)}</span>
               <span className="text-navy-400 text-sm">{AUTONOMY_DESC[job.autonomy]}</span>
             </div>

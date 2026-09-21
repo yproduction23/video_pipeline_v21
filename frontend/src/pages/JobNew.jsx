@@ -9,6 +9,8 @@ import Pagination from '../components/Pagination'
 import { jobsApi } from '../api/jobs'
 import { discoveryApi } from '../api/discovery'
 import apiClient from '../api/client'
+import ContentNatureSelector from '../components/ContentNatureSelector'
+import { NATURE_OPTIONS, suggestNature } from '../lib/contentNature'
 
 const CATEGORY_OPTIONS = [
   { value: 'KOSPI', label: '코스피 (KOSPI)', desc: '한국 종합주가지수 및 대형주 중심', icon: '📈' },
@@ -92,9 +94,14 @@ export default function JobNew() {
     makeShorts: true,
     shortsCount: 3,
     dataVisualsEnabled: false,
+    contentNature: '',
   })
 
   const selectedChannel = channels.find(c => c.channelId === form.channelId) || null
+  // 비어 있으면 채널 기본값을 따르고, 그것도 없으면 사실형이다.
+  const channelNature = selectedChannel?.contentNature || 'FACTUAL'
+  const effectiveNature = form.contentNature || channelNature
+  const suggestedNature = suggestNature(benchmark?.title || form.title, benchmark?.channelTitle)
 
   const macroSkipCategories = ['GLOBAL_MACRO', 'CUSTOM', 'CRYPTO']
   const detectedMacroTerms = macroSkipCategories.includes(form.category)
@@ -152,8 +159,8 @@ export default function JobNew() {
     setError(null)
     try {
       const job = benchmark
-        ? await discoveryApi.createFromBenchmark(benchmark.videoId, form)
-        : await jobsApi.create(form)
+        ? await discoveryApi.createFromBenchmark(benchmark.videoId, { ...form, contentNature: effectiveNature })
+        : await jobsApi.create({ ...form, contentNature: effectiveNature })
       if (!benchmark) {
         jobsApi.searchKeyword(job.id, form.keyword || form.title, 5).catch(err => {
           console.warn('키워드 자동 탐색 백그라운드 호출:', err)
@@ -456,6 +463,12 @@ export default function JobNew() {
           {/* STEP 2: 자율성 및 목표 길이 */}
           {step === 2 && (
             <div className="space-y-7">
+              <ContentNatureSelector
+                value={effectiveNature}
+                onChange={value => setForm({ ...form, contentNature: value })}
+                suggested={suggestedNature}
+                channelDefault={channelNature}
+              />
               <div>
                 <label className="block text-sm font-bold text-slate-900 mb-3">파이프라인 자율성 모드 선택</label>
                 <div className="grid grid-cols-2 gap-4">
@@ -546,6 +559,7 @@ export default function JobNew() {
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">최종 구성 요약</h3>
                 <Row label="영상 대표 주제" value={benchmark ? '벤치마크 분석 후 자동 결정' : form.title} highlight />
                 {benchmark && <Row label="벤치마크 영상" value={benchmark.title} />}
+                <Row label="콘텐츠 성격" value={NATURE_OPTIONS.find(o => o.value === effectiveNature)?.label} />
                 <Row label="선택 카테고리" value={CATEGORY_OPTIONS.find(o => o.value === form.category)?.label} />
                 <Row label="자율성 모드" value={AUTONOMY_OPTIONS.find(o => o.value === form.autonomy)?.label} />
                 <Row label="목표 영상 길이" value={`${form.longformTargetMinutes}분`} />
