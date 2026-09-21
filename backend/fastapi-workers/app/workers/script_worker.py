@@ -236,6 +236,7 @@ def _candidate_evidence_context(
             "merged_news": merged_news,
             "source_videos": source_videos,
             "evidence_video_ids": evidence_video_ids,
+            "benchmark_analysis": None,
         }
 
     seen_news = {
@@ -268,6 +269,10 @@ def _candidate_evidence_context(
         "merged_news": merged_news,
         "source_videos": source_videos,
         "evidence_video_ids": evidence_video_ids,
+        "benchmark_analysis": (
+            candidate_evidence.get("benchmark_analysis")
+            if isinstance(candidate_evidence.get("benchmark_analysis"), dict) else None
+        ),
     }
 
 
@@ -1445,6 +1450,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             candidate_context = _candidate_evidence_context(keyword_news, candidate_evidence)
             keyword_news = candidate_context["merged_news"]
             source_videos = candidate_context["source_videos"]
+            benchmark_analysis = candidate_context["benchmark_analysis"]
             if isinstance(candidate_evidence, dict):
                 logger.info(
                     "candidate_evidence 병합: 후보 뉴스 추가=%s건, YouTube 문맥=%s건",
@@ -1477,6 +1483,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                         "category": category_label,
                         "market_summary": _build_market_summary_for_script(market_data)[:2000],
                         "news_titles": [str(row.get("title", ""))[:180] for row in keyword_news[:5]],
+                        **({"benchmark_points": benchmark_analysis} if benchmark_analysis else {}),
                     },
                     format_name=format_name,
                 ) if runtime_config.value("script_narrative_planning_enabled") else {
@@ -1492,6 +1499,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 verified_facts, market_data, storytelling_profile,
                 selected_terms, keyword_news, length_contract, narrative_plan,
                 source_videos,
+                benchmark_analysis=benchmark_analysis,
             )
             pre_edit_spoken_chars = spoken_char_count(_narration_from_sections(sections))
             pre_edit_length_ready = (
@@ -1889,7 +1897,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                                        keyword_news: Optional[list[dict]] = None,
                                        length_contract: Optional[dict] = None,
                                        narrative_plan: Optional[dict] = None,
-                                       source_videos: Optional[list[dict]] = None):
+                                       source_videos: Optional[list[dict]] = None,
+                                       benchmark_analysis: Optional[dict] = None):
         facts_text = "\n".join(f"- {f['fact']} (상세 정보: {f.get('figure', 'N/A')}, 출처: {f.get('source_field', 'N/A')}, 신뢰도: {f.get('confidence', 0):.2f})" for f in verified_facts)
         market_summary = _build_market_summary_for_script(market_data)
         selected_terms = selected_terms or _selected_keyword_terms(keyword)
@@ -1909,6 +1918,15 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             f"- [{row.get('matched_keyword', '')}] {row.get('title', '')} ({row.get('source', '')})"
             for row in keyword_news
         ) or "- 없음"
+        benchmark_block = ""
+        benchmark_rule = ""
+        if benchmark_analysis:
+            benchmark_block = f"<benchmark_points>{json.dumps(benchmark_analysis, ensure_ascii=False)}</benchmark_points>\n"
+            benchmark_rule = (
+                "- <benchmark_points>는 잘 되는 영상이 '왜 뜨는지'와 훅 유형을 참고하기 위한 자료입니다. "
+                "훅의 유형·구조·리듬은 참고할 수 있지만 다른 영상의 문장을 그대로 또는 거의 그대로 쓰지 마세요. "
+                "영상 제목·조회수는 사실 근거가 아닙니다.\n"
+            )
 
         user_prompt = f"""<selected_keywords>{json.dumps(selected_terms, ensure_ascii=False)}</selected_keywords>
 <category>{category_label}</category>
@@ -1917,8 +1935,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 <keyword_news_evidence>{evidence_text}</keyword_news_evidence>
 <youtube_topic_context>{json.dumps(source_videos, ensure_ascii=False)}</youtube_topic_context>
 <narrative_plan>{json.dumps(narrative_plan, ensure_ascii=False)}</narrative_plan>
-작성 규칙:
-- [대사], [비주얼 설명 (한국어)], [비주얼 프롬프트 (영어)], [감정] 포함
+{benchmark_block}작성 규칙:
+{benchmark_rule}- [대사], [비주얼 설명 (한국어)], [비주얼 프롬프트 (영어)], [감정] 포함
 - [대사] 블록만 합산해 공백 제외 약 {draft_target_chars}자로 작성. 비주얼 설명·영문 프롬프트·메타데이터는 이 분량에 포함하지 않음. 후단에서 실제 5분 승인 범위 {int((length_contract or {}).get('min_chars', target_chars))}~{int((length_contract or {}).get('max_chars', target_chars))}자로 정밀 보정하므로 짧게 쓰지 마세요.
 - The selected keywords are mandatory subjects, not optional context. Every section must directly explain a selected keyword, its verified impact, or the relationship between the selected keyword and the category. Do not replace this with a generic market crash, geopolitical event, or index recap unless the supplied evidence explicitly connects it.
 - Mention every distinctive entity, concept, and time qualifier contained in the selected topic naturally at least once. The category is the analytical lens, not a substitute for the selected topic.
