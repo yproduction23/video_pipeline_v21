@@ -212,6 +212,14 @@ export default function ReferenceChannelManager() {
     },
   })
 
+  const productionChannelsQuery = useQuery({
+    queryKey: ['production-channels'],
+    queryFn: () => apiClient.get('/channels').then(response => response.data),
+    staleTime: 1000 * 60 * 10,
+  })
+  const productionChannels = productionChannelsQuery.data || []
+  const ownerLabel = ownerId => (ownerId ? (productionChannels.find(ch => ch.channelId === ownerId)?.channelName || ownerId) : '공용')
+
   const selectedItems = bulkRows.flatMap(row => {
     const candidate = bulkSelections[row.query]
     if (!candidate?.channel_id) return []
@@ -229,6 +237,7 @@ export default function ReferenceChannelManager() {
       tier: channel.tier,
       displayOrder: channel.displayOrder,
       active: channel.active,
+      ownerChannelId: channel.ownerChannelId || '',
     })
   }
 
@@ -278,12 +287,19 @@ export default function ReferenceChannelManager() {
                     <tr key={channel.id} className={channel.active ? 'bg-white' : 'bg-slate-50 opacity-75'}>
                       <td className="px-3 py-3">
                         {editing ? (
-                          <input value={editForm.displayName} onChange={event => setEditForm({ ...editForm, displayName: event.target.value })} className="w-full rounded-lg border border-slate-300 px-2 py-1.5 font-bold" />
+                          <div className="space-y-1.5">
+                            <input value={editForm.displayName} onChange={event => setEditForm({ ...editForm, displayName: event.target.value })} className="w-full rounded-lg border border-slate-300 px-2 py-1.5 font-bold" />
+                            <select value={editForm.ownerChannelId} onChange={event => setEditForm({ ...editForm, ownerChannelId: event.target.value })} className="w-full rounded-lg border border-slate-300 px-2 py-1.5 font-bold">
+                              <option value="">공용 (모든 제작 채널)</option>
+                              {productionChannels.map(ch => <option key={ch.channelId} value={ch.channelId}>{ch.channelName}</option>)}
+                            </select>
+                          </div>
                         ) : (
                           <>
                             <div className="font-bold text-slate-900">{channel.displayName}</div>
                             <div className="mt-0.5 text-slate-600">{channel.youtubeTitle || 'YouTube 제목 없음'} · {channel.youtubeHandle || 'handle 없음'}</div>
                             <div className="mt-0.5 break-all text-[10px] text-slate-400">{channel.channelId}</div>
+                            <div className="mt-0.5 text-[10px] font-bold text-cyan-700">적용 채널: {ownerLabel(channel.ownerChannelId)}</div>
                           </>
                         )}
                       </td>

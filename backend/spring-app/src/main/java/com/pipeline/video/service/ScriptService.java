@@ -174,6 +174,7 @@ public class ScriptService {
             evidence.put("youtube_score", candidate.get("youtube_score"));
             evidence.put("news_cross_check_status", candidate.get("news_cross_check_status"));
             evidence.put("evidence", candidate.get("evidence"));
+            evidence.put("benchmark_analysis", candidate.get("benchmark_analysis"));
             return evidence;
         }
         return null;

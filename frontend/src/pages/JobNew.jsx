@@ -7,6 +7,7 @@ import {
 import Layout from '../components/Layout'
 import Pagination from '../components/Pagination'
 import { jobsApi } from '../api/jobs'
+import { discoveryApi } from '../api/discovery'
 import apiClient from '../api/client'
 
 const CATEGORY_OPTIONS = [
@@ -57,7 +58,8 @@ export default function JobNew() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  const [step, setStep] = useState(1)
+  const benchmark = location.state?.benchmark || null
+  const [step, setStep] = useState(benchmark ? 2 : 1)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState(null)
   const [channels, setChannels] = useState([])
@@ -80,8 +82,8 @@ export default function JobNew() {
   }, [])
 
   const [form, setForm] = useState({
-    title: '',
-    channelId: '',
+    title: benchmark?.title || '',
+    channelId: location.state?.channelId || '',
     category: 'KOSPI',
     autonomy: 'GUIDED',
     longformTargetMinutes: 15,
@@ -149,10 +151,14 @@ export default function JobNew() {
     setCreating(true)
     setError(null)
     try {
-      const job = await jobsApi.create(form)
-      jobsApi.searchKeyword(job.id, form.keyword || form.title, 5).catch(err => {
-        console.warn('키워드 자동 탐색 백그라운드 호출:', err)
-      })
+      const job = benchmark
+        ? await discoveryApi.createFromBenchmark(benchmark.videoId, form)
+        : await jobsApi.create(form)
+      if (!benchmark) {
+        jobsApi.searchKeyword(job.id, form.keyword || form.title, 5).catch(err => {
+          console.warn('키워드 자동 탐색 백그라운드 호출:', err)
+        })
+      }
       navigate(`/longform/${job.id}`)
     } catch (err) {
       setError(err?.response?.data?.message || err.message || '작업 생성 실패')
@@ -201,8 +207,8 @@ export default function JobNew() {
               return (
                 <button
                   key={s.n}
-                  onClick={() => isPast && setStep(s.n)}
-                  disabled={!isPast && !isCurrent}
+                  onClick={() => isPast && !(benchmark && s.n === 1) && setStep(s.n)}
+                  disabled={(!isPast && !isCurrent) || (benchmark && s.n === 1)}
                   className={`flex items-center gap-3 p-3.5 rounded-xl transition-all text-left ${
                     isCurrent
                       ? 'bg-cyan-600 text-white font-bold shadow-md shadow-cyan-600/30'
@@ -231,6 +237,14 @@ export default function JobNew() {
             })}
           </div>
         </div>
+
+        {benchmark && (
+          <div className="flex items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-xs font-bold text-cyan-900">
+            <Sparkles size={14} className="text-cyan-600" />
+            벤치마크: {benchmark.title}
+            {benchmark.channelTitle && <span className="font-semibold text-cyan-700">· {benchmark.channelTitle}</span>}
+          </div>
+        )}
 
         {/* 카드 본문 컨테이너 (Clean High-Contrast White Card) */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xl p-8 mb-8">
@@ -530,7 +544,8 @@ export default function JobNew() {
 
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 space-y-3 shadow-inner">
                 <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-3">최종 구성 요약</h3>
-                <Row label="영상 대표 주제" value={form.title} highlight />
+                <Row label="영상 대표 주제" value={benchmark ? '벤치마크 분석 후 자동 결정' : form.title} highlight />
+                {benchmark && <Row label="벤치마크 영상" value={benchmark.title} />}
                 <Row label="선택 카테고리" value={CATEGORY_OPTIONS.find(o => o.value === form.category)?.label} />
                 <Row label="자율성 모드" value={AUTONOMY_OPTIONS.find(o => o.value === form.autonomy)?.label} />
                 <Row label="목표 영상 길이" value={`${form.longformTargetMinutes}분`} />
@@ -548,7 +563,7 @@ export default function JobNew() {
 
         {/* 하단 네비게이션 버튼 (High-Contrast Buttons) */}
         <div className="flex items-center justify-between">
-          {step > 1 ? (
+          {step > (benchmark ? 2 : 1) ? (
             <button
               onClick={() => setStep(step - 1)}
               disabled={creating}

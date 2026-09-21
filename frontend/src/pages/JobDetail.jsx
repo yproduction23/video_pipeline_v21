@@ -97,6 +97,56 @@ function KeywordMetricGuide() {
  * - 카드들에 shadow-card를 추가해 배경과의 구분감을 살렸습니다.
  * - 기능 로직(뮤테이션, 쿼리, 씬 편집/분할/재생성 등)은 전혀 건드리지 않았습니다.
  */
+const HOOK_TYPE_LABEL = {
+  number_context: '수치로 시작',
+  belief_reversal: '통념 뒤집기',
+  time_contrast: '시간 대비',
+  hidden_context: '숨은 맥락',
+  direct_question: '직접 질문',
+  human_stake: '사람 이야기',
+}
+
+function BenchmarkKeywordCard({ candidate, confirmed }) {
+  const video = candidate.source_videos?.[0] || {}
+  const analysis = candidate.benchmark_analysis
+  const hours = Number(video.hoursSincePublish)
+  const views = Number(video.views || 0)
+  const perHour = Number.isFinite(hours) ? Math.round(views / Math.max(hours, 1)) : null
+  return (
+    <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 px-4 py-3.5 space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-xs font-bold text-white">벤치마크 기반</span>
+        <span className="text-sm font-bold text-slate-900">{candidate.keyword}</span>
+        {confirmed && <span className="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">✓ 확정됨</span>}
+      </div>
+      <div className="space-y-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+        <div className="font-semibold text-slate-900">{video.title || '벤치마크 영상'}</div>
+        {video.channelTitle && <div className="text-slate-500">{video.channelTitle}</div>}
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <span>조회수 <b>{metricNumber(views)}</b></span>
+          {perHour != null && <span>시간당 <b>{metricNumber(perHour)}</b> (제작 시작 시점)</span>}
+          <span>좋아요 <b>{metricNumber(video.likes)}</b></span>
+        </div>
+        {video.videoId && (
+          <a href={`https://www.youtube.com/watch?v=${video.videoId}`} target="_blank" rel="noreferrer" className="inline-block text-cyan-700 underline">원본 영상 보기</a>
+        )}
+      </div>
+      {analysis ? (
+        <div className="space-y-1.5 text-xs text-slate-700">
+          <div className="font-semibold text-slate-900">이 영상이 뜨는 이유 (자동 분석)</div>
+          <ul className="list-disc space-y-0.5 pl-5">
+            {(analysis.reasons || []).map((reason, index) => <li key={index}>{reason}</li>)}
+          </ul>
+          {analysis.hook_type && <div>훅 유형: <b>{HOOK_TYPE_LABEL[analysis.hook_type] || analysis.hook_type}</b></div>}
+          {analysis.title_pattern && <div>제목 구조: {analysis.title_pattern}</div>}
+        </div>
+      ) : (
+        <p className="text-xs text-slate-500">뜨는 이유 분석 없이 영상 정보만 반영해 진행했습니다.</p>
+      )}
+    </div>
+  )
+}
+
 export default function JobDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -248,6 +298,7 @@ export default function JobDetail() {
     }
     return []
   }, [kwAssets])
+  const isBenchmarkKeyword = kwCandidates.some(c => c && Object.prototype.hasOwnProperty.call(c, 'benchmark_analysis'))
   const keywordSelection = useMemo(() => {
     for (let i = kwAssets.length - 1; i >= 0; i--) {
       try {
@@ -1205,12 +1256,15 @@ export default function JobDetail() {
                 {step.key === 'keyword' && kwCandidates.length > 0 && (
                   <div className="px-5 pb-4 border-t border-slate-200">
                     <div className="flex items-center justify-between mt-3 mb-3">
-                      <p className="text-sm font-semibold text-navy-300">후보 키워드 {kwCandidates.length}개</p>
-                      <span className="text-xs text-navy-500">점수 100점 만점 (뉴스+수치+카테고리 합산 후 YouTube 데이터 없을 시 100점 기준 환산)</span>
+                      <p className="text-sm font-semibold text-navy-300">{isBenchmarkKeyword ? '벤치마크 영상으로 시작한 작업' : `후보 키워드 ${kwCandidates.length}개`}</p>
+                      {!isBenchmarkKeyword && <span className="text-xs text-navy-500">점수 100점 만점 (뉴스+수치+카테고리 합산 후 YouTube 데이터 없을 시 100점 기준 환산)</span>}
                     </div>
-                    <KeywordMetricGuide />
+                    {!isBenchmarkKeyword && <KeywordMetricGuide />}
                     <div className="space-y-3">
                       {kwCandidates.map((c, i) => {
+                        if (isBenchmarkKeyword) {
+                          return <BenchmarkKeywordCard key={i} candidate={c} confirmed={job.keyword === c.keyword} />
+                        }
                         const hasPublicMetrics = hasYoutubeMetrics(c)
                         const wasAutoSelected = isAuto && job.keyword === c.keyword
                         const isTop = Number.isFinite(Number(c.score)) && i === 0

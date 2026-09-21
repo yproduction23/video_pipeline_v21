@@ -53,7 +53,7 @@ class ReferenceChannelServiceTest {
         when(repository.existsByChannelId("UCverified")).thenReturn(false);
 
         ReferenceChannel saved = service.create(
-                new ReferenceChannelCreateRequest("검증 채널", "@verified", null, 7),
+                new ReferenceChannelCreateRequest("검증 채널", "@verified", null, 7, null),
                 "admin"
         );
 
@@ -70,7 +70,7 @@ class ReferenceChannelServiceTest {
         when(fastApiClient.resolveChannel("UCmissing")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.create(
-                new ReferenceChannelCreateRequest("없는 채널", "UCmissing", null, null),
+                new ReferenceChannelCreateRequest("없는 채널", "UCmissing", null, null, null),
                 "admin"
         )).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("확인할 수 없습니다");
@@ -84,7 +84,7 @@ class ReferenceChannelServiceTest {
         when(repository.existsByChannelId("UCduplicate")).thenReturn(true);
 
         assertThatThrownBy(() -> service.create(
-                new ReferenceChannelCreateRequest("중복 채널", "@duplicate", null, null),
+                new ReferenceChannelCreateRequest("중복 채널", "@duplicate", null, null, null),
                 "admin"
         )).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("이미 등록된");
@@ -112,7 +112,7 @@ class ReferenceChannelServiceTest {
 
         ReferenceChannel updated = service.update(
                 2L,
-                new ReferenceChannelUpdateRequest("새 이름", ReferenceChannelTier.SMALL, 30, false)
+                new ReferenceChannelUpdateRequest("새 이름", ReferenceChannelTier.SMALL, 30, false, null)
         );
 
         assertThat(updated.getDisplayName()).isEqualTo("새 이름");
@@ -239,6 +239,51 @@ class ReferenceChannelServiceTest {
         service.getActiveBenchmarks();
 
         verify(fastApiClient).getChannelBenchmarks(List.of("UCsecond", "UCfirst"));
+    }
+
+    @Test
+    void createStoresOwnerChannelWhenProvided() {
+        when(fastApiClient.resolveChannel("@owned")).thenReturn(Optional.of(candidate("UCowned", 100_000L)));
+        when(repository.existsByChannelId("UCowned")).thenReturn(false);
+
+        ReferenceChannel saved = service.create(
+                new ReferenceChannelCreateRequest("소유 채널", "@owned", null, 1, "channel_a"), "admin");
+
+        assertThat(saved.getOwnerChannelId()).isEqualTo("channel_a");
+    }
+
+    @Test
+    void updateKeepsOwnerWhenRequestOwnerIsNullAndClearsWhenEmpty() {
+        ReferenceChannel existing = ReferenceChannel.builder()
+                .displayName("이름").channelId("UCx").ownerChannelId("channel_a").active(true).build();
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+
+        service.update(1L, new ReferenceChannelUpdateRequest("이름", null, null, null, null));
+        assertThat(existing.getOwnerChannelId()).isEqualTo("channel_a");
+
+        service.update(1L, new ReferenceChannelUpdateRequest("이름", null, null, null, "channel_b"));
+        assertThat(existing.getOwnerChannelId()).isEqualTo("channel_b");
+
+        service.update(1L, new ReferenceChannelUpdateRequest("이름", null, null, null, ""));
+        assertThat(existing.getOwnerChannelId()).isNull();
+    }
+
+    @Test
+    void listForOwnerReturnsOwnedAndSharedChannels() {
+        ReferenceChannel shared = ReferenceChannel.builder().displayName("공용").channelId("UCs").active(true).build();
+        ReferenceChannel owned = ReferenceChannel.builder().displayName("A전용").channelId("UCa").ownerChannelId("channel_a").active(true).build();
+        when(repository.findActiveVisibleToOwner("channel_a")).thenReturn(List.of(shared, owned));
+
+        assertThat(service.listForOwner("channel_a")).containsExactly(shared, owned);
+    }
+
+    @Test
+    void listForOwnerWithoutOwnerReturnsOnlySharedChannels() {
+        ReferenceChannel shared = ReferenceChannel.builder().displayName("공용").channelId("UCs").active(true).build();
+        ReferenceChannel owned = ReferenceChannel.builder().displayName("A전용").channelId("UCa").ownerChannelId("channel_a").active(true).build();
+        when(repository.findByActiveTrueOrderByDisplayOrderAscIdAsc()).thenReturn(List.of(shared, owned));
+
+        assertThat(service.listForOwner(" ")).containsExactly(shared);
     }
 
     private static ChannelCandidate candidate(String channelId, Long subscribers) {

@@ -9,7 +9,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -509,6 +511,60 @@ public class FastApiClient {
         } catch (Exception e) {
             log.error("채널 벤치마크 조회 오류: {}", e.getMessage());
             throw new IllegalStateException("YouTube 통계 서비스 연결 실패", e);
+        }
+    }
+
+    public Map<String, Object> getHotKeywords(String category, String window) {
+        String url = UriComponentsBuilder
+                .fromHttpUrl(fastApiUrl + "/workers/discovery/hot-keywords")
+                .queryParam("category", category)
+                .queryParam("window", window)
+                .encode().toUriString();
+        return getDiscovery(url);
+    }
+
+    public Map<String, Object> getRecentUploads(List<String> channelIds, int days) {
+        String url = UriComponentsBuilder
+                .fromHttpUrl(fastApiUrl + "/workers/discovery/recent-uploads")
+                .queryParam("channel_ids", String.join(",", channelIds))
+                .queryParam("days", days)
+                .encode().toUriString();
+        return getDiscovery(url);
+    }
+
+    public Map<String, Object> getYoutubeVideo(String videoId) {
+        String url = UriComponentsBuilder
+                .fromHttpUrl(fastApiUrl + "/workers/discovery/video/{videoId}")
+                .buildAndExpand(videoId)
+                .encode().toUriString();
+        return getDiscovery(url);
+    }
+
+    public Map<String, Object> analyzeBenchmark(Map<String, Object> video) {
+        try {
+            return readMap(postJson(fastApiUrl + "/workers/benchmark/analyze", Map.of("video", video)));
+        } catch (Exception e) {
+            throw new IllegalStateException("벤치마크 분석 실패: " + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, Object> getDiscovery(String url) {
+        try {
+            return readMap(restTemplate.getForObject(url, String.class));
+        } catch (HttpStatusCodeException e) {
+            String message = "YouTube 발견 서비스 오류";
+            try {
+                Object detail = readMap(e.getResponseBodyAsString()).get("detail");
+                if (detail != null) {
+                    message = String.valueOf(detail);
+                }
+            } catch (Exception ignored) {
+                // FastAPI 오류 본문이 JSON이 아니면 기본 메시지를 쓴다.
+            }
+            throw new ResponseStatusException(e.getStatusCode(), message);
+        } catch (Exception e) {
+            log.error("발견 서비스 호출 오류: {}", e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "YouTube 발견 서비스 연결 실패");
         }
     }
 

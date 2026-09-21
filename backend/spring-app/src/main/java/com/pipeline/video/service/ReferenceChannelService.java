@@ -32,6 +32,21 @@ public class ReferenceChannelService {
                 : repository.findAllByOrderByDisplayOrderAscIdAsc();
     }
 
+    @Transactional(readOnly = true)
+    public List<ReferenceChannel> listForOwner(String ownerChannelId) {
+        String owner = normalizeOwner(ownerChannelId);
+        if (owner == null) {
+            return repository.findByActiveTrueOrderByDisplayOrderAscIdAsc().stream()
+                    .filter(channel -> channel.getOwnerChannelId() == null)
+                    .toList();
+        }
+        return repository.findActiveVisibleToOwner(owner);
+    }
+
+    private static String normalizeOwner(String ownerChannelId) {
+        return ownerChannelId == null || ownerChannelId.isBlank() ? null : ownerChannelId.trim();
+    }
+
     @Transactional
     public ReferenceChannel create(ReferenceChannelCreateRequest request, String username) {
         ChannelCandidate verified = fastApiClient.resolveChannel(request.channelRef())
@@ -41,7 +56,8 @@ public class ReferenceChannelService {
                 verified,
                 request.tier(),
                 request.displayOrder(),
-                username
+                username,
+                request.ownerChannelId()
         );
     }
 
@@ -49,6 +65,9 @@ public class ReferenceChannelService {
     public ReferenceChannel update(long id, ReferenceChannelUpdateRequest request) {
         ReferenceChannel channel = requireChannel(id);
         channel.setDisplayName(request.displayName().trim());
+        if (request.ownerChannelId() != null) {
+            channel.setOwnerChannelId(normalizeOwner(request.ownerChannelId()));
+        }
         if (request.tier() != null) {
             channel.setTier(request.tier());
         }
@@ -145,7 +164,8 @@ public class ReferenceChannelService {
                         verified,
                         null,
                         item.displayOrder(),
-                        username
+                        username,
+                        null
                 ));
             } catch (RuntimeException exception) {
                 failed.add(new BulkConfirmFailure(
@@ -173,7 +193,8 @@ public class ReferenceChannelService {
             ChannelCandidate verified,
             ReferenceChannelTier requestedTier,
             Integer displayOrder,
-            String username
+            String username,
+            String ownerChannelId
     ) {
         if (repository.existsByChannelId(verified.channelId())) {
             throw new IllegalArgumentException("이미 등록된 YouTube 채널입니다.");
@@ -190,6 +211,7 @@ public class ReferenceChannelService {
                 .validationStatus(ReferenceChannelStatus.VALID)
                 .active(true)
                 .displayOrder(displayOrder != null ? displayOrder : 0)
+                .ownerChannelId(normalizeOwner(ownerChannelId))
                 .lastValidatedAt(LocalDateTime.now())
                 .createdBy(username)
                 .build();
