@@ -850,6 +850,7 @@ class ScriptGenerateRequest(BaseModel):
     market_data: Optional[dict] = None  # KeywordWorker에서 전달된 market_snapshot
     candidate_evidence: Optional[dict] = None  # 선택 후보의 뉴스·YouTube 근거
     autonomy_mode: Optional[str] = None
+    content_nature: Optional[str] = None  # FACTUAL | EXPLAINER | STORY (없으면 FACTUAL)
 
     # 숫자 카드·차트는 명시적으로 켠 레거시 작업에서만 사용한다.
     data_visuals_enabled: bool = False
@@ -884,6 +885,7 @@ def script_generate(request: ScriptGenerateRequest):
             voice_id=request.voice_id,
             autonomy_mode=request.autonomy_mode,
             candidate_evidence=request.candidate_evidence,
+            content_nature=request.content_nature,
         )
     except ScriptResearchRequiredError as exc:
         return JSONResponse(status_code=422, content={

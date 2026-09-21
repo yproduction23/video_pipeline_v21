@@ -54,6 +54,7 @@ from app.utils.flow_qa import review_flow, sentence_role
 from app.utils.scene_screen_text_planner import attach_scene_screen_texts
 from app.utils.elevenlabs_mapper import map_emotion_to_elevenlabs
 from app.utils.topic_evidence import is_market_level_forecast
+from app.utils import content_nature as _cn
 from app.services.verbatim_guard import validate as validate_verbatim
 
 logger = logging.getLogger(__name__)
@@ -1406,9 +1407,11 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                  storytelling_profile: str = DEFAULT_SCRIPT_STYLE_PROFILE,
                  voice_id: Optional[str] = None,
                  autonomy_mode: Optional[str] = None,
-                 candidate_evidence: Optional[dict] = None) -> dict:
+                 candidate_evidence: Optional[dict] = None,
+                 content_nature: Optional[str] = None) -> dict:
         self._current_autonomy_mode = autonomy_mode
-        category_label = CATEGORY_LABELS.get(category, "주식시장")
+        nature = _cn.normalize_nature(content_nature)
+        category_label = _cn.category_label_for(nature, category, CATEGORY_LABELS)
         self._llm_provider_log: list[dict] = []
         self._llm_call_count = 0
         selected_terms = _selected_keyword_terms(keyword)
@@ -1436,7 +1439,9 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             )
 
         # 시장 데이터 수집 (전달받지 못한 경우)
-        if not market_data:
+        if nature != _cn.FACTUAL:
+            market_data = {}  # 비사실형은 시장 데이터를 쓰지 않는다
+        elif not market_data:
             try:
                 market_data = self.collector.collect_for_category(category, keyword)
                 logger.info("시장 데이터 직접 수집 완료")
@@ -1464,10 +1469,14 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             )
 
             # 3-Round 팩트체크
-            all_facts, fact_check_log = self._multi_round_fact_check(
-                keyword, category_label, market_data, selected_terms, keyword_news, target_minutes,
-                source_videos,
-            )
+            if nature == _cn.STORY:
+                all_facts = _cn.story_seed_facts(keyword, benchmark_analysis, source_videos)
+                fact_check_log = ["STORY: 팩트체크 생략, 벤치마크 소재 사용"]
+            else:
+                all_facts, fact_check_log = self._multi_round_fact_check(
+                    keyword, category_label, market_data, selected_terms, keyword_news, target_minutes,
+                    source_videos, content_nature=nature,
+                )
             verified_facts, suspect_facts = _split_verified_facts(all_facts)
             fact_check_summary = _build_fact_check_summary(
                 all_facts,
@@ -1500,7 +1509,10 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 selected_terms, keyword_news, length_contract, narrative_plan,
                 source_videos,
                 benchmark_analysis=benchmark_analysis,
+                content_nature=nature,
             )
+            if nature == _cn.STORY:
+                sections = _cn.ensure_story_disclosure(sections)
             pre_edit_spoken_chars = spoken_char_count(_narration_from_sections(sections))
             pre_edit_length_ready = (
                 int(length_contract["min_chars"])
@@ -1763,8 +1775,11 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
         script_audit = _script_audit_fields(verified_facts, source_videos, keyword_news)
         # 주석·장면 지시를 붙인 뒤에도 승인 대본의 수치 안전 계약이 유지되는지
         # 최종 반환 직전에 한 번 더 확인한다.
-        unverified_numbers = _has_unverified_financial_numbers(full_script, verified_facts)
-        _ensure_no_unverified_financial_numbers(full_script, verified_facts)
+        if nature == _cn.FACTUAL:
+            unverified_numbers = _has_unverified_financial_numbers(full_script, verified_facts)
+            _ensure_no_unverified_financial_numbers(full_script, verified_facts)
+        else:
+            unverified_numbers = False  # 비사실형은 검증 실패를 표시로만 남기고 대본을 막지 않는다
         requires_manual_review = _requires_script_manual_review(
             rejected_scenes=rejected_scenes,
             provider_log=self._llm_provider_log,
@@ -1802,6 +1817,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             "flow_qa": flow_qa,
             "content_depth_quality": content_depth_quality,
             "requires_manual_review": requires_manual_review,
+            "content_nature": nature,
             "storytelling_profile": DEFAULT_SCRIPT_STYLE_PROFILE,
             "style_mix_applied": default_style_mix(category),
             "structure": narrative_plan.get("plan_id", "adaptive_plan"),
@@ -1835,7 +1851,9 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
     def _multi_round_fact_check(self, keyword: str, category_label: str,
                                  market_data: dict, selected_terms: list[str],
                                  keyword_news: list[dict], target_minutes: int,
-                                 source_videos: Optional[list[dict]] = None) -> tuple[list, list]:
+                                 source_videos: Optional[list[dict]] = None,
+                                 content_nature: Optional[str] = None) -> tuple[list, list]:
+        fact_prompt = _cn.fact_check_prompt(content_nature, FACT_CHECK_SYSTEM_PROMPT)
         messages = []
         fact_check_log = []
         market_json = json.dumps(market_data, ensure_ascii=False, indent=2)
@@ -1857,7 +1875,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 </youtube_topic_context>
 
 <task>
-위 실제 시장 데이터에서 '{keyword}' 관련 핵심 사실들을 {target_fact_count}개 내외로 추출하세요 (영상 길이 {target_minutes}분에 비례).
+{'제공된 자료' if _cn.normalize_nature(content_nature) != _cn.FACTUAL else '위 실제 시장 데이터'}에서 '{keyword}' 관련 핵심 사실들을 {target_fact_count}개 내외로 추출하세요 (영상 길이 {target_minutes}분에 비례).
 1. 수치, 뉴스, 매크로 동향 등 신뢰성 있는 정보 포함.
 2. 데이터 내 출처 필드명 명시.
 3. 데이터에 없는 내용 절대 금지.
@@ -1867,14 +1885,14 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 형식: 번호. [출처] 사실 내용
 </task>"""
 
-        r1_text = self._call_llm_with_fallback(FACT_CHECK_SYSTEM_PROMPT, [{"role": "user", "content": r1_content}], max_tokens=4000)
+        r1_text = self._call_llm_with_fallback(fact_prompt, [{"role": "user", "content": r1_content}], max_tokens=4000)
         messages.append({"role": "user", "content": r1_content})
         messages.append({"role": "assistant", "content": r1_text})
         fact_check_log.append(f"Round 1 완료: {_count_text(r1_text)}자")
 
         r2_content = "위 사실들을 비판적으로 검토하여 2개 이상의 출처(source_ref)에서 교차 검증되는지 확인하고, 출처 간 수치/사실 불일치(contradiction)가 있는 경우 명시적으로 표기하여 최종 목록을 작성하세요."
         messages.append({"role": "user", "content": r2_content})
-        r2_text = self._call_llm_with_fallback(FACT_CHECK_SYSTEM_PROMPT, messages, max_tokens=3000)
+        r2_text = self._call_llm_with_fallback(fact_prompt, messages, max_tokens=3000)
         messages.append({"role": "assistant", "content": r2_text})
         fact_check_log.append(f"Round 2 완료: {_count_text(r2_text)}자")
 
@@ -1885,7 +1903,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
   }
 ]"""
         messages.append({"role": "user", "content": r3_content})
-        r3_text = self._call_llm_with_fallback(FACT_CHECK_SYSTEM_PROMPT, messages, max_tokens=4000)
+        r3_text = self._call_llm_with_fallback(fact_prompt, messages, max_tokens=4000)
         fact_check_log.append("Round 3 완료")
         return self._parse_verified_facts(r3_text), fact_check_log
 
@@ -1898,7 +1916,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                                        length_contract: Optional[dict] = None,
                                        narrative_plan: Optional[dict] = None,
                                        source_videos: Optional[list[dict]] = None,
-                                       benchmark_analysis: Optional[dict] = None):
+                                       benchmark_analysis: Optional[dict] = None,
+                                       content_nature: Optional[str] = None):
         facts_text = "\n".join(f"- {f['fact']} (상세 정보: {f.get('figure', 'N/A')}, 출처: {f.get('source_field', 'N/A')}, 신뢰도: {f.get('confidence', 0):.2f})" for f in verified_facts)
         market_summary = _build_market_summary_for_script(market_data)
         selected_terms = selected_terms or _selected_keyword_terms(keyword)
@@ -1935,7 +1954,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 <keyword_news_evidence>{evidence_text}</keyword_news_evidence>
 <youtube_topic_context>{json.dumps(source_videos, ensure_ascii=False)}</youtube_topic_context>
 <narrative_plan>{json.dumps(narrative_plan, ensure_ascii=False)}</narrative_plan>
-{benchmark_block}작성 규칙:
+{_cn.nature_directive(content_nature)}{benchmark_block}작성 규칙:
 {benchmark_rule}- [대사], [비주얼 설명 (한국어)], [비주얼 프롬프트 (영어)], [감정] 포함
 - [대사] 블록만 합산해 공백 제외 약 {draft_target_chars}자로 작성. 비주얼 설명·영문 프롬프트·메타데이터는 이 분량에 포함하지 않음. 후단에서 실제 5분 승인 범위 {int((length_contract or {}).get('min_chars', target_chars))}~{int((length_contract or {}).get('max_chars', target_chars))}자로 정밀 보정하므로 짧게 쓰지 마세요.
 - The selected keywords are mandatory subjects, not optional context. Every section must directly explain a selected keyword, its verified impact, or the relationship between the selected keyword and the category. Do not replace this with a generic market crash, geopolitical event, or index recap unless the supplied evidence explicitly connects it.
@@ -1965,7 +1984,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
         for attempt in range(3):
             try:
                 full_text = self._call_llm_with_fallback(
-                    f"{SCRIPT_SYSTEM_PROMPT}\n\n{style_guide}",
+                    f"{_cn.script_system_prompt(content_nature, SCRIPT_SYSTEM_PROMPT)}\n\n{style_guide}",
                     [{"role": "user", "content": user_prompt}],
                     max_tokens=8000,
                 )
