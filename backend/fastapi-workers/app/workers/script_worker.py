@@ -666,8 +666,12 @@ def _topic_anchor_label(keyword: str) -> str:
     return label if len(re.sub(r"\s+", "", label)) <= 16 else parts[0]
 
 
-def _anchor_topic_boundaries(sections: list[dict], keyword: str) -> tuple[list[dict], list[str]]:
+def _anchor_topic_boundaries(sections: list[dict], keyword: str,
+                             content_nature: Optional[str] = None) -> tuple[list[dict], list[str]]:
     """선택 주체가 빠진 도입·결말에 비수치 범위 표지만 추가한다.
+
+    사실형에서만 적용한다. 해설형·창작형에 고정 문장("○○, 계속 확인하죠.")을 덧붙이면
+    이야기 흐름이 기계적으로 끊기므로, 프롬프트의 키워드 규칙에 맡기고 원문을 유지한다.
 
     기존 금융 문장과 검증 사실은 삭제·수정하지 않는다. 승인 전 대본에
     짧은 주제 표지 문장만 붙여 일반 시장 이야기로 시작하거나 끝나는 것을
@@ -675,6 +679,8 @@ def _anchor_topic_boundaries(sections: list[dict], keyword: str) -> tuple[list[d
     """
     anchored = [dict(section) for section in sections]
     if not anchored or not str(keyword or "").strip():
+        return anchored, []
+    if _cn.normalize_nature(content_nature) != _cn.FACTUAL:
         return anchored, []
     boundaries = _validate_topic_boundaries(_narration_from_sections(anchored), keyword)
     label = _topic_anchor_label(keyword)
@@ -1530,7 +1536,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                     sections, verified_facts, device="fake_reader_question", format_name=format_name,
                 )
             source_sections_before_anchor = sections
-            anchored_sections, topic_anchors = _anchor_topic_boundaries(sections, keyword)
+            anchored_sections, topic_anchors = _anchor_topic_boundaries(sections, keyword, nature)
             anchored_chars = spoken_char_count(_narration_from_sections(anchored_sections))
             if not (
                 int(length_contract["min_chars"])

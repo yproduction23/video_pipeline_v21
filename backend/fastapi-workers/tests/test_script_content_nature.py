@@ -148,3 +148,16 @@ def test_generate_collects_market_data_for_factual(monkeypatch):
     except (Halt, RuntimeError):
         pass
     assert calls["market"] == 1
+
+
+def test_topic_anchor_padding_only_for_factual():
+    sections = [{"content": "이야기가 시작됩니다."}, {"content": "이야기가 끝납니다."}]
+
+    factual, applied = sw._anchor_topic_boundaries(sections, "부산상어 재유행")
+    assert applied == ["opening", "ending"]
+    assert "계속 확인하죠" in factual[-1]["content"]
+
+    for nature in (cn.EXPLAINER, cn.STORY):
+        out, applied = sw._anchor_topic_boundaries(sections, "부산상어 재유행", nature)
+        assert applied == []
+        assert out == sections
