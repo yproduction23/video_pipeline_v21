@@ -627,7 +627,10 @@ def benchmark_analyze(request: BenchmarkAnalyzeRequest):
     from app.services.discovery import benchmark_analysis
 
     try:
-        return benchmark_analysis.analyze_benchmark(benchmark_analysis.claude_llm_call, request.video)
+        from app.services.discovery.transcript import fetch_transcript
+
+        transcript = fetch_transcript(request.video.get("videoId"))
+        return benchmark_analysis.analyze_benchmark(benchmark_analysis.claude_llm_call, request.video, transcript)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"벤치마크 분석 실패: {exc}") from exc
 

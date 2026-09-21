@@ -48,6 +48,7 @@ _DIRECTIVES = {
         "이 영상은 화제 콘텐츠 해설입니다. 시장 데이터·투자 관점으로 끌고 가지 마세요. "
         "확인된 내용은 단정적으로, 확인이 덜 된 내용은 \"알려져 있습니다\"·\"영상마다 설명이 엇갈립니다\" 같은 "
         "완화 표현으로 쓰세요. 전문가마다 의견이 갈리면 \"A는 이렇게 보고 B는 다르게 봅니다\"로 관점을 밝히세요. "
+        "<benchmark_points>의 content_summary가 있으면 영상의 실제 줄거리로 삼고, 태그·제목으로 줄거리를 짐작하지 마세요. "
         "자료(<verified_facts>, <youtube_topic_context>, <benchmark_points>)에 없는 구체적 사건·인물·장소·수치는 만들지 마세요. "
         "소재의 정체가 자료로 확인되지 않으면 사건을 단정하지 말고 \"화제가 된 영상\" 같은 일반적인 표현으로 풀어 가세요. "
         "참고 영상의 조회수·좋아요·성과 수치는 본문 재료로 쓰지 말고, 영상이 다루는 내용과 사람들이 궁금해할 이유를 이야기하세요. "
@@ -113,6 +114,9 @@ def story_seed_facts(keyword: str, benchmark_analysis: Optional[dict], source_vi
 
     facts = [seed(f"{topic_prefix}: {keyword}", "topic")]
     analysis = benchmark_analysis or {}
+    summary = str(analysis.get("content_summary") or "").strip()
+    if summary:
+        facts.append(seed(f"영상의 실제 줄거리: {summary}", "transcript"))
     topic = str(analysis.get("topic_keyword") or "").strip()
     if topic and topic != keyword:
         facts.append(seed(f"벤치마크가 다룬 주제: {topic}", "benchmark_analysis"))

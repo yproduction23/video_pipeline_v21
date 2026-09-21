@@ -45,3 +45,25 @@ def test_prompt_forbids_quoting_and_includes_video_facts():
 def test_non_json_response_raises_value_error():
     with pytest.raises(ValueError):
         analyze_benchmark(fake_llm("분석할 수 없습니다"), VIDEO)
+
+
+def test_transcript_adds_content_summary_and_is_sent_to_llm():
+    seen = {}
+
+    def llm(system, user, max_tokens=800):
+        seen["user"] = user
+        return json.dumps({"topic_keyword": "면접", "reasons": ["a"], "hook_type": None, "title_pattern": "",
+                           "content_summary": " 늙어버린 25살이 면접에서 진실을 말한다 "}, ensure_ascii=False)
+
+    result = analyze_benchmark(llm, VIDEO, transcript="저 25살이에요. 시계를 잘못 돌렸어요.")
+
+    assert "저 25살이에요" in seen["user"] and "content_summary" in seen["user"]
+    assert result["content_summary"] == "늙어버린 25살이 면접에서 진실을 말한다"
+
+
+def test_no_transcript_means_no_content_summary_even_if_model_invents_one():
+    payload = {"topic_keyword": "상어", "reasons": [], "hook_type": None, "title_pattern": "", "content_summary": "지어낸 줄거리"}
+
+    result = analyze_benchmark(fake_llm(payload), VIDEO)
+
+    assert "content_summary" not in result

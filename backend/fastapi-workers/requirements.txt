@@ -50,3 +50,4 @@ stable-ts[fw]>=2.17.0
 
 # Keep the documented container regression-test command executable.
 pytest>=8.3.0,<9.0
+youtube-transcript-api>=1.2,<2

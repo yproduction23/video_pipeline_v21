@@ -109,3 +109,12 @@ def test_explainer_directive_forbids_invented_specifics():
 def test_explainer_prompts_forbid_using_video_performance_numbers():
     assert "성과 수치" in cn.fact_check_prompt(cn.EXPLAINER, "x")
     assert "성과 수치" in cn.nature_directive(cn.EXPLAINER)
+
+
+def test_seed_facts_lead_with_transcript_summary_when_available():
+    facts = cn.story_seed_facts("면접", {"content_summary": "늙어버린 25살이 면접에서 진실을 말한다"}, None)
+    assert any("영상의 실제 줄거리" in f["fact"] and f["source_field"] == "transcript" for f in facts)
+
+
+def test_explainer_directive_prefers_content_summary_over_guessing_from_tags():
+    assert "content_summary" in cn.nature_directive(cn.EXPLAINER)
