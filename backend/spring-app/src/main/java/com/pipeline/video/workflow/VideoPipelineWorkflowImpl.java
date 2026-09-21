@@ -2,6 +2,7 @@ package com.pipeline.video.workflow;
 
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
+import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.WorkflowImpl;
 import io.temporal.workflow.Workflow;
 import org.slf4j.Logger;
@@ -213,7 +214,8 @@ public class VideoPipelineWorkflowImpl implements VideoPipelineWorkflow {
                 () -> approvedGates.contains(gateName) || rejectedGate != null
         );
         if (!approved) {
-            throw new RuntimeException("게이트 승인 타임아웃 (72시간): " + gateName);
+            // 일반 예외는 워크플로 실패가 아니라 실행 단계 무한 재시도가 되므로 재시도 없는 실패로 종료한다.
+            throw ApplicationFailure.newNonRetryableFailure("게이트 승인 타임아웃 (72시간): " + gateName, "GateTimeout");
         }
         log.info("게이트 통과: gate={}", gateName);
     }
