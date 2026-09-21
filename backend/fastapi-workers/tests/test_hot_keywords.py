@@ -75,6 +75,35 @@ def test_tags_contribute_keywords():
     assert "부산상어" in {k["keyword"] for k in result["keywords"]}
 
 
+def test_generic_english_and_korean_words_are_dropped():
+    videos = [video("a", "tv love 이유 사람 sbs clip 부산상어", 5, 1000)]
+
+    result = aggregate_hot_keywords(videos, "48h", split)
+
+    assert [k["keyword"] for k in result["keywords"]] == ["부산상어"]
+
+
+def test_keywords_seen_in_multiple_videos_come_before_single_video_ones():
+    videos = [
+        video("a", "부산상어 챌린지", 5, 100),
+        video("b", "부산상어 신곡", 6, 100),
+        video("c", "환율 급등", 7, 900000),
+    ]
+
+    result = aggregate_hot_keywords(videos, "48h", split, min_results=1)
+
+    assert [k["keyword"] for k in result["keywords"]] == ["부산상어"]
+
+
+def test_single_video_keywords_fill_up_to_minimum_results():
+    videos = [video("a", "부산상어 챌린지", 5, 100), video("b", "부산상어 신곡", 6, 100), video("c", "환율 급등", 7, 900000)]
+
+    result = aggregate_hot_keywords(videos, "48h", split, min_results=4)
+
+    keywords = [k["keyword"] for k in result["keywords"]]
+    assert keywords[0] == "부산상어" and len(keywords) == 4
+
+
 def test_invalid_window_raises():
     with pytest.raises(ValueError):
         aggregate_hot_keywords([], "30d", split)

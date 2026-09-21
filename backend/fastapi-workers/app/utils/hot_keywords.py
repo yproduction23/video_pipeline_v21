@@ -8,9 +8,16 @@ from app.utils.keyword_aliases import STOP_WORDS
 
 WINDOW_HOURS = {"48h": 48.0, "7d": 168.0}
 RECENT_HOURS = 48.0
+MIN_VIDEOS = 2  # 서로 다른 영상 2개 이상에 나와야 "뜨는" 키워드로 본다
+MIN_RESULTS = 8  # 조건을 만족하는 키워드가 이보다 적으면 1개 영상 키워드로 채운다
+# 2026-09-21 실제 한국 차트(전체·뉴스·엔터·게임·과학기술)에서 관찰한 의미 없는 일반어
 _FILLER = {
     "영상", "채널", "구독", "좋아요", "라이브", "공식", "official", "shorts", "쇼츠",
     "예고편", "하이라이트", "티저", "풀버전", "모음", "레전드", "진짜", "지금", "이슈",
+    "이유", "사람", "프로", "사랑", "인생", "시즌", "강의", "방송", "실시간", "기자", "앵커",
+    "tv", "news", "love", "talk", "you", "the", "and", "for", "with", "video", "music", "live",
+    "teaser", "mv", "full", "ver", "new", "best", "top", "part", "ep", "vs", "shorts",
+    "clip", "bj", "it", "튜브", "sbs", "jtbc", "kbs", "mbc", "ytn", "채널a", "연합뉴스",
 }
 _kiwi = None
 _kiwi_unavailable = False
@@ -53,6 +60,7 @@ def aggregate_hot_keywords(
     window: str = "48h",
     noun_extractor: Callable[[str], list[str]] = extract_nouns,
     limit: int = 20,
+    min_results: int = MIN_RESULTS,
 ) -> dict:
     if window not in WINDOW_HOURS:
         raise ValueError(f"지원하지 않는 기간입니다: {window}")
@@ -92,6 +100,9 @@ def aggregate_hot_keywords(
             "sampleVideoIds": [v["videoId"] for v in top[:3]],
         })
     keywords.sort(key=lambda k: k["score"], reverse=True)
+    repeated = [k for k in keywords if k["videoCount"] >= MIN_VIDEOS]
+    singles = [k for k in keywords if k["videoCount"] < MIN_VIDEOS]
+    keywords = repeated + singles[:max(0, min_results - len(repeated))]
 
     videos_out = [
         {key: value for key, value in row.items() if not key.startswith("_")}
