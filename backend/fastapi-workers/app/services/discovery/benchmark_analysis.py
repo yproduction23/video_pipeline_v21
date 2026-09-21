@@ -30,7 +30,9 @@ def analyze_benchmark(llm_call: Callable[..., str], video: dict, transcript: str
     facts = {key: video.get(key) for key in ("title", "channelTitle", "tags", "description", "views", "viewsPerHour", "outperformanceIndex", "durationSeconds")}
     transcript_block = f"\n영상 자막(발췌, 줄거리 파악용): {transcript[:4000]}\n" if transcript else ""
     summary_field = (
-        ',\n  "content_summary": "자막을 근거로 영상에서 실제로 벌어지는 일을 순서대로 요약한 줄거리, 250자 이내. 대사를 그대로 옮기지 말고 자막에 없는 내용은 쓰지 말 것"'
+        ',\n  "content_summary": "자막을 근거로 영상에서 실제로 벌어지는 일을 순서대로 요약한 줄거리, 250자 이내. 대사를 그대로 옮기지 말고 자막에 없는 내용은 쓰지 말 것",'
+        '\n  "story_premise": "이야기라면 장르 수준의 전제를 한 문장으로. 인물 이름·지명·소품·구체적 행동 없이 추상적으로(예: 가까운 사람이 위험한 존재일 수 있다는 예고를 받는다). 이야기가 아니면 null",'
+        '\n  "story_beats": ["이야기라면 긴장의 역할만 4~6개. 각 15자 이내의 추상적 단어로, 구체적 사건·장소·물건·인물 관계 금지(예: 불길한 예고, 의심의 싹, 확증, 결정적 위기, 선택의 순간). 이야기가 아니면 빈 배열"]'
         if transcript else ""
     )
     prompt = f"""영상 공개 정보: {json.dumps(facts, ensure_ascii=False)}{transcript_block}
@@ -42,7 +44,7 @@ def analyze_benchmark(llm_call: Callable[..., str], video: dict, transcript: str
   "hook_type": "number_context|belief_reversal|time_contrast|hidden_context|direct_question|human_stake 중 하나",
   "title_pattern": "제목의 구조를 한 줄로 (예: 결과를 먼저 던지고 과정을 궁금하게 만듦)"{summary_field}
 }}"""
-    raw = llm_call(SYSTEM, prompt, 800)
+    raw = llm_call(SYSTEM, prompt, 1600 if transcript else 800)
     match = re.search(r"\{[\s\S]*\}", raw or "")
     try:
         data = json.loads(match.group(0)) if match else None
@@ -62,4 +64,10 @@ def analyze_benchmark(llm_call: Callable[..., str], video: dict, transcript: str
     summary = str(data.get("content_summary") or "").strip()[:300]
     if transcript and summary:
         result["content_summary"] = summary
+    premise = str(data.get("story_premise") or "").strip()[:150]
+    beats = [str(b).strip()[:20] for b in (data.get("story_beats") or []) if str(b).strip()][:6]
+    if transcript and premise:
+        result["story_premise"] = premise
+    if transcript and beats:
+        result["story_beats"] = beats
     return result

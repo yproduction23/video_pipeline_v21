@@ -67,3 +67,36 @@ def test_no_transcript_means_no_content_summary_even_if_model_invents_one():
     result = analyze_benchmark(fake_llm(payload), VIDEO)
 
     assert "content_summary" not in result
+
+
+def test_transcript_adds_story_premise_and_beats():
+    payload = {"topic_keyword": "경고", "reasons": [], "hook_type": None, "title_pattern": "",
+               "content_summary": "요약", "story_premise": " 낯선 사람이 경고를 전한다 ",
+               "story_beats": ["경고", "의심", "", "위기"]}
+
+    result = analyze_benchmark(fake_llm(payload), VIDEO, transcript="자막")
+
+    assert result["story_premise"] == "낯선 사람이 경고를 전한다"
+    assert result["story_beats"] == ["경고", "의심", "위기"]
+
+
+def test_no_story_fields_without_transcript():
+    payload = {"topic_keyword": "경고", "reasons": [], "hook_type": None, "title_pattern": "",
+               "story_premise": "지어낸 전제", "story_beats": ["a"]}
+
+    result = analyze_benchmark(fake_llm(payload), VIDEO)
+
+    assert "story_premise" not in result and "story_beats" not in result
+
+
+def test_transcript_analysis_gets_larger_token_budget():
+    seen = {}
+
+    def llm(system, user, max_tokens=800):
+        seen["max_tokens"] = max_tokens
+        return json.dumps({"topic_keyword": "a", "reasons": [], "hook_type": None, "title_pattern": ""})
+
+    analyze_benchmark(llm, VIDEO, transcript="자막")
+    assert seen["max_tokens"] >= 1500
+    analyze_benchmark(llm, VIDEO)
+    assert seen["max_tokens"] == 800

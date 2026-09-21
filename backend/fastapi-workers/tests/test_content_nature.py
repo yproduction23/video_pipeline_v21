@@ -48,7 +48,7 @@ def test_non_factual_script_prompt_drops_finance_rules_and_adds_curiosity():
 
 
 def test_directives_carry_disclosure_rules():
-    assert "전해 내려오는" in cn.nature_directive(cn.STORY)
+    assert "지어낸" in cn.nature_directive(cn.STORY)
     assert "알려져 있" in cn.nature_directive(cn.EXPLAINER)
     assert "궁금" in cn.nature_directive(cn.EXPLAINER)
 
@@ -82,7 +82,7 @@ def test_ensure_story_disclosure_prepends_when_missing():
 
 
 def test_ensure_story_disclosure_keeps_existing_marker():
-    sections = [{"content": "오늘은 전해 내려오는 이야기를 들려드립니다."}]
+    sections = [{"content": "오늘은 지어낸 이야기를 들려드립니다."}]
     assert cn.ensure_story_disclosure(sections)[0]["content"] == sections[0]["content"]
 
 
@@ -118,3 +118,37 @@ def test_seed_facts_lead_with_transcript_summary_when_available():
 
 def test_explainer_directive_prefers_content_summary_over_guessing_from_tags():
     assert "content_summary" in cn.nature_directive(cn.EXPLAINER)
+
+
+def test_story_directive_reuses_only_premise_and_structure():
+    directive = cn.nature_directive(cn.STORY)
+    assert "story_premise" in directive and "story_beats" in directive
+    assert "재사용하지 마세요" in directive
+
+
+def test_sanitize_story_inputs_drops_plot_summary_and_video_details():
+    analysis = {"topic_keyword": "t", "content_summary": "은조와 태문의 이야기", "story_premise": "경고를 전하는 낯선 사람"}
+    videos = [{"title": "제목", "description": "은조가 나오는 설명", "tags": ["은조", "태문"]}]
+
+    clean_analysis, clean_videos = cn.sanitize_story_inputs(analysis, videos)
+
+    assert "content_summary" not in clean_analysis
+    assert clean_analysis["story_premise"] == "경고를 전하는 낯선 사람"
+    assert clean_videos == [{"title": "제목"}]
+    assert "content_summary" in analysis  # 원본은 건드리지 않는다
+
+
+def test_sanitize_story_inputs_handles_missing_values():
+    assert cn.sanitize_story_inputs(None, None) == (None, [])
+
+
+def test_seed_facts_use_premise_and_beats_without_names():
+    facts = cn.story_seed_facts("경고", {"story_premise": "낯선 사람이 경고한다", "story_beats": ["경고", "의심", "위기"]}, None)
+    texts = " ".join(f["fact"] for f in facts)
+    assert "낯선 사람이 경고한다" in texts and "경고 → 의심 → 위기" in texts
+
+
+def test_disclosure_now_says_invented():
+    assert "지어낸" in cn.DISCLOSURE_SENTENCE
+    out = cn.ensure_story_disclosure([{"content": "옛날 옛적에 한 선비가 살았습니다."}])
+    assert out[0]["content"].startswith(cn.DISCLOSURE_SENTENCE)

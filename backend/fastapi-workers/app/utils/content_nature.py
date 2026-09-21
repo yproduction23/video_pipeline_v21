@@ -9,8 +9,8 @@ EXPLAINER = "EXPLAINER"
 STORY = "STORY"
 NATURES = (FACTUAL, EXPLAINER, STORY)
 
-DISCLOSURE_SENTENCE = "지금부터 들려드릴 이야기는 전해 내려오는 이야기입니다."
-_DISCLOSURE_MARKER = re.compile(r"전해\s*내려|전해지는|옛날|옛적|이야기|야담|설화|지어낸|창작")
+DISCLOSURE_SENTENCE = "지금부터 들려드릴 이야기는 지어낸 이야기입니다."
+_DISCLOSURE_MARKER = re.compile(r"지어낸|꾸며낸|창작|허구|픽션")
 
 _CURIOSITY = (
     "대본의 중심은 시청자가 궁금해할 지점을 짚으며 이야기를 끌고 가는 것입니다. "
@@ -37,7 +37,8 @@ _FACT_CHECK_EXPLAINER = f"""당신은 화제 콘텐츠·이슈 해설 영상의 
 _FACT_CHECK_STORY = f"""당신은 창작·야담형 영상의 소재 정리자입니다.
 
 역할:
-- 이 영상은 사실 보도가 아니라 전해 내려오는 이야기입니다. 줄거리와 등장 요소를 정리합니다.
+- 이 영상은 사실 보도가 아니라 지어낸 이야기입니다. 벤치마크에서 가져온 전제와 긴장 구조를 정리합니다.
+- 벤치마크 원작의 인물 이름·지명·대사·세부 사건·결말은 정리 대상이 아닙니다.
 - 실제 사건·실존 인물·통계처럼 보이는 사실 주장이 섞이지 않게만 점검합니다.
 
 {_CURIOSITY}"""
@@ -56,7 +57,10 @@ _DIRECTIVES = {
     ),
     STORY: (
         "<content_nature>STORY</content_nature>\n"
-        "이 영상은 전해 내려오는 이야기입니다. 도입부에서 \"전해 내려오는 이야기\"임을 밝히고, "
+        "이 영상은 새로 지어낸 이야기입니다. 도입부에서 \"지어낸 이야기\"임을 밝히세요. "
+        "<benchmark_points>의 story_premise(전제)와 story_beats(긴장 구조)만 참고해 같은 결의 다른 이야기를 쓰세요. "
+        "인물 이름·지명·대사·세부 사건·결말은 원작과 다르게 새로 만들고, 원작의 고유명사와 사건 순서를 재사용하지 마세요. "
+        "배경·계기·소재·등장인물의 관계도 원작과 다른 것으로 바꾸고, 전제와 긴장의 역할만 같은 새 이야기로 만드세요. "
         "실제 통계·실존 인물의 사실 주장처럼 들리는 문장은 쓰지 마세요. "
         "시청자가 다음이 궁금해지도록 장면을 이어 가세요.\n"
     ),
@@ -117,6 +121,12 @@ def story_seed_facts(keyword: str, benchmark_analysis: Optional[dict], source_vi
     summary = str(analysis.get("content_summary") or "").strip()
     if summary:
         facts.append(seed(f"영상의 실제 줄거리: {summary}", "transcript"))
+    premise = str(analysis.get("story_premise") or "").strip()
+    if premise:
+        facts.append(seed(f"이야기의 전제(참고): {premise}", "benchmark_analysis"))
+    beats = [str(b).strip() for b in (analysis.get("story_beats") or []) if str(b).strip()]
+    if beats:
+        facts.append(seed("긴장 구조(참고): " + " → ".join(beats[:6]), "benchmark_analysis"))
     topic = str(analysis.get("topic_keyword") or "").strip()
     if topic and topic != keyword:
         facts.append(seed(f"벤치마크가 다룬 주제: {topic}", "benchmark_analysis"))
@@ -131,8 +141,25 @@ def story_seed_facts(keyword: str, benchmark_analysis: Optional[dict], source_vi
     return facts
 
 
+def sanitize_story_inputs(benchmark_analysis: Optional[dict],
+                          source_videos: Optional[list]) -> tuple[Optional[dict], list[dict]]:
+    """창작형은 원작의 줄거리·고유명사가 대본으로 새지 않게 전제·구조만 남긴다.
+
+    벤치마크의 실제 줄거리(content_summary)와 영상 설명·태그(인물·지명이 들어 있을 수 있음)를 제거한다.
+    """
+    analysis = None
+    if isinstance(benchmark_analysis, dict):
+        analysis = {k: v for k, v in benchmark_analysis.items() if k != "content_summary"}
+    videos = [
+        {"title": str((video or {}).get("title") or "")}
+        for video in (source_videos or [])
+        if isinstance(video, dict)
+    ]
+    return analysis, videos
+
+
 def ensure_story_disclosure(sections: list[dict]) -> list[dict]:
-    """창작형은 도입부에 '전해 내려오는 이야기' 표기가 없으면 결정론적으로 붙인다."""
+    """창작형은 도입부에 '지어낸 이야기' 표기가 없으면 결정론적으로 붙인다."""
     if not sections:
         return sections
     head = " ".join(str(s.get("content") or s.get("text") or "") for s in sections[:2])

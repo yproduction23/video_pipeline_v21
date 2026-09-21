@@ -2,7 +2,7 @@
 export const NATURE_OPTIONS = [
   { value: 'FACTUAL', label: '사실형', desc: '경제·시사·사회 이슈. 뉴스로 검증되는 내용' },
   { value: 'EXPLAINER', label: '해설형', desc: '화제 콘텐츠·밈·인물. 벤치마크 분석과 웹 자료를 근거로, 불확실한 내용은 완화 표현' },
-  { value: 'STORY', label: '창작형', desc: '야담·설화·옛날이야기. 전해 내려오는 이야기임을 영상에서 밝힘' },
+  { value: 'STORY', label: '창작형', desc: '야담·옛날이야기풍. 벤치마크의 전제와 긴장 구조만 참고해 새 이야기를 쓰고, 지어낸 이야기임을 영상에서 밝힘' },
 ]
 
 export const natureLabel = value => NATURE_OPTIONS.find(o => o.value === value)?.label || '사실형'

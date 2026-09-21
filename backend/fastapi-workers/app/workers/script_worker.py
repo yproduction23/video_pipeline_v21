@@ -1462,6 +1462,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             keyword_news = candidate_context["merged_news"]
             source_videos = candidate_context["source_videos"]
             benchmark_analysis = candidate_context["benchmark_analysis"]
+            if nature == _cn.STORY:
+                benchmark_analysis, source_videos = _cn.sanitize_story_inputs(benchmark_analysis, source_videos)
             if isinstance(candidate_evidence, dict):
                 logger.info(
                     "candidate_evidence 병합: 후보 뉴스 추가=%s건, YouTube 문맥=%s건",

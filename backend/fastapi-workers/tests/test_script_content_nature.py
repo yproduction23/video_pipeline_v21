@@ -57,7 +57,7 @@ def test_explainer_generation_uses_non_finance_prompt_and_directive(monkeypatch)
 def test_story_generation_requires_disclosure_directive(monkeypatch):
     captured = _capture_generation(monkeypatch, cn.STORY)
     assert "<content_nature>STORY</content_nature>" in captured["user"]
-    assert "전해 내려오는" in captured["user"]
+    assert "지어낸" in captured["user"]
 
 
 def _fact_check_prompts(monkeypatch, nature):
