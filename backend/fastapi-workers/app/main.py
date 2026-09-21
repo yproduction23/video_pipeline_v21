@@ -578,6 +578,60 @@ async def youtube_channel_benchmark(
         raise HTTPException(500, f"채널 벤치마크 조회 실패: {str(e)}")
 
 
+def _discovery_http_error(exc) -> HTTPException:
+    status = {"NO_API_KEY": 503, "QUOTA": 429, "UNSUPPORTED_CATEGORY": 404, "NOT_FOUND": 404}.get(exc.code, 502)
+    return HTTPException(status_code=status, detail=str(exc))
+
+
+@app.get("/workers/discovery/hot-keywords")
+def discovery_hot_keywords(category: str = "ALL", window: str = "48h"):
+    """카테고리별 급상승 영상에서 핫키워드를 집계한다(48h/7d)."""
+    from app.services.discovery.youtube_discovery import DiscoveryError, YouTubeDiscovery
+
+    try:
+        return YouTubeDiscovery().hot_keywords(category, window)
+    except DiscoveryError as exc:
+        raise _discovery_http_error(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/workers/discovery/recent-uploads")
+def discovery_recent_uploads(channel_ids: str, days: int = 7):
+    """벤치마크 채널의 최근 업로드를 시간당 조회수·채널 평균 대비 배수와 함께 반환한다."""
+    from app.services.discovery.youtube_discovery import DiscoveryError, YouTubeDiscovery
+
+    ids = [item.strip() for item in channel_ids.split(",") if item.strip()]
+    try:
+        return YouTubeDiscovery().recent_uploads(ids, days)
+    except DiscoveryError as exc:
+        raise _discovery_http_error(exc) from exc
+
+
+@app.get("/workers/discovery/video/{video_id}")
+def discovery_video(video_id: str):
+    from app.services.discovery.youtube_discovery import DiscoveryError, YouTubeDiscovery
+
+    try:
+        return YouTubeDiscovery().fetch_video(video_id)
+    except DiscoveryError as exc:
+        raise _discovery_http_error(exc) from exc
+
+
+class BenchmarkAnalyzeRequest(BaseModel):
+    video: dict
+
+
+@app.post("/workers/benchmark/analyze")
+def benchmark_analyze(request: BenchmarkAnalyzeRequest):
+    from app.services.discovery import benchmark_analysis
+
+    try:
+        return benchmark_analysis.analyze_benchmark(benchmark_analysis.claude_llm_call, request.video)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"벤치마크 분석 실패: {exc}") from exc
+
+
 @app.get("/workers/youtube/channels/resolve")
 def resolve_youtube_channel(channel_ref: str):
     """채널 ID 또는 @handle을 Spring 저장 전에 실제 채널로 검증한다."""
