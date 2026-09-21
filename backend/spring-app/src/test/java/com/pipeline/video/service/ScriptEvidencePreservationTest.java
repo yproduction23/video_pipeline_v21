@@ -76,7 +76,7 @@ class ScriptEvidencePreservationTest {
         when(assetRepository.findByJobIdAndAssetType(1L, AssetType.KEYWORD)).thenReturn(List.of());
         when(fastApiClient.generateScript(
                 eq(1L), eq("삼성전자 실적"), eq(5), eq("INDIVIDUAL_STOCK"),
-                isNull(), eq(false), isNull(), eq("GUIDED"), isNull()
+                isNull(), eq(false), isNull(), eq("GUIDED"), isNull(), isNull()
         )).thenReturn(response);
         when(autonomyService.isAuto(job)).thenReturn(false);
 

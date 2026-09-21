@@ -95,6 +95,11 @@ public class ChannelProfile {
     @Column(name = "genre_excluded", columnDefinition = "TEXT")
     private String genreExcluded;
 
+    /** 이 채널의 기본 콘텐츠 성격. 비어 있으면 FACTUAL로 취급한다. 작업 생성 시 작업별로 바꿀 수 있다. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "content_nature", length = 20)
+    private ContentNature contentNature;
+
     @CreationTimestamp
     private LocalDateTime createdAt;
 }

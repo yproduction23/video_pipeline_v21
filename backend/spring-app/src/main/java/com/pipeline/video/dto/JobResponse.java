@@ -29,6 +29,7 @@ public class JobResponse {
     private String outputPath;
     private String policyJson;
     private String channelId;
+    private com.pipeline.video.domain.ContentNature contentNature;
     private String characterOverride;
     private boolean dataVisualsEnabled;
     private LocalDateTime createdAt;
@@ -58,6 +59,7 @@ public class JobResponse {
         r.setOutputPath(job.getOutputPath());
         r.setPolicyJson(job.getPolicyJson());
         r.setChannelId(job.getChannelId());
+        r.setContentNature(job.getContentNature() != null ? job.getContentNature() : com.pipeline.video.domain.ContentNature.FACTUAL);
         r.setCharacterOverride(job.getCharacterOverride());
         r.setDataVisualsEnabled(job.isDataVisualsEnabled());
         r.setCreatedAt(job.getCreatedAt());

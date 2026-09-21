@@ -73,12 +73,26 @@ public class JobService {
                 .costAccumulated(BigDecimal.ZERO)
                 .policyJson(request.getPolicyJson())
                 .channelId(request.getChannelId())
+                .contentNature(resolveContentNature(request))
                 .characterOverride(request.getCharacterOverride())
                 .dataVisualsEnabled(request.isDataVisualsEnabled())
                 .createdBy(username)
                 .build();
 
         return JobResponse.from(jobRepository.save(job));
+    }
+
+    /** 요청값 → 채널 기본값 → FACTUAL 순으로 콘텐츠 성격을 정한다. */
+    ContentNature resolveContentNature(CreateJobRequest request) {
+        if (request.getContentNature() != null) {
+            return request.getContentNature();
+        }
+        if (request.getChannelId() != null && !request.getChannelId().isBlank()) {
+            return channelProfileRepository.findById(request.getChannelId())
+                    .map(ChannelProfile::getContentNature)
+                    .orElse(ContentNature.FACTUAL);
+        }
+        return ContentNature.FACTUAL;
     }
 
     public List<JobResponse> getMyJobs(String username) {

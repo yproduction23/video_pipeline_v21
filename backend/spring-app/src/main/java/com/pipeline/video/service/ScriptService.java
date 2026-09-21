@@ -112,7 +112,8 @@ public class ScriptService {
         ScriptGenerateResponse result = fastApiClient.generateScript(
                 jobId, job.getKeyword(), llmTargetMinutes, categoryName, marketSnapshotJson,
                 job.isDataVisualsEnabled(), job.getTtsVoiceId(), job.getAutonomy().name(),
-                candidateEvidence);
+                candidateEvidence,
+                job.getContentNature() != null ? job.getContentNature().name() : null);
 
         // 실제 Claude 호출 수를 워커가 반환한다. 팩트체크뿐 아니라 내러티브 플랜과
         // 흐름 QA도 비용에 반영해야 영상별 예산 상한을 우회하지 않는다.

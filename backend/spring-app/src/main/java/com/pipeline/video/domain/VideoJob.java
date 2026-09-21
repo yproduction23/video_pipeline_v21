@@ -74,6 +74,11 @@ public class VideoJob {
     @Column(name = "channel_id", length = 50)
     private String channelId;
 
+    /** 작업 생성 시 확정된 콘텐츠 성격. null이면 FACTUAL로 취급한다. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "content_nature", length = 20)
+    private ContentNature contentNature;
+
     /** null이면 channel profile의 기본 캐릭터를 상속한다. */
     @Column(name = "character_override", length = 100)
     private String characterOverride;

@@ -25,6 +25,8 @@ public class CreateJobRequest {
     private BigDecimal geminiImageBudgetCap;
     private String policyJson;
     private String channelId;
+    /** null이면 채널 기본값, 그것도 없으면 FACTUAL. */
+    private com.pipeline.video.domain.ContentNature contentNature;
     private String characterOverride;
     // 숫자 카드·차트 오버레이는 레거시 호환용 명시 옵션이다. 새 영상은
     // 기사형·일반형·정보형의 대본 의미 시각화를 기본값으로 사용한다.

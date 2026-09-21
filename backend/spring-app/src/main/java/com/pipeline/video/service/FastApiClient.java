@@ -202,9 +202,20 @@ public class FastApiClient {
                                                   String category, String marketSnapshotJson, boolean dataVisualsEnabled,
                                                   String voiceId, String autonomyMode,
                                                   Map<String, Object> candidateEvidence) {
+        return generateScript(jobId, keyword, targetMinutes, category, marketSnapshotJson, dataVisualsEnabled,
+                voiceId, autonomyMode, candidateEvidence, null);
+    }
+
+    public ScriptGenerateResponse generateScript(Long jobId, String keyword, int targetMinutes,
+                                                  String category, String marketSnapshotJson, boolean dataVisualsEnabled,
+                                                  String voiceId, String autonomyMode,
+                                                  Map<String, Object> candidateEvidence, String contentNature) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("job_id", jobId);
+            if (contentNature != null && !contentNature.isBlank()) {
+                bodyMap.put("content_nature", contentNature);
+            }
             bodyMap.put("keyword", keyword);
             bodyMap.put("target_minutes", targetMinutes);
             bodyMap.put("category", category != null ? category : "CUSTOM");
