@@ -84,3 +84,23 @@ def test_ensure_story_disclosure_prepends_when_missing():
 def test_ensure_story_disclosure_keeps_existing_marker():
     sections = [{"content": "오늘은 전해 내려오는 이야기를 들려드립니다."}]
     assert cn.ensure_story_disclosure(sections)[0]["content"] == sections[0]["content"]
+
+
+def test_explainer_without_facts_is_grounded_in_benchmark():
+    analysis = {"topic_keyword": "부산상어 재유행", "reasons": ["익숙한 소재의 재유행"]}
+    facts = cn.ground_explainer_facts(cn.EXPLAINER, [], "부산상어", analysis, [{"title": "부산상어 챌린지"}])
+    assert facts and any("다루는 화제: 부산상어" in f["fact"] for f in facts)
+    assert any("부산상어 챌린지" in f["fact"] for f in facts)
+
+
+def test_grounding_leaves_existing_facts_and_other_natures_alone():
+    existing = [{"fact": "확인된 사실"}]
+    assert cn.ground_explainer_facts(cn.EXPLAINER, existing, "k", None, None) is existing
+    assert cn.ground_explainer_facts(cn.FACTUAL, [], "k", None, None) == []
+    assert cn.ground_explainer_facts(cn.STORY, [], "k", None, None) == []
+
+
+def test_explainer_directive_forbids_invented_specifics():
+    directive = cn.nature_directive(cn.EXPLAINER)
+    assert "만들지 마세요" in directive
+    assert "화제가 된 영상" in directive

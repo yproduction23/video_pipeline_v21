@@ -1484,6 +1484,9 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                     source_videos, content_nature=nature,
                 )
             verified_facts, suspect_facts = _split_verified_facts(all_facts)
+            verified_facts = _cn.ground_explainer_facts(
+                nature, verified_facts, keyword, benchmark_analysis, source_videos,
+            )
             fact_check_summary = _build_fact_check_summary(
                 all_facts,
                 suspect_count=len(suspect_facts),

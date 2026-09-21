@@ -47,6 +47,8 @@ _DIRECTIVES = {
         "이 영상은 화제 콘텐츠 해설입니다. 시장 데이터·투자 관점으로 끌고 가지 마세요. "
         "확인된 내용은 단정적으로, 확인이 덜 된 내용은 \"알려져 있습니다\"·\"영상마다 설명이 엇갈립니다\" 같은 "
         "완화 표현으로 쓰세요. 전문가마다 의견이 갈리면 \"A는 이렇게 보고 B는 다르게 봅니다\"로 관점을 밝히세요. "
+        "자료(<verified_facts>, <youtube_topic_context>, <benchmark_points>)에 없는 구체적 사건·인물·장소·수치는 만들지 마세요. "
+        "소재의 정체가 자료로 확인되지 않으면 사건을 단정하지 말고 \"화제가 된 영상\" 같은 일반적인 표현으로 풀어 가세요. "
         "시청자가 궁금해할 지점을 짚으며 이야기를 끌고 가세요.\n"
     ),
     STORY: (
@@ -98,7 +100,8 @@ def nature_directive(nature: str) -> str:
     return _DIRECTIVES.get(normalize_nature(nature), "")
 
 
-def story_seed_facts(keyword: str, benchmark_analysis: Optional[dict], source_videos: Optional[list]) -> list[dict]:
+def story_seed_facts(keyword: str, benchmark_analysis: Optional[dict], source_videos: Optional[list],
+                     topic_prefix: str = "이야기의 소재") -> list[dict]:
     """창작형은 팩트체크 대신 벤치마크 줄거리·구조를 소재로 삼는다. 항상 1건 이상 반환한다."""
     def seed(text: str, ref: str) -> dict:
         return {
@@ -106,7 +109,7 @@ def story_seed_facts(keyword: str, benchmark_analysis: Optional[dict], source_vi
             "confidence": 0.6, "cross_verified": False, "contradiction_detected": False,
         }
 
-    facts = [seed(f"이야기의 소재: {keyword}", "topic")]
+    facts = [seed(f"{topic_prefix}: {keyword}", "topic")]
     analysis = benchmark_analysis or {}
     topic = str(analysis.get("topic_keyword") or "").strip()
     if topic and topic != keyword:
@@ -133,3 +136,11 @@ def ensure_story_disclosure(sections: list[dict]) -> list[dict]:
     key = "content" if "content" in out[0] or "text" not in out[0] else "text"
     out[0][key] = f"{DISCLOSURE_SENTENCE} {str(out[0].get(key) or '').strip()}".strip()
     return out
+
+
+def ground_explainer_facts(nature: str, verified_facts: list, keyword: str,
+                           benchmark_analysis: Optional[dict], source_videos: Optional[list]) -> list:
+    """해설형에서 확인된 사실이 없으면 벤치마크 자료를 참고 근거로 삼아 소재를 추측하지 않게 한다."""
+    if normalize_nature(nature) != EXPLAINER or verified_facts:
+        return verified_facts
+    return story_seed_facts(keyword, benchmark_analysis, source_videos, topic_prefix="다루는 화제")
