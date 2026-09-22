@@ -922,7 +922,8 @@ def _section_sentences_within_hard_cap(text: str) -> bool:
     )
 
 
-def _synthesize_revision_instruction(deterministic: dict, keyword: str) -> str:
+def _synthesize_revision_instruction(deterministic: dict, keyword: str,
+                                     include_topic_boundaries: bool = True) -> str:
     """Claude가 비운 수정 지시를 결정론 실패 원인으로 합성한다."""
     parts: list[str] = []
     repetitions = deterministic.get("repetitions") or []
@@ -970,7 +971,7 @@ def _synthesize_revision_instruction(deterministic: dict, keyword: str) -> str:
             f"관련 없는 항목을 '{keyword}'의 인과관계로 연결하거나 제거하세요."
         )
     topic_boundaries = deterministic.get("topic_boundaries") or {}
-    if topic_boundaries and not topic_boundaries.get("passed", True):
+    if include_topic_boundaries and topic_boundaries and not topic_boundaries.get("passed", True):
         if not topic_boundaries.get("opening_topic_connected", True):
             parts.append(f"도입부를 선택 주체 '{keyword}'와 직접 연결하세요.")
         if not topic_boundaries.get("ending_topic_connected", True):
@@ -978,8 +979,10 @@ def _synthesize_revision_instruction(deterministic: dict, keyword: str) -> str:
     return " / ".join(parts)
 
 
-def _apply_flow_qa_contract(flow_qa: dict, script_text: str, keyword: str) -> dict:
+def _apply_flow_qa_contract(flow_qa: dict, script_text: str, keyword: str,
+                            content_nature: Optional[str] = None) -> dict:
     """Flow QA에 주제 범위 게이트와 결정론 수정 지시를 결합한다."""
+    nature = _cn.normalize_nature(content_nature)
     result = dict(flow_qa or {})
     deterministic = dict(result.get("deterministic") or {})
     topic_scope = _validate_topic_scope(script_text, keyword)
@@ -990,18 +993,24 @@ def _apply_flow_qa_contract(flow_qa: dict, script_text: str, keyword: str) -> di
     repetitions_passed = not bool(deterministic.get("repetitions") or [])
     rhythm_passed = bool((deterministic.get("rhetorical_rhythm") or {}).get("passed", True))
     spoken_pacing_passed = bool((deterministic.get("spoken_pacing") or {}).get("passed", True))
+    # 사실형은 도입·결말이 선택 주체를 직접 언급해야 한다(경제 영상 관행, _anchor_topic_boundaries가
+    # 이를 보장). 해설형·창작형은 훅으로 여는 것이 원칙이라(다른 곳에서 결정) 이 요구를 강제하면
+    # 정상적인 대본까지 매번 수동 검토로 보내게 된다.
+    topic_boundaries_ok = bool(topic_boundaries["passed"]) or nature != _cn.FACTUAL
     result["passed"] = (
         bool(result.get("passed"))
         and repetitions_passed
         and rhythm_passed
         and spoken_pacing_passed
         and topic_scope["passed"]
-        and topic_boundaries["passed"]
+        and topic_boundaries_ok
     )
 
     revision_instruction = str(result.get("revision_instruction") or "").strip()
     if not result["passed"]:
-        deterministic_instruction = _synthesize_revision_instruction(deterministic, keyword)
+        deterministic_instruction = _synthesize_revision_instruction(
+            deterministic, keyword, include_topic_boundaries=(nature == _cn.FACTUAL),
+        )
         if deterministic_instruction:
             revision_instruction = " / ".join(
                 item for item in (deterministic_instruction, revision_instruction) if item
@@ -1575,7 +1584,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             except Exception as exc:
                 logger.warning("대본 흐름 QA 실패: %s", exc)
                 flow_qa = {"passed": False, "method": "unavailable", "transition_issues": ["흐름 QA 호출 실패"]}
-            flow_qa = _apply_flow_qa_contract(flow_qa, full_script, keyword)
+            flow_qa = _apply_flow_qa_contract(flow_qa, full_script, keyword, content_nature=content_nature)
 
             # job 147(2026-08-04): flow_qa가 리듬 문제(같은 평서문 3문장 이상
             # 연속 등)를 잡아내도 아무도 고치지 않아, AUTO 모드가 조용히
@@ -1623,7 +1632,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                             script=full_script,
                             narrative_plan=narrative_plan,
                         )
-                        flow_qa = _apply_flow_qa_contract(flow_qa, full_script, keyword)
+                        flow_qa = _apply_flow_qa_contract(flow_qa, full_script, keyword, content_nature=content_nature)
                     except Exception as exc:
                         logger.warning("리듬 재검사 실패: %s", exc)
                         break

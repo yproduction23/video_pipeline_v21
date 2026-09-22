@@ -161,3 +161,33 @@ def test_topic_anchor_padding_only_for_factual():
         out, applied = sw._anchor_topic_boundaries(sections, "부산상어 재유행", nature)
         assert applied == []
         assert out == sections
+
+
+def test_apply_flow_qa_contract_does_not_require_topic_boundaries_for_non_factual():
+    flow_qa = {"passed": True, "deterministic": {"repetitions": [], "rhetorical_rhythm": {"passed": True},
+                                                  "spoken_pacing": {"passed": True}}}
+    script = (
+        "훅으로 여는 문장입니다.\n"
+        "부산상어 재유행이 시작된 배경을 살펴봅니다.\n"
+        "부산상어 재유행은 예상 밖의 경로로 퍼졌습니다.\n"
+        "그 이유를 하나씩 짚어보겠습니다.\n"
+        "다시 한번 생각해볼 지점입니다."
+    )
+
+    factual = sw._apply_flow_qa_contract(dict(flow_qa), script, "부산상어 재유행")
+    assert factual["passed"] is False  # 사실형은 여전히 도입부 연결을 요구한다
+    assert "도입부를" in factual["revision_instruction"]
+
+    for nature in ("EXPLAINER", "STORY"):
+        result = sw._apply_flow_qa_contract(dict(flow_qa), script, "부산상어 재유행", content_nature=nature)
+        assert result["passed"] is True
+        assert "도입부를" not in result["revision_instruction"]
+        assert result["deterministic"]["topic_boundaries"]["passed"] is False  # 값 자체는 그대로 기록
+
+
+def test_apply_flow_qa_contract_still_fails_non_factual_on_other_gates():
+    flow_qa = {"passed": True, "deterministic": {"repetitions": [{"sentence_indexes": [1, 2]}],
+                                                  "rhetorical_rhythm": {"passed": True},
+                                                  "spoken_pacing": {"passed": True}}}
+    result = sw._apply_flow_qa_contract(flow_qa, "문장입니다. 문장입니다.", "부산상어", content_nature="EXPLAINER")
+    assert result["passed"] is False

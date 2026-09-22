@@ -152,3 +152,29 @@ def test_disclosure_now_says_invented():
     assert "지어낸" in cn.DISCLOSURE_SENTENCE
     out = cn.ensure_story_disclosure([{"content": "옛날 옛적에 한 선비가 살았습니다."}])
     assert out[0]["content"].startswith(cn.DISCLOSURE_SENTENCE)
+
+
+def test_non_factual_script_prompt_replaces_finance_scene_block():
+    fact = SCRIPT_PROMPT + (
+        "\n\n🎯 씬 구성 규칙 (비주얼 프롬프트 작성의 핵심!):\n"
+        "- 대본의 경제 상황을 물리적인 공간이나 은유적인 상황으로 치환하여 표현하세요.\n"
+        "  * (예시) 신주 발행 / 통화량 증가 ➡️ 돈을 찍어내는 거대한 윤전기가 있는 공장\n"
+        "- 반드시 이 스타일 태그로 끝낼 것: original 2D Korean finance editorial comic, bold ink outlines, cel shading\n"
+        "  6. [화면 문구] : 숫자·단위는 <verified_facts>의 원문과 정확히 같아야 합니다. 무조건 []로 피하지 마세요.\n\n"
+        "절대 금지사항:\n- 확정적 미래 예측 금지\n"
+    )
+    for nature in (cn.EXPLAINER, cn.STORY):
+        out = cn.script_system_prompt(nature, fact)
+        assert "신주 발행" not in out
+        assert "돈을 찍어내는 거대한 윤전기" not in out
+        assert "verified_facts>의 원문과 정확히 같아야" not in out
+        assert "무조건 []로 피하지 마세요" not in out
+        assert "original 2D Korean finance editorial comic" not in out
+        assert "절대 금지사항:\n- 확정적 미래 예측 금지" in out  # 뒤쪽 규칙은 보존
+        assert "[화면 문구]" in out and "[대사]" in out and "[비주얼 프롬프트 (영어)]" in out
+
+
+def test_non_factual_script_prompt_survives_missing_markers():
+    # SCRIPT_SYSTEM_PROMPT에 씬 구성 규칙 마커가 없어도(향후 문구 변경 등) 예외 없이 동작한다.
+    out = cn.script_system_prompt(cn.EXPLAINER, "간단한 프롬프트")
+    assert "간단한 프롬프트" in out

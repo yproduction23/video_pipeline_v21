@@ -69,6 +69,57 @@ _DIRECTIVES = {
 _LABELS = {EXPLAINER: "화제 콘텐츠 해설", STORY: "이야기"}
 _FINANCE_RULE_MARKERS = ("수치를 자연스럽게 구어체로", "투자 조언이 아닌")
 
+# SCRIPT_SYSTEM_PROMPT(script_worker.py)의 씬 구성 규칙은 금융 시각적 은유(신주 발행,
+# 금리 동결 등)와 "[화면 문구]는 <verified_facts> 수치와 정확히 같아야 한다"는 규칙을
+# 전제한다. 비사실형은 이런 수치가 없어 이 규칙을 지키려다 JSON이 깨져 장면이 통째로
+# 거부되므로(screen_text_invalid_json_array), 이 구간만 소재 무관 규칙으로 통째로 바꾼다.
+_SCENE_BLOCK_START = "🎯 씬 구성 규칙"
+_SCENE_BLOCK_END = "절대 금지사항:"
+
+_NON_FINANCE_SCENE_BLOCK = """🎯 씬 구성 규칙 (비주얼 프롬프트 작성의 핵심!):
+- 대본은 반드시 ## 씬 [번호]: [제목] 형식의 헤더로 구분해주세요.
+- 이 씬이 다루는 상황을 구체적인 장소·사물·행동으로 그려주세요. 인포그래픽·차트·자막 패널 배경은 금지합니다.
+- [비주얼 프롬프트 (영어)]에는 캐릭터 묘사를 절대 포함하지 마세요(별도의 캐릭터가 합성됩니다). 배경과 상황만 묘사하세요.
+- 모든 장면은 "original 2D Korean editorial illustration, bold ink outlines, cel shading"로 통일하세요. 3D 렌더와 실사 표현을 섞지 마세요.
+- 씬마다 서로 다른 배경을 만들어야 한다. 이전 씬과 동일한 배경 묘사 반복 금지.
+- 각 헤더 아래에는 다음 여섯 개의 태그를 사용해 내용을 채우세요:
+  1. [대사] : 실제 한국어로 낭독할 대사 텍스트
+  2. [비주얼 설명 (한국어)] : 화면에 보여줄 구체적인 상황에 대한 설명 (한국어)
+  3. [비주얼 프롬프트 (영어)] : 이 씬의 대사 내용을 구체적 장면으로 옮긴 영어 프롬프트. 캐릭터 묘사 절대 금지, 배경과 상황만. 50단어 이내. 반드시 "original 2D Korean editorial illustration, bold ink outlines, cel shading"로 끝낼 것.
+  4. [감정] : 상황에 맞는 캐릭터 표정/포즈 (happy / worried / surprised / pointing / thinking / explaining / neutral 중 하나)
+  5. [모션] : 인트로 구간(처음 약 13개 씬)인 경우에만 chart_shock, pointing_explain, thinking_desk, walking_intro, celebration 중 하나를 선택. 본문 씬은 비워두거나 제외합니다.
+  6. [화면 문구] : 소품·간판 등에 꼭 필요한 문구가 있을 때만 JSON 문자열 배열로 0~2개 출력하세요. 필요 없으면 반드시 []를 출력하세요. 무리해서 채우지 마세요.
+     - 출력한다면 그 문자열은 반드시 바로 그 씬의 [대사]에 글자 그대로 존재해야 합니다. 없는 문구를 만들지 마세요.
+
+화면 텍스트 안전 규칙:
+- [말풍선], [오버레이], UI 카드, 자막용 문구를 절대 출력하지 마세요. 대사는 TTS·ASS 자막의 유일한 원본입니다.
+- 이미지 안의 문자는 현재 씬의 검증된 [화면 문구]만 허용합니다.
+
+예시:
+## 씬 1: 낯선 사람의 경고
+
+[대사]
+문을 두드리는 소리에 심장이 내려앉았습니다.
+
+[비주얼 설명 (한국어)]
+어두운 골목 끝, 낡은 문 앞에 그림자 하나가 서 있는 상황.
+
+[비주얼 프롬프트 (영어)]
+a dim alley at night, a single shadow standing before an old wooden door, dramatic editorial composition, original 2D Korean editorial illustration, bold ink outlines, cel shading
+
+[감정]
+surprised
+
+[모션]
+chart_shock
+
+[화면 문구]
+[]
+
+"""
+
+
+
 
 def normalize_nature(value: Any) -> str:
     text = str(value or "").strip().upper()
@@ -95,11 +146,19 @@ def script_system_prompt(nature: str, factual_prompt: str) -> str:
     nature = normalize_nature(nature)
     if nature == FACTUAL:
         return factual_prompt
+
+    if _SCENE_BLOCK_START in factual_prompt and _SCENE_BLOCK_END in factual_prompt:
+        head, _, tail = factual_prompt.partition(_SCENE_BLOCK_START)
+        _, _, tail = tail.partition(_SCENE_BLOCK_END)
+        factual_prompt = f"{head}{_NON_FINANCE_SCENE_BLOCK}{_SCENE_BLOCK_END}{tail}"
+
     lines = [
         line for line in factual_prompt.splitlines()
         if not any(marker in line for marker in _FINANCE_RULE_MARKERS)
     ]
-    text = "\n".join(lines).replace("한국 금융 콘텐츠를 위한", f"{_LABELS[nature]} 영상을 위한")
+    text = "\n".join(lines)
+    text = text.replace("한국 금융 콘텐츠를 위한", f"{_LABELS[nature]} 영상을 위한")
+    text = text.replace("original 2D Korean finance editorial comic", "original 2D Korean editorial illustration")
     return f"{text}\n\n{_CURIOSITY}"
 
 
