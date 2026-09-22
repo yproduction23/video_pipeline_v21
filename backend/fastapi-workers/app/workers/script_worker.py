@@ -1683,6 +1683,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             # 핵심 용어와 수치만 장면 로컬 허용 목록으로 만든다. 수치는 이미지
             # 모델이 아니라 후속 결정론 표면 렌더러가 사용한다.
             sections = attach_scene_screen_texts(sections)
+            sections = _revalidate_paced_scenes(sections)
             sections = direct_scenes(
                 enrich_scene_plans(sections),
                 llm_call=lambda system, messages, max_tokens: self._call_llm_with_fallback(
@@ -2933,6 +2934,40 @@ def _validate_screen_text_values(
         "reasons": list(dict.fromkeys(reasons)),
         "sources_checked": len([source for source in sources if source]),
     }
+
+
+def _revalidate_paced_scenes(sections: list[dict]) -> list[dict]:
+    """pace_sections_for_runtime 이후 화면 문구·말풍선 판정을 병합된 화면 기준으로 다시 계산한다.
+
+    _parse_sections는 LLM이 낸 원래 씬 단위로 screen_text_validation·scene_rejected를 매긴다.
+    이후 pace_sections_for_runtime이 한 씬을 여러 화면으로 쪼개거나 두 씬의 경계를 하나로
+    합치면, 그 판정은 더 이상 실제 화면의 문구·대사와 일치하지 않는다(원래 씬 하나의 거부가
+    쪼개진 화면 전부에 복제되는 사례 포함). attach_scene_screen_texts가 화면 문구를 최종
+    확정한 뒤 이 함수를 불러, 그 시점의 실제 문구·대사로 판정을 다시 맞춘다.
+    """
+    revalidated = []
+    for scene in sections:
+        scene = dict(scene)
+        content = str(scene.get("content") or scene.get("text") or "")
+        screen_texts = [str(v).strip() for v in (scene.get("screen_texts") or []) if str(v).strip()]
+        scene["screen_text_validation"] = _validate_screen_text_values(screen_texts, content, None)
+        bubble_text = str(scene.get("bubble_text") or "").strip()
+        if bubble_text:
+            bubble_result = validate_verbatim(bubble_text, None)
+            scene["bubble_validation"] = {
+                "passed": bubble_result.passed,
+                "reasons": bubble_result.reasons,
+                "matched_sources": bubble_result.matched_sources,
+                "numeric_tokens": bubble_result.numeric_tokens,
+            }
+        else:
+            scene["bubble_validation"] = {"passed": True, "reasons": [], "matched_sources": [], "numeric_tokens": []}
+        scene["scene_rejected"] = bool(
+            (bubble_text and not scene["bubble_validation"]["passed"])
+            or not scene["screen_text_validation"]["passed"]
+        )
+        revalidated.append(scene)
+    return revalidated
 
 
 def _parse_sections(full_text: str, evidence: dict | None = None) -> list:

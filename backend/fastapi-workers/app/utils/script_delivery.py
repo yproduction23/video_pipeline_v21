@@ -154,6 +154,27 @@ def pace_sections_for_runtime(
         first["content"] = merged
         first["text"] = merged
         first["text_for_tts"] = merged
+        # bucket[0]은 흔히 원래 씬 하나가 여러 조각으로 쪼개진 첫 조각이거나, 두 씬의
+        # 경계에 걸친 조각이다. bucket[0]의 screen_text_validation·scene_rejected를
+        # 그대로 물려주면, 그 씬 하나에 있던 판정이 이 씬에서 갈라져 나온 모든 화면에
+        # 복제된다(예: 화면 문구 JSON이 깨진 씬 하나가 재분할 후 8~10개 장면 전부를
+        # "거부"로 만들어 수동 검토를 강제한 사례). 여기서는 조각들의 screen_texts만
+        # 합치고, 실제 판정(merged 문구가 이 화면 한정 텍스트에 그대로 있는지)은
+        # script_worker.py가 재분할 이후 다시 계산한다.
+        merged_screen_texts: list[str] = []
+        for item in bucket:
+            for value in item.get("screen_texts") or []:
+                text_value = str(value or "").strip()
+                if text_value and text_value not in merged_screen_texts:
+                    merged_screen_texts.append(text_value)
+        first["screen_texts"] = merged_screen_texts[:3]
+        first["bubble_text"] = next(
+            (str(item.get("bubble_text") or "").strip() for item in bucket if str(item.get("bubble_text") or "").strip()),
+            "",
+        )
+        first["screen_text_validation"] = None  # script_worker.py가 재계산할 때까지의 표시값
+        first["bubble_validation"] = None
+        first["scene_rejected"] = False
         planned_caption_chunks = split_script_into_caption_chunks(
             merged,
             max_chars=subtitle_max_chars,
