@@ -11,9 +11,9 @@ def test_hot_keywords_success(monkeypatch):
     monkeypatch.setattr(YouTubeDiscovery, "__init__", lambda self: None)
     monkeypatch.setattr(YouTubeDiscovery, "hot_keywords", lambda self, category, window: {"window": window, "category": category, "keywords": [], "videos": [], "categories": []})
 
-    response = client.get("/workers/discovery/hot-keywords", params={"category": "GAMING", "window": "7d"})
+    response = client.get("/workers/discovery/hot-keywords", params={"category": "NEWS", "window": "7d"})
 
-    assert response.status_code == 200 and response.json()["category"] == "GAMING"
+    assert response.status_code == 200 and response.json()["category"] == "NEWS"
 
 
 def test_hot_keywords_error_mapping(monkeypatch):

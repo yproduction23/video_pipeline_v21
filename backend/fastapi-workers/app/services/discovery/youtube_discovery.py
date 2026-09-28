@@ -21,15 +21,13 @@ _VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
 _DURATION = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
 
 # 2026-09-21 한국(KR) 차트 실측으로 확인된 카테고리만 둔다. 교육(27)은 차트를 제공하지 않는다.
+# 2026-09-28 사용자 지시: 음악(뮤직비디오)·스포츠(라이브 경기)·게임(라이브 경기 위주)·
+# 영화·애니(클립)·반려동물·코미디는 나레이션으로 다시 풀어 말할 이야기·인사이트가 없는
+# 콘텐츠라 벤치마크 대상에서 제외한다. 시사·화제성 소재를 설명하는 콘텐츠(뉴스, 사람·블로그,
+# 엔터테인먼트, 노하우, 과학기술)만 남긴다.
 CATEGORIES = {
     "ALL": {"id": None, "label": "전체 인기"},
-    "FILM": {"id": "1", "label": "영화·애니"},
-    "MUSIC": {"id": "10", "label": "음악"},
-    "PETS": {"id": "15", "label": "반려동물"},
-    "SPORTS": {"id": "17", "label": "스포츠"},
-    "GAMING": {"id": "20", "label": "게임"},
     "PEOPLE": {"id": "22", "label": "사람·블로그"},
-    "COMEDY": {"id": "23", "label": "코미디"},
     "ENTERTAINMENT": {"id": "24", "label": "엔터테인먼트"},
     "NEWS": {"id": "25", "label": "뉴스·정치"},
     "HOWTO": {"id": "26", "label": "노하우·스타일"},
@@ -154,11 +152,24 @@ class YouTubeDiscovery:
             row["hoursSincePublish"] = round(_hours_since(row["publishedAt"]), 1)
         return rows
 
+    def _chart_rows_all(self, window: str) -> list[dict]:
+        """"전체 인기"는 YouTube 원본 급상승(카테고리 무필터)이 아니라, 우리가 남긴
+        벤치마크 대상 카테고리들만 모아 만든다. 여러 카테고리 차트에 같은 영상이
+        겹치면(드묾) videoId로 한 번만 남긴다."""
+        merged: dict[str, dict] = {}
+        for key, category in CATEGORIES.items():
+            if key == "ALL":
+                continue
+            for row in self._chart_rows(key, category["id"]):
+                merged.setdefault(row["videoId"], row)
+        return list(merged.values())
+
     def hot_keywords(self, category_key: str = "ALL", window: str = "48h") -> dict:
         category = CATEGORIES.get(category_key)
         if category is None:
             raise DiscoveryError("UNSUPPORTED_CATEGORY", f"지원하지 않는 카테고리입니다: {category_key}")
-        result = aggregate_hot_keywords(self._chart_rows(category_key, category["id"]), window)
+        rows = self._chart_rows_all(window) if category_key == "ALL" else self._chart_rows(category_key, category["id"])
+        result = aggregate_hot_keywords(rows, window)
         result["category"] = category_key
         result["categories"] = [{"key": key, "label": value["label"]} for key, value in CATEGORIES.items()]
         return result

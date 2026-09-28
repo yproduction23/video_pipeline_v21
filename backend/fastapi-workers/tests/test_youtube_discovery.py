@@ -56,14 +56,35 @@ def chart_handler(url, params):
     raise AssertionError(url)
 
 
-def test_all_category_omits_video_category_id(monkeypatch):
+def test_all_category_aggregates_kept_categories_not_raw_youtube_trending(monkeypatch):
+    # 2026-09-28: "전체 인기"는 YouTube 원본 급상승(음악·스포츠·게임 등 포함)이 아니라
+    # 우리가 벤치마크 대상으로 남긴 카테고리들만 모은 결과여야 한다.
     calls = install(monkeypatch, chart_handler)
 
-    YouTubeDiscovery().hot_keywords("ALL", "48h")
+    result = YouTubeDiscovery().hot_keywords("ALL", "48h")
 
-    chart_params = next(p for u, p in calls if u.endswith("/videos"))
-    assert "videoCategoryId" not in chart_params
-    assert chart_params["chart"] == "mostPopular" and chart_params["regionCode"] == "KR"
+    video_calls = [p for u, p in calls if u.endswith("/videos")]
+    assert len(video_calls) == len(yd.CATEGORIES) - 1  # ALL 자신을 뺀 나머지 카테고리 전부 조회
+    assert all(p.get("videoCategoryId") for p in video_calls)  # 무필터 호출은 하나도 없음
+    assert {p["videoCategoryId"] for p in video_calls} == {
+        category["id"] for key, category in yd.CATEGORIES.items() if key != "ALL"
+    }
+    # 여러 카테고리 차트에 같은 영상이 겹쳐도 한 번만 남는다.
+    assert [v["videoId"] for v in result["videos"]] == ["v1"]
+
+
+def test_excluded_categories_are_not_offered(monkeypatch):
+    install(monkeypatch, chart_handler)
+
+    result = YouTubeDiscovery().hot_keywords("ALL", "48h")
+
+    offered_keys = {item["key"] for item in result["categories"]}
+    assert offered_keys == {"ALL", "PEOPLE", "ENTERTAINMENT", "NEWS", "HOWTO", "TECH"}
+    for removed in ("MUSIC", "SPORTS", "GAMING", "FILM", "PETS", "COMEDY"):
+        assert removed not in offered_keys
+        with pytest.raises(DiscoveryError) as error:
+            YouTubeDiscovery().hot_keywords(removed, "48h")
+        assert error.value.code == "UNSUPPORTED_CATEGORY"
 
 
 def test_specific_category_sends_id_and_excludes_live_videos(monkeypatch):
