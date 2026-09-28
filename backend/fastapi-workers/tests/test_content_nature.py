@@ -178,3 +178,16 @@ def test_non_factual_script_prompt_survives_missing_markers():
     # SCRIPT_SYSTEM_PROMPT에 씬 구성 규칙 마커가 없어도(향후 문구 변경 등) 예외 없이 동작한다.
     out = cn.script_system_prompt(cn.EXPLAINER, "간단한 프롬프트")
     assert "간단한 프롬프트" in out
+
+
+def test_explainer_forbids_reciting_full_broadcast_rundown():
+    directive = cn.nature_directive(cn.EXPLAINER)
+    assert "코너 순서" in directive and "출연진 전원" in directive
+    assert "방송사명" in directive or "방송사" in directive
+    assert "한두 장면" in directive
+
+
+def test_explainer_fact_check_does_not_extract_full_program_lineup():
+    prompt = cn.fact_check_prompt(cn.EXPLAINER, "x")
+    assert "코너" in prompt and "출연진" in prompt
+    assert "한두 장면" in prompt
