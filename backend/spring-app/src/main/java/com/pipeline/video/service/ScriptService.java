@@ -56,10 +56,27 @@ public class ScriptService {
     private final GateService gateService;
     private final AutonomyService autonomyService;
     private final CostService costService;
+    private final JobGenerationLock generationLock;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    private static final String STAGE = "SCRIPT";
+
+    /** 같은 작업에서 스크립트 생성이 이미 진행 중이면 중복 실행을 막는다.
+     *  재시도(Temporal 워크플로 경로)를 포함해 이 메서드로 들어오는 모든
+     *  경로가 같은 잠금을 공유한다. */
     @Transactional
     public ScriptGenerateResponse generate(Long jobId, String username) {
+        if (!generationLock.tryAcquire(jobId, STAGE)) {
+            throw new IllegalStateException("스크립트 생성이 이미 진행 중입니다. 완료될 때까지 기다려 주세요.");
+        }
+        try {
+            return generateInternal(jobId, username);
+        } finally {
+            generationLock.release(jobId, STAGE);
+        }
+    }
+
+    private ScriptGenerateResponse generateInternal(Long jobId, String username) {
         VideoJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
 

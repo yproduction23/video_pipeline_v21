@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
 class ScriptEvidencePreservationTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final ScriptService scriptService = new ScriptService(null, null, null, null, null, null);
+    private final ScriptService scriptService = new ScriptService(null, null, null, null, null, null, new JobGenerationLock());
 
     @Test
     void initialScriptAsset_containsNewsCrossCheckStatus() throws Exception {
@@ -39,7 +39,7 @@ class ScriptEvidencePreservationTest {
         CostService costService = mock(CostService.class);
         ScriptService service = new ScriptService(
                 jobRepository, assetRepository, fastApiClient,
-                gateService, autonomyService, costService);
+                gateService, autonomyService, costService, new JobGenerationLock());
         VideoJob job = VideoJob.builder()
                 .id(1L)
                 .title("테스트")

@@ -51,7 +51,8 @@ class ScriptAutoModeGateTest {
                 fastApiClient,
                 gateService,
                 autonomyService,
-                costService
+                costService,
+                new JobGenerationLock()
         ));
         job = VideoJob.builder()
                 .id(1L)

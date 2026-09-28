@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ScriptServiceEvidenceTest {
 
-    private final ScriptService service = new ScriptService(null, null, null, null, null, null);
+    private final ScriptService service = new ScriptService(null, null, null, null, null, null, new JobGenerationLock());
 
     @Test
     void extractCandidateEvidence_matchesJobKeyword() {
