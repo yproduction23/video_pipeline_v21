@@ -109,6 +109,15 @@ export default function JobNew() {
     : MACRO_SIGNAL_TERMS.filter(term => form.title.toLowerCase().includes(term.toLowerCase()))
   const showMacroCategoryBanner = detectedMacroTerms.length > 0
 
+  // 벤치마크로 시작한 작업은 STEP 01(카테고리 선택)을 건너뛰어 category가 기본값
+  // 'KOSPI'로 고정된 채 저장됐다("유시민 발언 논란" 같은 시사 소재도 코스피로 표시됨).
+  // 콘텐츠 성격이 사실형이 아니면 주식 카테고리가 의미가 없으므로 '직접 입력'으로 맞춘다.
+  useEffect(() => {
+    if (!benchmark) return
+    const expected = effectiveNature === 'FACTUAL' ? 'KOSPI' : 'CUSTOM'
+    setForm(current => (current.category === expected ? current : { ...current, category: expected }))
+  }, [benchmark, effectiveNature])
+
   useEffect(() => {
     const topic = searchParams.get('topic')
     const planId = searchParams.get('planId')
