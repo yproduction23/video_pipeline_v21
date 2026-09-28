@@ -107,7 +107,7 @@ def test_generate_skips_market_data_and_fact_check_for_story(monkeypatch):
         raise AssertionError("STORY는 팩트체크 호출 금지")
 
     monkeypatch.setattr(worker, "_multi_round_fact_check", stop_fact_check)
-    monkeypatch.setattr(sw, "_collect_keyword_news", lambda terms: [])
+    monkeypatch.setattr(sw, "_collect_keyword_news", lambda terms, content_nature=None: [])
 
     class Halt(Exception):
         pass
@@ -141,7 +141,7 @@ def test_generate_collects_market_data_for_factual(monkeypatch):
     def halt(*args, **kwargs):
         raise Halt()
 
-    monkeypatch.setattr(sw, "_collect_keyword_news", lambda terms: [])
+    monkeypatch.setattr(sw, "_collect_keyword_news", lambda terms, content_nature=None: [])
     monkeypatch.setattr(worker, "_multi_round_fact_check", halt)
     try:
         worker.generate("코스피 전망", "KOREAN_STOCKS", 5)

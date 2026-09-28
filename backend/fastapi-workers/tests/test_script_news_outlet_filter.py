@@ -103,3 +103,36 @@ def test_non_finance_articles_excluded_from_script_cross_check(monkeypatch):
     assert len(articles) == 1
     assert articles[0]["outlet"] == "한국경제"
     assert articles[0]["matched_keyword"] == "반도체"
+
+
+def test_non_factual_news_collection_broadens_beyond_finance_outlets(monkeypatch):
+    # 2026-09-28: 해설형·창작형은 정치·시사·화제 소재를 다루는데, 뉴스 검색이
+    # 항상 금융 언론사 23곳으로만 좁혀져 있어서 관련 기사가 거의 항상 0건이었다.
+    # 그 결과 팩트체크가 벤치마크 영상 문맥 몇 줄만 가지고 진행돼, 목표 분량을
+    # 채울 근거 자체가 부족했다(job 10: DMZ 지뢰·지지율 소재가 매 시도 분량 미달).
+    extractor = _RecordingNewsExtractor()
+    monkeypatch.setattr(script_worker, "NewsKeywordExtractor", lambda: extractor)
+
+    for nature in ("EXPLAINER", "STORY"):
+        extractor.calls.clear()
+        script_worker._collect_keyword_news(["DMZ 지뢰"], content_nature=nature)
+        assert extractor.calls[0]["outlet_filter"] is False
+
+
+def test_factual_news_collection_keeps_outlet_filter(monkeypatch):
+    extractor = _RecordingNewsExtractor()
+    monkeypatch.setattr(script_worker, "NewsKeywordExtractor", lambda: extractor)
+
+    script_worker._collect_keyword_news(["반도체"], content_nature="FACTUAL")
+
+    assert extractor.calls[0]["outlet_filter"] is True
+
+
+def test_non_factual_zero_news_warning_does_not_claim_finance_outlet_filter(monkeypatch, caplog):
+    extractor = _RecordingNewsExtractor()
+    monkeypatch.setattr(script_worker, "NewsKeywordExtractor", lambda: extractor)
+
+    with caplog.at_level(logging.WARNING):
+        script_worker._collect_keyword_news(["DMZ 지뢰"], content_nature="EXPLAINER")
+
+    assert "금융 언론사" not in caplog.text

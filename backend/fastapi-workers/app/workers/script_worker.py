@@ -196,10 +196,20 @@ def _is_market_level_forecast(terms: list[str]) -> bool:
     return bool(tokens) and all(token in broad_tokens for token in tokens)
 
 
-def _collect_keyword_news(terms: list[str]) -> list[dict]:
+def _collect_keyword_news(terms: list[str], content_nature: Optional[str] = None) -> list[dict]:
+    """뉴스 검색 범위는 콘텐츠 성격에 따라 다르다.
+
+    사실형(경제)은 금융 언론사 23곳으로만 좁힌다(기존 동작, 숫자·수치의 신뢰
+    출처를 보장하기 위함). 해설형·창작형은 정치·시사·화제 소재를 다루는데
+    이 필터를 그대로 쓰면 관련 기사가 거의 항상 0건이 되어(job 10: DMZ
+    지뢰·지지율 소재), 팩트체크가 벤치마크 문맥 몇 줄만 가지고 진행되고
+    목표 분량을 채울 근거 자체가 부족해진다. 비사실형은 필터를 풀어
+    네이버·구글 뉴스 전체에서 검색한다.
+    """
     extractor = NewsKeywordExtractor()
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
+    outlet_filter = _cn.normalize_nature(content_nature) == _cn.FACTUAL
     for term in _topic_terms_for_evidence(terms):
         # A script needs topical facts, not only the general market snapshot.
         # Seven days is long enough for a researched long-form topic; the
@@ -208,7 +218,7 @@ def _collect_keyword_news(terms: list[str]) -> list[dict]:
             term,
             max_age_hours=24 * 7,
             limit=6,
-            outlet_filter=True,
+            outlet_filter=outlet_filter,
         ):
             identity = (str(article.get("title", "")), str(article.get("url", "")))
             if identity in seen:
@@ -217,8 +227,8 @@ def _collect_keyword_news(terms: list[str]) -> list[dict]:
             rows.append({**article, "matched_keyword": term})
     if not rows:
         logger.warning(
-            "스크립트 크로스체크: 23개 금융 언론사 기사 0건 "
-            "(keyword=%s, hours=168). 뉴스 검증 없이 진행합니다.",
+            "스크립트 크로스체크: %s 0건 (keyword=%s, hours=168). 뉴스 검증 없이 진행합니다.",
+            "23개 금융 언론사 기사" if outlet_filter else "관련 기사",
             ", ".join(_topic_terms_for_evidence(terms)),
         )
     return rows[:12]
@@ -1465,7 +1475,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 market_data = {}
 
         try:
-            keyword_news = _collect_keyword_news(selected_terms)
+            keyword_news = _collect_keyword_news(selected_terms, content_nature=nature)
             collected_news_count = len(keyword_news)
             candidate_context = _candidate_evidence_context(keyword_news, candidate_evidence)
             keyword_news = candidate_context["merged_news"]

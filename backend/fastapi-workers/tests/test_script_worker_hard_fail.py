@@ -26,7 +26,7 @@ def test_generate_raises_on_anthropic_exception(monkeypatch):
     monkeypatch.setattr(
         script_worker,
         "_collect_keyword_news",
-        lambda _terms: [{"title": "삼성전자 테스트 기사", "url": "https://example.test/news"}],
+        lambda _terms, content_nature=None: [{"title": "삼성전자 테스트 기사", "url": "https://example.test/news"}],
     )
     worker = ScriptWorker()
 
