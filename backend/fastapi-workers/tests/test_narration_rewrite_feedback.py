@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 
-from app.workers.script_worker import ScriptWorker, _structured_script_from_dialogue_lines
+from app.workers.script_worker import ScriptWorker, _dialogue_char_count, _structured_script_from_dialogue_lines
 
 
 def _worker() -> ScriptWorker:
@@ -72,6 +72,38 @@ def test_rewrite_reports_scene_count_when_too_few_lines_returned(monkeypatch, ca
     warnings = [record.message for record in caplog.records if record.levelname == "WARNING"]
     assert any("scene-count contract" in message for message in warnings)
     assert not any("total length contract" in message for message in warnings)
+
+
+def test_rewrite_returns_closest_attempt_when_all_five_stay_below_target(monkeypatch, caplog):
+    """2026-09-28 재현: 5번 재시도 모두 총 분량 미달로 실패하면, 이전 코드는
+    원문(script_body)을 그대로 되돌렸다. 원문은 애초에 이 재편집을 부른
+    원인이므로, 시도 중 목표에 가장 가까웠던 결과보다 항상 더 나쁘다.
+    이 상태로 상류 시간 계약 검사(actual=1696, target=1800류)가 다시 실패해
+    영상 생성 전체가 크래시했다. 가장 가까웠던 시도를 반환해야 한다."""
+    worker = _worker()
+    very_short = [f"짧음{i:02d}" for i in range(1, 21)]
+    closer = [f"오늘은 조금 더 긴 문장 {i:02d}" for i in range(1, 21)]
+    attempts = [very_short, very_short, closer, very_short, very_short]
+    calls: list[str] = []
+
+    def fake_llm(system, messages, max_tokens):
+        calls.append(messages[0]["content"])
+        return json.dumps(attempts[len(calls) - 1], ensure_ascii=False)
+
+    monkeypatch.setattr(worker, "_call_llm_with_fallback", fake_llm)
+
+    expected_best = _dialogue_char_count(_structured_script_from_dialogue_lines(closer))
+    worst = _dialogue_char_count(_structured_script_from_dialogue_lines(very_short))
+    assert worst < expected_best < 342  # 두 후보 다 목표(360, 허용 하한 342) 미달, closer가 더 가깝다
+
+    original = _source_script_body()
+    with caplog.at_level("WARNING"):
+        result = worker._rewrite_dialogue_to_target(original, target_chars=360)
+
+    assert len(calls) == 5  # 5회 모두 소진하고 포기
+    assert result != original
+    assert _dialogue_char_count(result) == expected_best
+    assert any("가장 가까웠던" in record.message for record in caplog.records)
 
 
 def test_rewrite_accepts_short_caption_ending_that_stays_in_same_image(monkeypatch, caplog):

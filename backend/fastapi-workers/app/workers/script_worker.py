@@ -2169,6 +2169,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             source_narration = _narration_from_sections(source_sections)
 
             correction = ""
+            best_candidate: str | None = None
+            best_gap: int | None = None
             for rewrite_attempt in range(_NARRATION_REWRITE_ATTEMPTS):
                 rewritten = self._call_llm_with_fallback(
                     "You are a Korean financial script editor.",
@@ -2232,6 +2234,12 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                         structured_chars, target_chars,
                         minimum_chars, maximum_chars,
                     )
+                    gap = (
+                        minimum_chars - structured_chars if structured_chars < minimum_chars
+                        else structured_chars - maximum_chars
+                    )
+                    if best_gap is None or gap < best_gap:
+                        best_gap, best_candidate = gap, structured
                     if structured_chars < minimum_chars:
                         minimum_lines = max(
                             target_scene_count,
@@ -2277,6 +2285,17 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                     )
         except Exception as exc:
             logger.warning("Narration length rewrite unavailable: %s", exc)
+            return script_body
+        # 5회 모두 총분량 계약에 정확히 들어오지 못했다. 원문(script_body)은
+        # 애초에 이 재편집을 부른 원인이라 시도 중 가장 가까웠던 결과보다 항상
+        # 더 나쁘다 — 그대로 되돌리면 상류 시간 계약 검사가 다시 실패해
+        # 대본 생성 전체가 크래시한다(실제 API 비용을 들인 5회 시도가 버려짐).
+        if best_candidate is not None:
+            logger.warning(
+                "총 %s회 재편집 모두 정확한 분량에 미달했지만, 그중 가장 가까웠던 결과(%s자 차이)를 사용함",
+                _NARRATION_REWRITE_ATTEMPTS, best_gap,
+            )
+            return best_candidate
         return script_body
 
     def _mock_script(self, keyword, category_label, target_minutes):
