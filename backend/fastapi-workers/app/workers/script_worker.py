@@ -108,6 +108,46 @@ def _get_keyword_coverage_kiwi():
     return _KEYWORD_COVERAGE_KIWI
 
 
+_NEWS_PHRASE_NOUN_TAGS = ("NNG", "NNP", "NNB", "SL", "SN", "SH", "XSN")
+
+
+def _news_search_phrases(term: str) -> list[str]:
+    """긴 복합 키워드를 뉴스 검색에 걸리는 자연스러운 명사구로 쪼갠다.
+
+    job 10 재현: 벤치마크 분석이 여러 이슈를 하나로 묶어 만든 키워드
+    ("DMZ 지뢰 폭발 북한 연루 의혹과 이재명 지지율 하락")를 통째로 검색하면
+    실제 기사 제목이 이렇게 긴 문장과 일치할 리 없어 0건이 나온다. 조사
+    ("과/와/은/는" 등)로 갈라지는 지점을 경계로 명사 덩어리만 남기면
+    ("DMZ 지뢰 폭발 북한 연루 의혹", "이재명 지지율 하락") 실제 기사를 찾는다.
+    분석기가 없거나 실패하면 빈 목록을 반환해 원문 검색만 쓰던 기존 동작으로
+    되돌아간다.
+    """
+    kiwi = _get_keyword_coverage_kiwi()
+    if not kiwi or not term:
+        return []
+    try:
+        result = kiwi.analyze(term)
+        morphs = result[0][0] if result else []
+    except Exception:
+        return []
+
+    phrases: list[str] = []
+    current = ""
+    for morph in morphs:
+        if morph.tag in _NEWS_PHRASE_NOUN_TAGS:
+            if morph.tag == "XSN" and current:
+                current += morph.form  # 접미사(지지+율)는 붙여 쓴다
+            else:
+                current = f"{current} {morph.form}".strip()
+        else:
+            if len(current) >= 2:
+                phrases.append(current)
+            current = ""
+    if len(current) >= 2:
+        phrases.append(current)
+    return [phrase for phrase in dict.fromkeys(phrases) if phrase != term]
+
+
 def _token_is_pure_function_word(token: str) -> bool:
     """명사 형태소가 하나도 없는 순수 용언·부사 토큰만 걸러낸다.
 
@@ -214,12 +254,23 @@ def _collect_keyword_news(terms: list[str], content_nature: Optional[str] = None
         # A script needs topical facts, not only the general market snapshot.
         # Seven days is long enough for a researched long-form topic; the
         # manual keyword UI keeps its stricter 1–2 hour freshness window.
-        for article in extractor.search_recent_news(
+        articles = list(extractor.search_recent_news(
             term,
             max_age_hours=24 * 7,
             limit=6,
             outlet_filter=outlet_filter,
-        ):
+        ))
+        if not articles:
+            # 복합 키워드 전체는 기사 제목과 매칭되지 않는 경우가 많다.
+            # 조사 경계로 쪼갠 명사구로 다시 검색한다(job 10 재현).
+            for phrase in _news_search_phrases(term):
+                articles.extend(extractor.search_recent_news(
+                    phrase,
+                    max_age_hours=24 * 7,
+                    limit=6,
+                    outlet_filter=outlet_filter,
+                ))
+        for article in articles:
             identity = (str(article.get("title", "")), str(article.get("url", "")))
             if identity in seen:
                 continue

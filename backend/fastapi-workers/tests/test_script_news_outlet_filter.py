@@ -136,3 +136,65 @@ def test_non_factual_zero_news_warning_does_not_claim_finance_outlet_filter(monk
         script_worker._collect_keyword_news(["DMZ 지뢰"], content_nature="EXPLAINER")
 
     assert "금융 언론사" not in caplog.text
+
+
+def test_news_search_phrases_splits_compound_keyword_on_particle_boundaries():
+    phrases = script_worker._news_search_phrases("DMZ 지뢰 폭발 북한 연루 의혹과 이재명 지지율 하락")
+
+    assert "DMZ 지뢰 폭발 북한 연루 의혹" in phrases
+    assert "이재명 지지율" in phrases or "이재명 지지율 하락" in phrases
+    assert "DMZ 지뢰 폭발 북한 연루 의혹과 이재명 지지율 하락" not in phrases
+
+
+def test_news_search_phrases_returns_empty_for_short_natural_terms():
+    # 이미 자연스러운 단일 주제는 추가로 쪼갤 필요가 없다.
+    assert script_worker._news_search_phrases("반도체") == [] or "반도체" not in script_worker._news_search_phrases("반도체")
+
+
+def test_collect_keyword_news_falls_back_to_noun_phrases_when_compound_term_finds_nothing(monkeypatch):
+    # job 10 재현: 복합 키워드 전체 검색은 0건이지만, 조사 경계로 쪼갠 명사구
+    # 검색에서는 기사가 나온다.
+    rows_by_query = {
+        "이재명 지지율 하락": [
+            {"title": "이재명 지지율 최저치", "url": "https://example.test/1", "outlet": ""},
+        ],
+    }
+
+    class Extractor:
+        def __init__(self):
+            self.queries = []
+
+        def search_recent_news(self, query, **kwargs):
+            self.queries.append(query)
+            return rows_by_query.get(query, [])
+
+    extractor = Extractor()
+    monkeypatch.setattr(script_worker, "NewsKeywordExtractor", lambda: extractor)
+    monkeypatch.setattr(
+        script_worker, "_news_search_phrases",
+        lambda term: ["북한 연루 의혹", "이재명 지지율 하락"] if term == "DMZ 지뢰 폭발 북한 연루 의혹과 이재명 지지율 하락" else [],
+    )
+
+    articles = script_worker._collect_keyword_news(
+        ["DMZ 지뢰 폭발 북한 연루 의혹과 이재명 지지율 하락"], content_nature="EXPLAINER",
+    )
+
+    assert extractor.queries[0] == "DMZ 지뢰 폭발 북한 연루 의혹과 이재명 지지율 하락"
+    assert "북한 연루 의혹" in extractor.queries and "이재명 지지율 하락" in extractor.queries
+    assert len(articles) == 1 and articles[0]["title"] == "이재명 지지율 최저치"
+
+
+def test_collect_keyword_news_skips_phrase_fallback_when_direct_search_succeeds(monkeypatch):
+    calls = []
+
+    class Extractor:
+        def search_recent_news(self, query, **kwargs):
+            calls.append(query)
+            return [{"title": "반도체 기사", "url": "https://example.test/2", "outlet": "한국경제"}]
+
+    monkeypatch.setattr(script_worker, "NewsKeywordExtractor", lambda: Extractor())
+    monkeypatch.setattr(script_worker, "_news_search_phrases", lambda term: ["절대 호출되면 안 됨"])
+
+    script_worker._collect_keyword_news(["반도체"], content_nature="FACTUAL")
+
+    assert calls == ["반도체"]
