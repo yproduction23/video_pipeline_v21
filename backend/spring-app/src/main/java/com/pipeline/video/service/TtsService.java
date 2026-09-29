@@ -79,8 +79,23 @@ public class TtsService {
                 jobId, script.length(), finalVoiceId, ttsSpeed, job.getAutonomy());
 
         // FastAPI 호출
-        TtsGenerateResponse result = fastApiClient.generateTts(
-                jobId, script, finalVoiceId, ttsSpeed, job.getLongformTargetMinutes(), job.getAutonomy().name());
+        TtsGenerateResponse result;
+        try {
+            result = fastApiClient.generateTts(
+                    jobId, script, finalVoiceId, ttsSpeed, job.getLongformTargetMinutes(), job.getAutonomy().name());
+        } catch (RuntimeException e) {
+            if (e.getMessage() != null && e.getMessage().contains("TTS duration is outside the allowed")) {
+                // 같은 승인 대본으로 TTS를 재시도해도 실측 발화 속도가 바뀌지 않아
+                // 같은 초과 오류가 반복된다. 대본 단계로 되돌려 재생성 UI를 다시 연다.
+                job.setStatus(JobStatus.SCRIPT_PENDING);
+                jobRepository.save(job);
+                log.warn("TTS 분량 초과로 jobId={}를 SCRIPT_PENDING으로 되돌립니다: {}", jobId, e.getMessage());
+                throw new IllegalStateException(
+                        "TTS 음성 길이가 목표 분량을 벗어나 대본을 다시 생성해야 합니다. " +
+                        "스크립트 단계로 되돌렸으니 대본을 다시 생성해주세요.", e);
+            }
+            throw e;
+        }
 
         // [버그 수정] 기존에는 BigDecimal.ZERO 하드코딩. 실제 ElevenLabs API를
         // 호출한 경우에만 요금이 실제로 발생하므로, used_elevenlabs=true 일 때만
