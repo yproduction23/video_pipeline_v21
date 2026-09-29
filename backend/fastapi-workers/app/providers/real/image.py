@@ -201,19 +201,32 @@ class NanaBananaProvider(ImageProvider):
             base_prompt = STYLE_LOCK + "\n" + base_prompt
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # 공급자를 명시적으로 선택한다. 이전에는 로그가 NanaBanana라고 해도
-        # Fal Flux가 항상 먼저 실행되어, 사용자가 기대한 참조 이미지 일관성
-        # (Gemini)을 얻지 못하는 문제가 있었다.
-        provider_preference = str(kwargs.get("image_provider", "gemini")).lower()
-        if provider_preference != "gemini":
-            raise GeminiImageGenerationError("이미지 생성 공급자는 Gemini만 허용합니다.")
+        # 공급자 선택. 2026-09-29: 회사 Gemini 계정이 무기명 카드라 결제 등록이
+        # Google 정책상 구조적으로 불가능해, OpenAI를 메인으로 하고 Fal/Gemini를
+        # fallback으로 쓰기로 했다(사용자 승인, 채널 캐릭터 참조 이미지 파일럿 통과).
+        provider_preference = str(kwargs.get("image_provider", "openai")).lower()
 
+        openai_key = os.getenv("OPENAI_API_KEY")
         fal_key = os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY")
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         gemini_model = str(kwargs.get("gemini_model") or "gemini-3-pro-image")
         gemini_image_size = str(kwargs.get("gemini_image_size") or "2K")
         gemini_service_tier = str(kwargs.get("gemini_service_tier") or "priority").lower()
         gemini_thinking_level = kwargs.get("gemini_thinking_level")
+
+        def try_openai() -> bool:
+            if not openai_key:
+                return False
+            try:
+                character_image_paths = kwargs.get("character_image_paths") or []
+                if not character_image_paths and kwargs.get("character_image_path"):
+                    character_image_paths = [kwargs.get("character_image_path")]
+                if self._generate_openai_image(base_prompt, output_path, openai_key, character_image_paths):
+                    logger.info(f"OpenAI 이미지 생성 성공: {output_path}")
+                    return True
+            except Exception as e:
+                logger.warning(f"OpenAI 이미지 생성 실패: {e}")
+            return False
 
         def try_fal() -> bool:
             if not fal_key or self.__class__._fal_disabled:
@@ -268,9 +281,15 @@ class NanaBananaProvider(ImageProvider):
                     raise
                 logger.warning(f"공식 Gemini API 호출 실패 (GeminiImageGenerationError): {e}")
             except (ProviderRequestBudgetExceeded, ImageRequestHeld):
-                # 예산 게이트가 막은 경우에는 다른 제공자로 조용히 우회하거나
-                # 같은 장면을 재시도하지 않는다. 호출 자체가 승인되지 않은 상태다.
-                raise
+                # Gemini가 명시적으로 선택된 공급자일 때는 예산 게이트가 막은
+                # 경우 다른 제공자로 조용히 우회하거나 같은 장면을 재시도하지
+                # 않는다(호출 자체가 승인되지 않은 상태). 반면 OpenAI/Fal이
+                # 먼저 실패해 Gemini가 마지막 fallback으로 시도된 경우엔, 이
+                # 예산 게이트 오류도 다음 폴백(무료 폴백)으로 넘어갈 실패
+                # 신호일 뿐이라 그대로 재발생시키지 않는다.
+                if provider_preference == "gemini":
+                    raise
+                logger.warning("Gemini 예산/요청 게이트로 이 fallback 시도를 건너뜁니다.")
             except Exception as e:
                 logger.warning(f"공식 Gemini API 호출 실패: {e}")
             return False
@@ -304,13 +323,26 @@ class NanaBananaProvider(ImageProvider):
                 "refusing untracked fallback"
             )
 
-        order = ("fal", "gemini") if provider_preference == "fal" else ("gemini", "fal")
+        # 2026-09-29: OpenAI를 메인으로 하고 Fal → Gemini 순으로 대체한다.
+        # provider_preference로 다른 공급자를 먼저 요청하면 그 공급자를
+        # 앞세우고 나머지를 같은 상대 순서로 뒤에 붙인다.
+        _DEFAULT_ORDER = ("openai", "fal", "gemini")
+        if provider_preference in _DEFAULT_ORDER:
+            order = (provider_preference, *(p for p in _DEFAULT_ORDER if p != provider_preference))
+        else:
+            order = _DEFAULT_ORDER
         logger.info(f"이미지 공급자 선택: requested={provider_preference}, order={order}")
         for provider_name in order:
-            if provider_name == "gemini" and try_gemini():
-                return output_path
-            if provider_name == "fal" and try_fal():
-                return output_path
+            try:
+                if provider_name == "openai" and try_openai():
+                    return output_path
+                if provider_name == "fal" and try_fal():
+                    return output_path
+                if provider_name == "gemini" and try_gemini():
+                    return output_path
+            except (ProviderRequestBudgetExceeded, ImageRequestHeld) as e:
+                logger.warning(f"{provider_name} 예산/요청 게이트로 건너뜀: {e}")
+                continue
 
         # 최후의 무료 폴백은 생성 방법을 메타데이터로 남겨 검수 화면에서
         # AI 고품질 결과와 혼동되지 않게 한다.
@@ -507,6 +539,68 @@ class NanaBananaProvider(ImageProvider):
         except Exception as e:
             logger.error(f"Fal.ai Flux API 예외 발생: {e}")
             return False
+
+    def _generate_openai_image(self, prompt: str, output_path: str, api_key: str,
+                               character_image_paths: list[str] | None = None,
+                               model: str = "gpt-image-1", size: str = "1536x1024") -> bool:
+        """OpenAI Images API로 이미지를 생성한다.
+
+        참조 이미지가 있으면 /v1/images/edits(이미지 기반 수정)를, 없으면
+        /v1/images/generations을 쓴다. 2026-09-29 파일럿에서 채널 캐릭터
+        참조 이미지 기반 결과가 얼굴·배경 모두 사용자 승인을 받았다.
+        """
+        import requests
+
+        headers = {"Authorization": f"Bearer {api_key}"}
+        reference_paths = [p for p in (character_image_paths or []) if p and os.path.exists(p)]
+
+        for attempt in range(2):
+            try:
+                if reference_paths:
+                    with open(reference_paths[0], "rb") as f:
+                        files = {"image": ("reference.png", f, "image/png")}
+                        data = {"model": model, "prompt": prompt, "size": size, "n": "1"}
+                        resp = requests.post(
+                            "https://api.openai.com/v1/images/edits",
+                            headers=headers, files=files, data=data, timeout=120,
+                        )
+                else:
+                    resp = requests.post(
+                        "https://api.openai.com/v1/images/generations",
+                        headers=headers, json={"model": model, "prompt": prompt, "size": size, "n": 1},
+                        timeout=120,
+                    )
+            except requests.RequestException as e:
+                logger.warning(f"OpenAI Images API 네트워크 오류: {e}")
+                return False
+
+            if resp.status_code == 200:
+                body = resp.json()
+                item = (body.get("data") or [{}])[0]
+                b64 = item.get("b64_json")
+                if not b64:
+                    logger.warning("OpenAI Images API 응답에 이미지 데이터 없음")
+                    return False
+                with open(output_path, "wb") as out:
+                    out.write(base64.b64decode(b64))
+                return True
+
+            # 401/403: 계정·키 문제. 재시도해도 풀리지 않으므로 즉시 다음
+            # 공급자로 넘어간다.
+            if resp.status_code in (401, 403):
+                logger.error(f"OpenAI 계정/권한 오류 ({resp.status_code}): {resp.text[:200]}")
+                return False
+            # 429: 요청 한도/쿼터. 이 공급자만의 문제로 기록하고 다음 공급자로.
+            if resp.status_code == 429:
+                logger.warning(f"OpenAI 요청 한도 초과 (429): {resp.text[:200]}")
+                return False
+            # 5xx: 일시적 오류. 한 번만 짧게 재시도한 뒤 다음 공급자로 넘어간다.
+            if resp.status_code >= 500 and attempt == 0:
+                logger.warning(f"OpenAI 일시적 오류 ({resp.status_code}), 재시도: {resp.text[:200]}")
+                continue
+            logger.warning(f"OpenAI Images API 실패 ({resp.status_code}): {resp.text[:200]}")
+            return False
+        return False
 
     @staticmethod
     def _extract_interaction_image(response: dict) -> str | None:

@@ -24,6 +24,7 @@ KLING_API_KEY = os.getenv("KLING_API_KEY", "")
 GOOGLE_AI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
 FAL_KEY = os.getenv("FAL_KEY", "")
 BFL_API_KEY = os.getenv("BFL_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 V5_BFL_ENABLED = os.getenv("V5_BFL_ENABLED", "false").lower() in {"1", "true", "yes"}
 if V5_BFL_ENABLED and not BFL_API_KEY:
     raise RuntimeError("V5_BFL_ENABLED=true이면 BFL_API_KEY가 필요합니다.")
@@ -98,9 +99,13 @@ SUBTITLE_START_FRAME_POLICY = os.getenv("SUBTITLE_START_FRAME_POLICY", "nearest"
 SUBTITLE_FONT_SIZE = int(os.getenv("SUBTITLE_FONT_SIZE", "72"))
 SUBTITLE_THEME = os.getenv("SUBTITLE_THEME", "economy")  # economy | knowledge
 IMAGE_HEADLINE_OVERLAY = os.getenv("IMAGE_HEADLINE_OVERLAY", "false").lower() in {"1", "true", "yes"}
-IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "gemini").lower()
-if IMAGE_PROVIDER != "gemini":
-    raise RuntimeError("이미지 생성 공급자는 Gemini Nano Banana Pro만 사용할 수 있습니다.")
+_SUPPORTED_IMAGE_PROVIDERS = {"openai", "gemini", "fal"}
+# 2026-09-29: 회사 Gemini 계정이 무기명 카드라 결제 등록이 Google 정책상
+# 구조적으로 불가능해, OpenAI를 메인으로 두고 Fal/Gemini를 fallback으로
+# 쓰기로 했다(사용자 승인, 채널 캐릭터 참조 이미지 파일럿 통과).
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "openai").lower()
+if IMAGE_PROVIDER not in _SUPPORTED_IMAGE_PROVIDERS:
+    raise RuntimeError(f"지원하지 않는 이미지 생성 공급자입니다: {IMAGE_PROVIDER}")
 # 이미지 품질을 예산 때문에 낮추면 사실 장면과 일반 장면의 품질 계약이
 # 달라진다. 운영 경로는 Nano Banana Pro 단일 tier로 고정한다.
 IMAGE_QUALITY_TIER = os.getenv("IMAGE_QUALITY_TIER", "pro").lower()

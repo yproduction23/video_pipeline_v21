@@ -76,7 +76,7 @@ def test_gemini_permission_denied_falls_back_to_fal(tmp_path, monkeypatch):
             return None
 
     result = provider.generate(
-        "a scene", output_path,
+        "a scene", output_path, image_provider="gemini",
         gemini_model="gemini-3-pro-image", gemini_request_audit=_Audit(),
     )
 
@@ -119,7 +119,7 @@ def test_gemini_transient_5xx_does_not_fall_back_to_fal(tmp_path, monkeypatch):
 
     with pytest.raises(ImageRequestHeld):
         provider.generate(
-            "a scene", output_path,
+            "a scene", output_path, image_provider="gemini",
             gemini_model="gemini-3-pro-image", gemini_request_audit=_Audit(),
         )
 

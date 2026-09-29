@@ -166,8 +166,8 @@ def update(**kwargs) -> dict:
                 normalized = min(normalized, _cfg.MAX_BUDGET_PER_VIDEO_KRW)
             if k == "image_quality_tier" and normalized != "pro":
                 raise ValueError("image_quality_tier는 pro만 허용합니다.")
-            if k == "image_provider" and normalized != "gemini":
-                raise ValueError("image_provider는 gemini만 허용합니다.")
+            if k == "image_provider" and normalized not in {"openai", "gemini", "fal"}:
+                raise ValueError("image_provider는 openai/gemini/fal만 허용합니다.")
             _state[k] = normalized
         except (TypeError, ValueError):
             raise ValueError(f"{k}는 {expected.__name__} 타입이어야 합니다: 받은 값={v!r}")
