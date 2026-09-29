@@ -186,6 +186,36 @@ def test_visual_qa_no_longer_hard_fails_on_sclera_iris_separation(tmp_path: Path
     assert "character_warm_brown_iris" not in failures
 
 
+def test_visual_qa_prompt_no_longer_asks_reviewer_to_require_sclera_iris_layers(tmp_path: Path):
+    """2026-09-29: hard_failures 매핑만 지우면 리뷰어 LLM이 여전히 공막/홍채를
+    검사 기준에 포함시켜 decision=review/score<78로 재시도를 유발할 수 있다
+    (job 12에서 실제로 재현됨). 리뷰 프롬프트 자체에서 이 요구사항을 지워야
+    한다."""
+    image = tmp_path / "scene.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    scene = {
+        "index": 0,
+        "image_path": str(image),
+        "art_direction": {"character_required": True},
+    }
+    captured = {}
+
+    def fake_post(payload, api_key):
+        captured["prompt"] = payload["contents"][0]["parts"][0]["text"]
+        return _visual_response(_accepted_verdict())
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        side_effect=fake_post,
+    ):
+        assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    prompt = captured["prompt"]
+    assert "do not require a separated white sclera" in prompt.lower()
+    assert "separately inspect the broad white sclera" not in prompt
+    assert "solid black oval is not sclera and fails" not in prompt
+
+
 def test_explicit_max_occurrences_one_rejects_two_visible_approved_labels(tmp_path: Path):
     image = tmp_path / "duplicate-label.png"
     Image.new("RGB", (1920, 1080), "navy").save(image)
