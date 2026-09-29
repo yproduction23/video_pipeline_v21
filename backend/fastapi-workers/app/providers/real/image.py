@@ -44,6 +44,16 @@ logger = logging.getLogger(__name__)
 class GeminiImageGenerationError(RuntimeError):
     """A Gemini image request failed after its same-quality retry policy."""
 
+
+# 계정 자체가 막힌 오류(권한 없음/쿼터 완전 소진)만 여기 해당한다. 5xx 같은
+# 일시적 오류는 제외해 기존 Gemini 예산/쿼터 재시도 계약을 그대로 신뢰한다.
+_ACCOUNT_LEVEL_GEMINI_ERROR_MARKERS = ("PERMISSION_DENIED", "RESOURCE_EXHAUSTED")
+
+
+def _is_account_level_gemini_error(exc: BaseException) -> bool:
+    message = str(exc)
+    return any(marker in message for marker in _ACCOUNT_LEVEL_GEMINI_ERROR_MARKERS)
+
 # Legacy fallback only.  Jobs with a selected character pass either a channel
 # style, a reference asset, a pose library, or a LoRA and never receive this
 # description.  Keeping it isolated prevents the old mint mascot from leaking
@@ -270,11 +280,25 @@ class NanaBananaProvider(ImageProvider):
         # A Pro-quality run must not silently downgrade to a different model.
         # The caller will fail the job instead of rendering blank/text fallback
         # scenes when Gemini Pro cannot return an image.
+        #
+        # 2026-09-29 예외: Gemini 계정 자체가 막혀 있으면(PERMISSION_DENIED/
+        # RESOURCE_EXHAUSTED — 결제 등록 불가 등 구조적 계정 문제) 재시도해도
+        # 절대 풀리지 않는다. 이런 계정 수준 오류일 때만, 사용자가 명시적으로
+        # 승인한 대로 Fal.ai로 대체 생성한다. 5xx 같은 일시적 오류는 기존
+        # 예산/쿼터 재시도 계약을 그대로 따르며 이 대체 대상이 아니다.
         if provider_preference == "gemini" and gemini_model in {
             "gemini-3-pro-image", "gemini-3.1-flash-image",
         }:
-            if try_gemini():
-                return output_path
+            try:
+                if try_gemini():
+                    return output_path
+            except ImageRequestHeld as e:
+                if _is_account_level_gemini_error(e) and try_fal():
+                    logger.warning(
+                        f"Gemini 계정 오류({e})로 이 장면만 Fal.ai로 대체 생성: {output_path}"
+                    )
+                    return output_path
+                raise
             raise RuntimeError(
                 f"Gemini image generation returned no image after retries: {gemini_model}; "
                 "refusing untracked fallback"
