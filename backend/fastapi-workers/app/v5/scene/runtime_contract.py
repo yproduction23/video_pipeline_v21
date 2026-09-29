@@ -9,6 +9,8 @@ from dataclasses import asdict
 from typing import Any
 import re
 
+from app import runtime_config
+
 from app.postprocess.text_overlay import script_visual_plan
 from app.utils.entity_english_map import ENTITY_REGISTRY, get_entity_english_name
 from app.utils.image_text_contract import build_scene_text_contract, contains_financial_number
@@ -608,7 +610,12 @@ def v5_provider_options(scene: dict[str, Any]) -> dict[str, Any]:
     if not is_v5_final_lane_scene(scene):
         return {}
     return {
-        "image_provider": "gemini",
+        # 2026-09-29: 특정 공급자를 하드코딩하면 그 공급자 계정이 막혔을 때
+        # (예: 회사 Gemini 계정이 결제 등록 불가) final-lane 장면 전체가
+        # 항상 실패한다. 현재 설정된 메인 공급자를 그대로 따르되, 아래
+        # gemini_* 옵션들은 실제로 Gemini가 호출될 때만 의미가 있고 다른
+        # 공급자에서는 무시된다.
+        "image_provider": runtime_config.value("image_provider"),
         "gemini_model": "gemini-3-pro-image",
         "gemini_image_size": "2K",
         # 2026-08-30 동일 47장 비교에서 실제 Priority 응답 46/46을 확인했다.

@@ -1,3 +1,4 @@
+from app import runtime_config
 from app.v5.providers.router import RENDER_BLOCKED_ARCHETYPES
 from app.v5.scene.runtime_contract import (
     attach_v5_scene_contracts,
@@ -41,8 +42,12 @@ def test_runtime_contract_uses_gemini_for_general_and_information_scenes():
     assert metric["verified_overlay_mode"] == graph["verified_overlay_mode"] == "scene_local_approved_generated_text"
     assert general["visual_mode_contract"]["overlay_policy"] == "ass_subtitle_only"
     assert metric["visual_mode_contract"]["numeric_visual_policy"] == "verified_facts_deterministic_only"
+    # 2026-09-29: image_provider가 "gemini"로 하드코딩돼 있으면 V5 final-lane
+    # 장면이 항상 Gemini로만 가서 job 12처럼 회사 Gemini 계정이 구조적으로
+    # 막혀 있을 때 새로 설정한 OpenAI 메인 provider를 무시하고 실패했다.
+    # 이제 현재 설정된 메인 provider(runtime_config)를 그대로 따른다.
     assert v5_provider_options(scenes[0]) == {
-        "image_provider": "gemini",
+        "image_provider": runtime_config.value("image_provider"),
         "gemini_model": "gemini-3-pro-image",
         "gemini_image_size": "2K",
         "gemini_service_tier": "priority",
