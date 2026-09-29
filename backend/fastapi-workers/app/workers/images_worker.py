@@ -2733,6 +2733,7 @@ Rules:
             # 최신 문자 게이트를 통과한 경우에만 최종 PNG로 승격한다.
             if not valid_image(img_path) and valid_image(raw_img_path):
                 try:
+                    self._normalize_canvas(raw_img_path)
                     _inspect_generated_textless_image(ctx, raw_img_path)
                     shutil.copy2(raw_img_path, img_path)
                     self._apply_image_overlays(ctx, img_path)
@@ -2779,6 +2780,7 @@ Rules:
                 # raw 이미지를 먼저 복원한 뒤 최신 검증 사실을 다시 반영한다.
                 source_for_ocr = raw_img_path if valid_image(raw_img_path) else img_path
                 try:
+                    self._normalize_canvas(source_for_ocr)
                     _inspect_generated_textless_image(ctx, source_for_ocr)
                     if _restore_raw_before_deterministic_overlay(ctx) and valid_image(raw_img_path):
                         shutil.copy2(raw_img_path, img_path)

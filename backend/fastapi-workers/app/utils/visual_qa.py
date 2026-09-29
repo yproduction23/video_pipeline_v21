@@ -106,13 +106,26 @@ def _claude_visual_review(payload: dict[str, Any]) -> dict[str, Any] | None:
                 })
         response = anthropic.Anthropic(api_key=api_key).messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1400,
+            # 2026-09-29: 실제 검수 지시문은 30개 이상의 boolean/문자열 필드와
+            # 장문 한국어 reason을 요구한다. 1400은 이 응답을 자르기에 충분히
+            # 작아, 잘린 JSON이 예외 없이 조용히 None으로 처리돼 검수 불가
+            # 오류로 이어질 수 있었다(job 12에서 재현).
+            max_tokens=3000,
             temperature=0,
             messages=[{"role": "user", "content": content}],
         )
         text = "".join(getattr(block, "text", "") for block in response.content)
         start, end = text.find("{"), text.rfind("}")
-        return _parse_json(text[start:end + 1]) if start >= 0 and end > start else None
+        if not (start >= 0 and end > start):
+            logger.warning("Claude visual QA fallback returned no JSON object: %r", text[:200])
+            return None
+        parsed = _parse_json(text[start:end + 1])
+        if parsed is None:
+            logger.warning(
+                "Claude visual QA fallback JSON parse failed (stop_reason=%s, len=%d): %r",
+                getattr(response, "stop_reason", None), len(text), text[:200],
+            )
+        return parsed
     except Exception as exc:
         logger.warning("Claude visual QA fallback failed: %s", exc)
         return None
