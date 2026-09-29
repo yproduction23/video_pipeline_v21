@@ -3026,6 +3026,13 @@ Rules:
                         gemini_pressure.outcome()
                         provider_request_started = False
 
+                        # 2026-09-29: Fal.ai(flux/schnell)는 1024x576 JPEG를
+                        # .png 확장자로 반환해, 최종 1920x1080 캔버스와 형식·
+                        # 크기가 어긋난 채로 검수·오버레이 단계로 넘어가던
+                        # 문제가 있었다. 모든 공급자 출력을 오버레이 전에
+                        # 표준 캔버스로 정규화한다(이미 표준 크기인 출력은
+                        # _normalize_canvas가 그대로 통과시킨다).
+                        self._normalize_canvas(raw_img_path)
                         _inspect_generated_textless_image(ctx, raw_img_path)
                         shutil.copy2(raw_img_path, img_path)
                         
@@ -3048,6 +3055,7 @@ Rules:
                                 ),
                                 style_locked=bool(ctx["spec"]),
                             )
+                            self._normalize_canvas(raw_img_path)
                             _inspect_generated_textless_image(ctx, raw_img_path)
                             self._replace_with_regenerated_surface_source(ctx, raw_img_path, img_path)
                             # 재생성 요청도 ProviderRequestAudit가 이미 기록한다.
