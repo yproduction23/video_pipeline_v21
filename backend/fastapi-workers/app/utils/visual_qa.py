@@ -548,10 +548,9 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                 hard_failures.append("character_wardrobe")
             if character_required and not bool(verdict.get("face_construction_quality_pass", False)):
                 hard_failures.append("character_face_quality")
-            if character_required and not bool(verdict.get("separate_sclera_region_visible", False)):
-                hard_failures.append("character_sclera_structure")
-            if character_required and not bool(verdict.get("warm_brown_iris_region_visible", False)):
-                hard_failures.append("character_warm_brown_iris")
+            # 2026-09-29 사용자 결정: 눈 구조(공막·홍채 분리) 요구사항은 채널
+            # 운영자가 필요 없다고 판단해 하드 실패 대상에서 제외한다. 다른
+            # 캐릭터 해부학·의상·정체성 검사는 그대로 유지한다.
             if (
                 character_required
                 and (scene_variables.get("emotion") or scene_variables.get("action"))

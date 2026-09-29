@@ -154,7 +154,10 @@ def test_visual_qa_rejects_long_human_proportions_but_not_job52_costume_wrap(tmp
     assert "character_costume_wrap" not in failures
 
 
-def test_visual_qa_rejects_catchlight_without_separate_sclera_region(tmp_path: Path):
+def test_visual_qa_no_longer_hard_fails_on_sclera_iris_separation(tmp_path: Path):
+    """2026-09-29 사용자 결정: 눈 구조(공막·홍채 분리) 요구사항은 채널
+    운영자가 필요 없다고 판단해 하드 실패 대상에서 제외했다. 다른 캐릭터
+    해부학 검사(다리 비율, 의상 등)는 그대로 유지한다."""
     image = tmp_path / "black-oval-catchlight.png"
     Image.new("RGB", (1920, 1080), "navy").save(image)
     verdict = _accepted_verdict()
@@ -179,8 +182,8 @@ def test_visual_qa_rejects_catchlight_without_separate_sclera_region(tmp_path: P
         report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
 
     failures = report["reviewed"][0]["failure_categories"]
-    assert "character_sclera_structure" in failures
-    assert "character_warm_brown_iris" in failures
+    assert "character_sclera_structure" not in failures
+    assert "character_warm_brown_iris" not in failures
 
 
 def test_explicit_max_occurrences_one_rejects_two_visible_approved_labels(tmp_path: Path):
