@@ -10,6 +10,7 @@ from app.workers.images_worker import (
     ImagesWorker,
     _bounded_text_generation_prompt,
     _image_prompt_cache_key,
+    _image_provider_for_attempt,
     _requires_full_scene_regeneration,
     _sanitize_unplanned_prompt_structure,
 )
@@ -41,6 +42,29 @@ class ImageWorkerStabilityTests(unittest.TestCase):
         self.assertFalse(classify_image_error(RuntimeError("invalid local output")).retryable)
         self.assertTrue(classify_image_error(RuntimeError("HTTP 503 unavailable")).retryable)
         self.assertTrue(classify_image_error(TimeoutError("timed out")).retryable)
+
+    def test_image_provider_stays_on_default_until_last_resort(self):
+        """2026-09-29 사용자 결정: OpenAI(기본)가 같은 장면에서 계속 QA를
+        못 넘기면, 포기하기 전에 이 장면만 Fal.ai로 마지막 시도를 해본다."""
+        for attempt in range(3):
+            self.assertEqual(
+                _image_provider_for_attempt(
+                    "openai", attempt=attempt, max_retries=4, force_fal_last_resort=False,
+                ),
+                "openai",
+            )
+        self.assertEqual(
+            _image_provider_for_attempt(
+                "openai", attempt=3, max_retries=4, force_fal_last_resort=False,
+            ),
+            "fal",
+        )
+        self.assertEqual(
+            _image_provider_for_attempt(
+                "openai", attempt=0, max_retries=4, force_fal_last_resort=True,
+            ),
+            "fal",
+        )
 
     def test_prepaid_credit_exhaustion_is_not_retried_even_when_provider_uses_429(self):
         decision = classify_image_error(RuntimeError(

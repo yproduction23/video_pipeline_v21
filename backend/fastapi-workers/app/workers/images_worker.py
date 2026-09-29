@@ -510,6 +510,17 @@ def _requires_full_scene_regeneration(review: dict | None) -> bool:
     })
 
 
+def _image_provider_for_attempt(
+    default_provider: str, *, attempt: int, max_retries: int, force_fal_last_resort: bool,
+) -> str:
+    """2026-09-29 사용자 결정: 메인 공급자(기본 OpenAI)가 같은 장면에서 표적
+    교정 예산을 다 쓰거나 재시도 예산의 마지막 한 번에 도달하면, 포기하기
+    전에 이 장면만 Fal.ai로 마지막 시도를 해본다."""
+    if force_fal_last_resort or attempt == max_retries - 1:
+        return "fal"
+    return default_provider
+
+
 def _audit_scene_quality(scene: dict, image_path: str, *, outcome: str, category: str) -> None:
     """유료 호출 없이 원본 이미지 해시와 QA 결과를 같은 요청 원장에 연결한다."""
     if scene.get("_request_job_id") is None:
@@ -2708,6 +2719,10 @@ Rules:
             retry_feedback: dict | None = None
             retry_source_path = str(job_dir / f"scene_{index:03d}_rejected.png")
             full_regeneration_after_local_drift = False
+            # 2026-09-29 사용자 결정: 메인 공급자(OpenAI)가 같은 장면에서 장면별
+            # 표적 교정 예산을 다 써도 계약을 못 넘기면, 포기하기 전에 이 장면만
+            # Fal.ai로 마지막 시도를 해본다. 다른 장면·다른 job에는 영향 없다.
+            force_fal_last_resort = False
 
             def preserve_retry_source(source_path: str) -> None:
                 """실패 프레임을 다음 요청의 국소 편집 기준으로 보존한다."""
@@ -2980,7 +2995,11 @@ Rules:
                             lora_model_id=lora_model_id,
                             lora_trigger_word=lora_trigger_word,
                             lora_scale=lora_scale,
-                            image_provider=provider_options.get("image_provider", runtime_config.value("image_provider")),
+                            image_provider=_image_provider_for_attempt(
+                                provider_options.get("image_provider", runtime_config.value("image_provider")),
+                                attempt=attempt, max_retries=max_retries,
+                                force_fal_last_resort=force_fal_last_resort,
+                            ),
                             gemini_model=provider_options.get("gemini_model", image_profile.get("model")),
                             gemini_image_size=provider_options.get("gemini_image_size", image_profile.get("image_size")),
                             gemini_service_tier=provider_options.get("gemini_service_tier", runtime_config.value("gemini_service_tier")),
@@ -3131,8 +3150,19 @@ Rules:
                             }
                         )
                         if contract_rejections >= 3:
+                            if not force_fal_last_resort and attempt < max_retries - 1:
+                                force_fal_last_resort = True
+                                contract_rejections = 0
+                                full_regeneration_after_local_drift = True
+                                logger.warning(
+                                    "Image scene %s: 메인 공급자로 표적 교정 2회 후에도 계약을 통과하지 "
+                                    "못해, 이 장면만 Fal.ai로 마지막 시도합니다: %s",
+                                    index, exc,
+                                )
+                                continue
                             raise ImageRequestHeld(
-                                f"scene {index} 장면별 표적 교정 2회 후에도 계약을 통과하지 못함: {exc}"
+                                f"scene {index} 장면별 표적 교정 2회 후에도 계약을 통과하지 못함"
+                                f"{'(Fal.ai 대체 시도 포함)' if force_fal_last_resort else ''}: {exc}"
                             ) from exc
                         logger.warning(
                             "Image scene %s rejected by scene-local QA; targeted retry %s/2: %s",
@@ -3151,7 +3181,10 @@ Rules:
                     # Gemini HTTP의 대기는 영속 요청 제어기만 소유한다.
                     # 감사 계약 밖의 예외도 로컬 루프로 재전송하지 않는다.
                     raise RuntimeError(f"감사되지 않은 공급자 오류: {type(exc).__name__}") from exc
-            raise RuntimeError(f"scene {index} image generation failed after {max_retries} attempts: {last_error}")
+            raise RuntimeError(
+                f"scene {index} image generation failed after {max_retries} attempts"
+                f"{' (Fal.ai 대체 시도 포함)' if force_fal_last_resort else ''}: {last_error}"
+            )
 
         configured_workers = max(1, min(int(runtime_config.value("gemini_max_concurrency")), 32))
         max_workers = gemini_pressure.recommended_concurrency(configured_workers)
