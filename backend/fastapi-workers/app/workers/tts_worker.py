@@ -41,7 +41,7 @@ from app.utils.quality_gate import extract_narration, sanitize_narration, assess
 from app.utils.korean_tts import normalize_korean_numbers_for_tts
 from app.utils.sentence_splitter import split_sentences
 from app.utils.caption_segmentation import split_script_into_caption_chunks
-from app.utils.script_length import effective_duration_tolerance, spoken_char_count, update_calibration
+from app.utils.script_length import effective_tts_measured_duration_tolerance, spoken_char_count, update_calibration
 from app.utils.operational_contract_audit import build_operational_contract_audit
 
 logger = logging.getLogger(__name__)
@@ -287,7 +287,7 @@ class TtsWorker:
                 speed,
             )
         configured_duration_tolerance = float(runtime_config.value("tts_duration_tolerance"))
-        duration_tolerance = effective_duration_tolerance(configured_duration_tolerance)
+        duration_tolerance = effective_tts_measured_duration_tolerance(configured_duration_tolerance)
         allowed_delta_seconds = (
             float(target_seconds) * duration_tolerance + DURATION_PROBE_GRACE_SECONDS
             if target_seconds else None

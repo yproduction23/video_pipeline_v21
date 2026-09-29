@@ -17,11 +17,23 @@ from typing import Any
 CALIBRATION_PATH = Path(os.getenv("TTS_CPS_CALIBRATION_PATH", "/app/data/tts_cps_calibration.json"))
 TOLERANCE = 0.15
 MAX_SCRIPT_DURATION_TOLERANCE = 0.05
+# 실제 음성 길이 측정은 대본 글자수 계약과 다른 문제다. 글자수는 작가(LLM)가
+# 재작성으로 정밀하게 맞출 수 있어 5%가 합리적이지만, 실제 발화는 억양·쉼·
+# 리듬 때문에 같은 글자수라도 더 크게 흔들린다. TTS_DURATION_TOLERANCE의
+# 기본값(0.25)이 바로 그 의도였는데, 두 검사가 같은 5% 캡을 공유하면서
+# 실제 음성 검사가 부당하게 좁아졌다(job 12: 60초 목표에서 75~77초가
+# 나와도 정상 범위일 수 있는데 5%(≈3초) 캡에 걸려 계속 실패).
+MAX_TTS_MEASURED_DURATION_TOLERANCE = 0.30
 
 
 def effective_duration_tolerance(configured: float) -> float:
-    """운영 시간 허용치를 1~5% 사이로 제한한다."""
+    """대본 글자수 계약(target_chars) 허용치를 1~5% 사이로 제한한다."""
     return max(0.01, min(float(configured), MAX_SCRIPT_DURATION_TOLERANCE))
+
+
+def effective_tts_measured_duration_tolerance(configured: float) -> float:
+    """실측 음성 길이 검사 허용치. 설정값(기본 25%)을 그대로 쓰되 1~30% 사이로만 제한한다."""
+    return max(0.01, min(float(configured), MAX_TTS_MEASURED_DURATION_TOLERANCE))
 
 
 def get_tolerance() -> float:

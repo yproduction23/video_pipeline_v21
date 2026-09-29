@@ -2,7 +2,11 @@ import unittest
 from unittest.mock import patch
 
 from app import runtime_config
-from app.utils.script_length import effective_duration_tolerance, make_length_contract
+from app.utils.script_length import (
+    effective_duration_tolerance,
+    effective_tts_measured_duration_tolerance,
+    make_length_contract,
+)
 from app.workers.tts_worker import TtsWorker
 from app.workers.script_worker import _is_market_level_forecast
 
@@ -49,6 +53,19 @@ class DeliveryDefaultsTests(unittest.TestCase):
         self.assertEqual(contract["min_chars"], 2251)
         self.assertEqual(contract["max_chars"], 2487)
         self.assertEqual(contract["tolerance_pct"], 5)
+        self.assertEqual(effective_duration_tolerance(0.25), 0.05)
+
+    def test_measured_tts_duration_keeps_the_configured_25_percent_allowance(self):
+        """2026-09-29 사용자 재현: job 12가 1분 목표에서 실제 75.6~76.7초가
+        나왔는데도 5%(≈3초) 캡에 걸려 계속 실패했다. TTS_DURATION_TOLERANCE
+        환경 기본값 자체가 0.25인 것에서 알 수 있듯, 실제 발화 길이는 억양·쉼
+        때문에 대본 글자수 계약(5%)보다 자연스러운 편차가 더 커야 한다. 이
+        허용치는 글자수 계약용 5% 캡과 분리되어야 한다."""
+        self.assertEqual(effective_tts_measured_duration_tolerance(0.25), 0.25)
+        # 그래도 설정 실수로 지나치게 커지는 것은 막는다.
+        self.assertEqual(effective_tts_measured_duration_tolerance(0.9), 0.30)
+        self.assertEqual(effective_tts_measured_duration_tolerance(0.0), 0.01)
+        # 대본 글자수 계약용 캡은 그대로 5%로 유지된다(회귀 방지).
         self.assertEqual(effective_duration_tolerance(0.25), 0.05)
 
     def test_default_images_are_pro_2k_with_a_mascot(self):
