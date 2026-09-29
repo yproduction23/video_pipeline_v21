@@ -152,6 +152,11 @@ public class TtsService {
         }
 
         if (job.getStatus() == JobStatus.TTS_PENDING) {
+            // GUIDED 게이트 승인이 실제 생성(generate())을 거치지 않고도 눌릴 수
+            // 있어(목소리 선택 → 바로 승인), TTS_AUDIO Asset 없이 IMAGES_PENDING으로
+            // 넘어가 이미지 단계가 "TTS_AUDIO Asset이 없습니다"로 실패하는 문제가 있었다.
+            assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(jobId, AssetType.TTS_AUDIO)
+                    .orElseThrow(() -> new IllegalStateException("TTS 음성을 먼저 생성해주세요. TTS_AUDIO 자산이 없습니다."));
             gateService.approve(jobId, GateName.TTS, username, "TTS 확정");
         } else {
             log.info("TTS 수정/재확정 완료 (상태 유지: {}): jobId={}", job.getStatus(), jobId);
