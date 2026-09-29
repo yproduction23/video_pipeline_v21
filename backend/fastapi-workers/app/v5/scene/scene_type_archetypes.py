@@ -219,7 +219,12 @@ def recommend_v5_archetype(scene: dict) -> ArchetypeSelection:
     text = _scene_text(scene)
     forced_archetype = str(scene.get("visual_archetype") or "").strip()
     if forced_archetype:
-        return _selection(scene_type, forced_archetype, "파일럿 장면 다양성을 위한 명시적 archetype 선택")
+        if forced_archetype in TYPE_CANDIDATES[scene_type]:
+            return _selection(scene_type, forced_archetype, "파일럿 장면 다양성을 위한 명시적 archetype 선택")
+        # art_direction.py의 장면별 archetype 선택과 이 scene_type 분류는 서로
+        # 다른 분류기다. 둘이 어긋날 수 있다(예: 금융 채널 전용 아트 디렉터가
+        # 해설형 대본의 여론조사 퍼센트 장면에 맞지 않는 archetype을 고른 경우).
+        # 강제 archetype을 무시하고 scene_type에 맞는 추천으로 안전하게 넘어간다.
 
     if scene_type == "graph":
         if _has_any(text, _GRAPH_MAP_HINTS):
