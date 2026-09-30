@@ -1234,6 +1234,24 @@ class SingleImageGenerateRequest(BaseModel):
     # 게이트를 우회하므로 Spring이 저장한 scene metadata를 함께 보낸다.
     scene_meta: Optional[Dict[str, Any]] = None
 
+def _single_scene_needs_generic_fallback_prompt(prompt_en: str, scene_meta: Optional[Dict[str, Any]]) -> bool:
+    """scene_meta에 승인 장면의 실제 art_direction이 있으면 여기서 범용
+    프롬프트로 덮어쓰지 않는다.
+
+    2026-09-30 발견: prompt_en이 비어 있으면(Spring이 text_and_image 모드에서
+    promptEn=null을 보내는 정상 경로 포함) 이 엔드포인트가 무조건 "Korean
+    finance editorial scene" 하드코딩 art_direction으로 prompt_en을 먼저
+    만들어 scene에 주입했다. generate_single_scene()은 scene["prompt_en"]이
+    이미 채워져 있으면 scene_meta의 실제 archetype·mood·props·palette를 쓰는
+    자기 내부 compile_editorial_prompt 호출을 절대 하지 않으므로, 승인 장면의
+    시각 계약 전체가 무시되고 범용 화풍으로 대체됐다. job/scene에 무관한
+    공통 계약 버그다.
+    """
+    if prompt_en.strip():
+        return False
+    return not bool((scene_meta or {}).get("art_direction"))
+
+
 @app.post("/workers/images/generate-single")
 async def generate_single_image(request: SingleImageGenerateRequest):
     try:
@@ -1243,34 +1261,37 @@ async def generate_single_image(request: SingleImageGenerateRequest):
         if not source_text:
             raise HTTPException(422, "source_text is required")
         prompt_en = (request.prompt_en or "").strip()
-        if not prompt_en:
-            # The source sentence is preserved inside an otherwise-English
-            # editorial prompt. This keeps the model grounded in the Korean
-            # narration while giving the UI a stable prompt to review/reuse.
+        if _single_scene_needs_generic_fallback_prompt(prompt_en, request.scene_meta):
+            # scene_meta에 승인 장면의 art_direction이 없을 때만 쓰는 최소
+            # 범용 대체 프롬프트다. 실제 art_direction이 있으면 아래에서
+            # prompt_en/prompt를 scene에 주입하지 않아, generate_single_scene()
+            # 내부의 compile_editorial_prompt(ctx, ...)가 그 장면 고유의
+            # archetype·mood·props·palette를 그대로 쓰게 된다.
             prompt_en = compile_editorial_prompt(
                 {
                     "content": source_text,
                     "section": request.section,
                     "art_direction": {
                         "family": "character_role",
-                        "setting": "Korean finance editorial scene",
+                        "setting": "Korean editorial scene",
                         "camera": "wide 16:9 editorial composition",
                         "palette": {"colors": "clear teal, warm gold, and confident coral accents"},
                         "lighting": "clean broadcast-studio lighting",
                         "character_required": True,
                     },
                 },
-                f'Visually explain this Korean financial narration: "{source_text}"',
+                f'Visually explain this Korean narration: "{source_text}"',
             )
         scene = dict(request.scene_meta or {})
         scene.update({
             "index": request.index,
             "text": source_text,
             "prompt_ko": source_text,
-            "prompt_en": prompt_en,
-            "prompt": prompt_en,
             "section": request.section,
         })
+        if prompt_en:
+            scene["prompt_en"] = prompt_en
+            scene["prompt"] = prompt_en
         return get_images_worker().generate_single_scene(
             scene=scene,
             job_id=request.job_id,

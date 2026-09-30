@@ -1303,9 +1303,12 @@ Rules:
 
         base_prompt = str(ctx.get("prompt_en") or ctx.get("prompt") or "").strip()
         if not base_prompt:
+            # CUSTOM 카테고리 등 금융과 무관한 주제도 이 경로를 탄다(예: 정치·
+            # 안보 사안). "financial narration"으로 고정하면 실제 art_direction과
+            # 무관하게 금융 화풍(성장 차트 등)을 암시해 의미 불일치를 유발한다.
             base_prompt = compile_editorial_prompt(
                 ctx,
-                f'Visually explain this Korean financial narration: "{narration}"',
+                f'Visually explain this Korean narration: "{narration}"',
             )
         ctx.update({
             "index": index,
