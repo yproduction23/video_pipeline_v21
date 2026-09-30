@@ -14,6 +14,7 @@ from app.workers.images_worker import (
     _image_prompt_cache_key,
     _image_provider_for_attempt,
     _requires_full_scene_regeneration,
+    _review_reasons_including_held_scenes,
     _sanitize_unplanned_prompt_structure,
 )
 
@@ -280,6 +281,31 @@ class ClearSceneFromRequestReviewTests(unittest.TestCase):
             job_dir = Path(temp_dir)
             _clear_scene_from_request_review(job_dir, 99, 0)
             self.assertFalse((job_dir / "image_request_review.json").exists())
+
+
+class ReviewReasonsIncludingHeldScenesTests(unittest.TestCase):
+    """2026-09-30 job 12 재현: scene 0이 ImageRequestHeld로 보류됐는데도
+    _generate_parallel_scenes()의 응답은 requires_manual_review=false를
+    반환했다(_manual_review_reasons()가 성공한 장면만 봤기 때문). Spring
+    AUTO 모드가 이를 그대로 믿고 IMAGES 게이트를 통과시켜 job이
+    ASSEMBLING으로 넘어갔고, 조립은 별도 게이트에서 막혀 job이 앞으로도
+    뒤로도 못 가는 상태가 됐다."""
+
+    def test_adds_a_reason_per_held_scene_so_requires_manual_review_becomes_true(self):
+        held_scenes = [{"index": 0, "status": "needs_review", "reason": "문자 계약 위반"}]
+        result = _review_reasons_including_held_scenes([], held_scenes)
+        self.assertEqual(result, ["SCENE_HELD_FOR_REVIEW:scene_0"])
+        self.assertTrue(bool(result))
+
+    def test_merges_with_existing_reasons_without_duplicating(self):
+        held_scenes = [{"index": 3, "status": "needs_review"}]
+        result = _review_reasons_including_held_scenes(
+            ["VISUAL_QA_UNAVAILABLE", "SCENE_HELD_FOR_REVIEW:scene_3"], held_scenes,
+        )
+        self.assertEqual(result, ["SCENE_HELD_FOR_REVIEW:scene_3", "VISUAL_QA_UNAVAILABLE"])
+
+    def test_no_held_scenes_leaves_reasons_unchanged(self):
+        self.assertEqual(_review_reasons_including_held_scenes(["ART_DIRECTION:x"], []), ["ART_DIRECTION:x"])
 
 
 if __name__ == "__main__":

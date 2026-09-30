@@ -772,6 +772,21 @@ def _manual_review_reasons(scenes: list[dict], image_quality: dict | None = None
     return sorted(set(reasons))
 
 
+def _review_reasons_including_held_scenes(review_reasons: list[str], held_scenes: list[dict]) -> list[str]:
+    """자동 승인 응답이 보류된 장면을 무시하지 않도록 held_scenes도 합친다.
+
+    2026-09-30 job 12 재현: _manual_review_reasons()는 성공적으로 생성된
+    장면만 보고 계산되어, 계약을 통과하지 못해 ImageRequestHeld로 보류된
+    장면은 이 함수가 전혀 몰랐다. 그 결과 requires_manual_review=false인
+    응답이 Spring에 돌아가 AUTO 모드가 보류 장면을 무시한 채 IMAGES 게이트를
+    통과시켜 job 상태가 ASSEMBLING으로 넘어갔고, 이후 조립은 별도 게이트에서
+    막혔지만 job은 앞으로도 뒤로도 못 가는 상태가 됐다. job_id·scene index에
+    무관한 공통 경로다.
+    """
+    held_reasons = {f"SCENE_HELD_FOR_REVIEW:scene_{held.get('index')}" for held in held_scenes}
+    return sorted(set(review_reasons) | held_reasons)
+
+
 def _apply_info_scene_template(scene: dict) -> tuple[dict, object | None]:
     """검증 payload 기반으로만 v4 장면 계약을 주입한다."""
     template = select_template(scene, scene.get("proposed_template_id"))
@@ -3367,7 +3382,9 @@ Rules:
         image_quality["visual_mix"] = _visual_mix_audit(generated)
         persist_quality_report(job_id, "images", image_quality)
         logger.info("Parallel image generation complete: job=%s scenes=%s quality=%s", job_id, len(generated), image_quality["score"])
-        review_reasons = _manual_review_reasons(generated, image_quality)
+        review_reasons = _review_reasons_including_held_scenes(
+            _manual_review_reasons(generated, image_quality), held_scenes,
+        )
         return {
             "job_id": job_id,
             "scenes": generated,
