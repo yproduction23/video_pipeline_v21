@@ -212,6 +212,31 @@ class VisualQaUnavailableError(RuntimeError):
     """검수 연결 오류 때문에 같은 이미지를 다시 과금하면 안 되는 상태."""
 
 
+def _clear_scene_from_request_review(job_dir: Path, job_id: int, index: int) -> None:
+    """개별 장면 재생성이 성공하면 배치 경로와 같은 조립 차단 게이트를 갱신한다.
+
+    generate_single_scene()은 write_request_review()를 직접 호출하지 않아,
+    보류(needs_review)된 장면을 개별 재생성 UI로 고쳐도 image_request_review.json이
+    그대로 남아 assert_request_review_cleared()가 조립을 계속 막았다. 이 함수는
+    job_id·scene index에 무관한 공통 경로이며, 게이트 파일이 없거나 해당 장면이
+    보류 목록에 없으면 아무것도 하지 않는다.
+    """
+    path = job_dir / "image_request_review.json"
+    if not path.exists():
+        return
+    try:
+        review = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return
+    if not isinstance(review, dict):
+        return
+    remaining = [
+        scene for scene in (review.get("scenes") or [])
+        if int(scene.get("index", -1)) != index
+    ]
+    write_request_review(job_dir, job_id, remaining)
+
+
 def _sanitize_unplanned_prompt_structure(prompt: str, text_contract: dict) -> str:
     """과거 캐시의 빈 패널·임의 말풍선 지시를 장면 계약에 맞게 교정한다."""
     cleaned = str(prompt or "")
@@ -1384,6 +1409,7 @@ Rules:
                     "fal_preflight_attached": isinstance(ctx.get("fal_motion_safety"), dict),
                 },
             )
+            _clear_scene_from_request_review(target_dir, job_id, index)
             return ctx
         finally:
             release_image_job_lock(job_id, lock_token)

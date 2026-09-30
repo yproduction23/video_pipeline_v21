@@ -1,4 +1,5 @@
 import inspect
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,6 +10,7 @@ from app.utils.retry_policy import classify_image_error
 from app.workers.images_worker import (
     ImagesWorker,
     _bounded_text_generation_prompt,
+    _clear_scene_from_request_review,
     _image_prompt_cache_key,
     _image_provider_for_attempt,
     _requires_full_scene_regeneration,
@@ -223,6 +225,61 @@ class ImageWorkerStabilityTests(unittest.TestCase):
                         )
 
         self.assertEqual(provider.sections, ["scene_0"])
+
+
+class ClearSceneFromRequestReviewTests(unittest.TestCase):
+    """2026-09-30 job 12 재현: generate_single_scene()이 write_request_review()를
+    호출하지 않아, 보류(needs_review)된 장면을 개별 재생성으로 고쳐도
+    image_request_review.json이 그대로 남아 longform 조립이 계속 차단됐다.
+    job_id·scene index는 재현용 fixture일 뿐이며, 이 함수 자체는 어떤
+    job/scene에도 동일하게 동작해야 한다."""
+
+    def test_clears_only_the_fixed_scene_and_leaves_gate_blocked_for_others(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            review_path = job_dir / "image_request_review.json"
+            review_path.write_text(json.dumps({
+                "job_id": 12,
+                "requires_manual_review": True,
+                "request_gate_cleared": False,
+                "assembly_allowed": False,
+                "scenes": [
+                    {"index": 0, "status": "needs_review", "reason": "문자 계약 위반"},
+                    {"index": 3, "status": "needs_review", "reason": "다른 장면도 보류"},
+                ],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            _clear_scene_from_request_review(job_dir, 12, 0)
+
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            self.assertEqual([s["index"] for s in review["scenes"]], [3])
+            self.assertFalse(review["request_gate_cleared"])
+            self.assertFalse(review["assembly_allowed"])
+
+    def test_clears_the_gate_entirely_when_it_was_the_last_held_scene(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            review_path = job_dir / "image_request_review.json"
+            review_path.write_text(json.dumps({
+                "job_id": 12,
+                "requires_manual_review": True,
+                "request_gate_cleared": False,
+                "assembly_allowed": False,
+                "scenes": [{"index": 0, "status": "needs_review", "reason": "문자 계약 위반"}],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            _clear_scene_from_request_review(job_dir, 12, 0)
+
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            self.assertEqual(review["scenes"], [])
+            self.assertTrue(review["request_gate_cleared"])
+            self.assertTrue(review["assembly_allowed"])
+
+    def test_is_a_no_op_when_no_review_gate_file_exists(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            _clear_scene_from_request_review(job_dir, 99, 0)
+            self.assertFalse((job_dir / "image_request_review.json").exists())
 
 
 if __name__ == "__main__":
