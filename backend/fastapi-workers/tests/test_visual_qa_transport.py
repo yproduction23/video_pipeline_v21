@@ -949,3 +949,40 @@ def test_two_exact_approved_labels_on_distinct_scene_props_are_allowed(tmp_path:
         report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
 
     assert "text_approved_duplicate" not in report["reviewed"][0]["failure_categories"]
+
+
+def test_claude_visual_review_requests_max_tokens_32000(monkeypatch):
+    """2026-09-30 job 12 scene 4 재현: max_tokens=8000에서도 지적 사항이 많은
+    장면은 stop_reason=max_tokens로 잘려(len=17168, 닫는 "}" 없음) 검수 전체가
+    visual_qa_unavailable로 실패하고 배치 전체가 중단됐다. claude-sonnet-4-6가
+    max_tokens=32000을 그대로 받아들이는 것을 실측으로 확인했다(실제 청구는
+    사용한 토큰 기준이라 비용 영향 없음). 32000으로 올려 같은 부류의 잘림을
+    방지한다."""
+    import anthropic
+
+    captured: dict = {}
+
+    class _FakeBlock:
+        text = '{"scene_match": 80, "decision": "accept", "reason": "ok"}'
+
+    class _FakeResponse:
+        content = [_FakeBlock()]
+        stop_reason = "end_turn"
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeResponse()
+
+    class _FakeAnthropic:
+        def __init__(self, api_key=None):
+            self.messages = _FakeMessages()
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-fake-key")
+    monkeypatch.setattr(anthropic, "Anthropic", _FakeAnthropic)
+
+    payload = {"contents": [{"parts": [{"text": "review this scene"}]}]}
+    result = visual_qa_module._claude_visual_review(payload)
+
+    assert captured.get("max_tokens") == 32000
+    assert result == {"scene_match": 80, "decision": "accept", "reason": "ok"}
