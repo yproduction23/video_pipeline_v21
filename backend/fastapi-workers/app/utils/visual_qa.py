@@ -108,16 +108,23 @@ def _claude_visual_review(payload: dict[str, Any]) -> dict[str, Any] | None:
             model="claude-sonnet-4-6",
             # 2026-09-29: 실제 검수 지시문은 30개 이상의 boolean/문자열 필드와
             # 장문 한국어 reason을 요구한다. 1400은 이 응답을 자르기에 충분히
-            # 작아, 잘린 JSON이 예외 없이 조용히 None으로 처리돼 검수 불가
-            # 오류로 이어질 수 있었다(job 12에서 재현).
-            max_tokens=3000,
+            # 작았고, 3000으로 올린 뒤에도 점수가 낮게 나와 지적 사항이 많은
+            # 장면(job 12 scene 4)에서 다시 잘렸다(닫는 "}" 자체가 없었음).
+            # 잘린 JSON이 예외 없이 조용히 None으로 처리돼 검수 불가 오류로
+            # 이어질 수 있었다. 8000으로 크게 올려 이 계열의 잘림을 없앤다
+            # (실제 청구는 max_tokens가 아니라 실사용 토큰 기준이라 비용
+            # 영향은 없다).
+            max_tokens=8000,
             temperature=0,
             messages=[{"role": "user", "content": content}],
         )
         text = "".join(getattr(block, "text", "") for block in response.content)
         start, end = text.find("{"), text.rfind("}")
         if not (start >= 0 and end > start):
-            logger.warning("Claude visual QA fallback returned no JSON object: %r", text[:200])
+            logger.warning(
+                "Claude visual QA fallback returned no JSON object (stop_reason=%s, len=%d): %r",
+                getattr(response, "stop_reason", None), len(text), text[:200],
+            )
             return None
         parsed = _parse_json(text[start:end + 1])
         if parsed is None:
