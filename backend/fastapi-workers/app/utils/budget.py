@@ -628,6 +628,45 @@ def can_charge_overlay_vision(job_id: int, scene_key: str) -> bool:
         return not duplicate and projected <= int(cfg["max_budget_per_video_krw"])
 
 
+def can_charge_openai_image(job_id: int, estimated_usd: float) -> bool:
+    """2026-09-29: OpenAI 이미지 생성엔 Gemini의 ProviderRequestAudit 같은
+    사전 예산 게이트가 없어서, 크레딧이 완전히 바닥날 때까지 계속 재시도되며
+    실제로 1분짜리 테스트 job 하나에 $10 넘게 청구된 사고가 있었다. 요청
+    직전에 같은 job의 전체 영상 예산(₩40,000/₩70,000)을 넘지 않는지 확인한다.
+    """
+    cfg = runtime_config.get()
+    path = _job_path(job_id, "cost_ledger.json")
+    with _ledger_lock(path):
+        ledger = _load_ledger(path)
+        projected = int(ledger.get("total_krw", 0)) + _krw(estimated_usd, float(cfg["usd_krw"]))
+        return projected <= int(cfg["max_budget_per_video_krw"])
+
+
+def record_openai_image_cost(job_id: int, actual_usd: float, *, scene_key: str | None = None) -> dict[str, Any]:
+    """OpenAI 이미지 생성 1건의 실측 비용(응답 usage 기준)을 원장에 기록한다.
+
+    단가가 씬마다 다르므로(참조 이미지 유무·재시도 프롬프트 길이), record_cost의
+    고정 단가 표 대신 실제 비용을 그대로 받는다.
+    """
+    rates = runtime_config.get()
+    amount = _krw(actual_usd, float(rates["usd_krw"]))
+    path = _job_path(job_id, "cost_ledger.json")
+    with _ledger_lock(path):
+        ledger = _load_ledger(path)
+        item = {
+            "kind": "openai_image", "provider": "openai", "count": 1,
+            "amount_krw": amount, "at": datetime.now(timezone.utc).isoformat(),
+        }
+        if scene_key:
+            item["scene_key"] = scene_key
+        ledger["items"].append(item)
+        ledger["total_krw"] = int(ledger.get("total_krw", 0)) + amount
+        limit = int(rates["max_budget_per_video_krw"])
+        ledger["budget_overrun_krw"] = max(0, ledger["total_krw"] - limit)
+        _write_ledger(path, ledger)
+    return ledger
+
+
 def record_cost(job_id: int, kind: str, count: int = 1, *, scene_key: str | None = None) -> dict[str, Any]:
     """비-Gemini 요청의 비용을 기록한다.
 

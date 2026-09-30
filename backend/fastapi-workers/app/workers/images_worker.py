@@ -1337,6 +1337,8 @@ Rules:
                     character_image_paths=selected_references,
                     character_style_prompt=character_style_prompt,
                     image_provider=runtime_config.value("image_provider"),
+                    openai_job_id=job_id,
+                    openai_scene_key=f"image:{index}",
                     gemini_model=str((ctx.get("image_profile") or {}).get("model") or "gemini-3-pro-image"),
                     gemini_image_size=str((ctx.get("image_profile") or {}).get("image_size") or "2K"),
                     gemini_service_tier=runtime_config.value("gemini_service_tier"),
@@ -2165,6 +2167,8 @@ Rules:
                                     lora_trigger_word=lora_trigger_word,
                                     lora_scale=lora_scale,
                                 image_provider=provider_options.get("image_provider", runtime_config.value("image_provider")),
+                                openai_job_id=job_id,
+                                openai_scene_key=f"image:{i}",
                                 gemini_model=provider_options.get("gemini_model", image_profile.get("model")),
                                 gemini_image_size=provider_options.get("gemini_image_size", image_profile.get("image_size")),
                                 gemini_service_tier=provider_options.get("gemini_service_tier", runtime_config.value("gemini_service_tier")),
@@ -2213,6 +2217,7 @@ Rules:
                                         character_image_paths=effective_reference_paths, character_style_prompt=effective_character_style,
                                         lora_model_id=lora_model_id, lora_trigger_word=lora_trigger_word, lora_scale=lora_scale,
                                         image_provider=runtime_config.value("image_provider"), gemini_model=image_profile.get("model"),
+                                        openai_job_id=job_id, openai_scene_key=f"template_regen:{i}",
                                         gemini_image_size=image_profile.get("image_size"), gemini_service_tier=runtime_config.value("gemini_service_tier"),
                                         gemini_max_attempts=1, gemini_retry_base_seconds=runtime_config.value("gemini_pro_retry_base_seconds"),
                                         gemini_request_audit=ProviderRequestAudit.for_job(
@@ -2275,6 +2280,7 @@ Rules:
                                         character_style_prompt=effective_character_style,
                                         lora_model_id=lora_model_id,
                                         image_provider=runtime_config.value("image_provider"),
+                                        openai_job_id=job_id, openai_scene_key=f"image:{i}:variation:{v}",
                                         gemini_model=image_profile.get("model"),
                                         gemini_image_size=image_profile.get("image_size"),
                                         gemini_request_audit=ProviderRequestAudit.for_job(
@@ -3002,6 +3008,8 @@ Rules:
                                 attempt=attempt, max_retries=max_retries,
                                 force_fal_last_resort=force_fal_last_resort,
                             ),
+                            openai_job_id=job_id,
+                            openai_scene_key=f"image:{index}",
                             gemini_model=provider_options.get("gemini_model", image_profile.get("model")),
                             gemini_image_size=provider_options.get("gemini_image_size", image_profile.get("image_size")),
                             gemini_service_tier=provider_options.get("gemini_service_tier", runtime_config.value("gemini_service_tier")),
@@ -3047,6 +3055,7 @@ Rules:
                                 character_image_paths=effective_reference_paths, character_style_prompt=character_style_prompt if character_required else "none",
                                 lora_model_id=lora_model_id, lora_trigger_word=lora_trigger_word, lora_scale=lora_scale,
                                 image_provider=runtime_config.value("image_provider"), gemini_model=image_profile.get("model"),
+                                openai_job_id=job_id, openai_scene_key=f"template_regen:{index}",
                                 gemini_image_size=image_profile.get("image_size"), gemini_service_tier=runtime_config.value("gemini_service_tier"),
                                 gemini_max_attempts=1, gemini_retry_base_seconds=runtime_config.value("gemini_pro_retry_base_seconds"),
                                 gemini_request_audit=ProviderRequestAudit.for_job(
@@ -3381,6 +3390,7 @@ Rules:
             keyword=prompt_en[:30],
             character_style_prompt="background_only",
             image_provider=runtime_config.value("image_provider"),
+            openai_job_id=job_id, openai_scene_key=scene_key,
             gemini_model=(image_profile or {}).get("model"),
             gemini_image_size=(image_profile or {}).get("image_size"),
             # Retries are owned by the bounded scene executor.  Keeping a

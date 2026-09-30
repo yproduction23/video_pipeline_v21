@@ -19,6 +19,8 @@ import pytest
 from PIL import Image
 
 from app import runtime_config
+from app.utils import budget
+from app.utils.budget import ProviderRequestBudgetExceeded
 from app.providers.real.image import NanaBananaProvider
 
 
@@ -118,6 +120,32 @@ def test_openai_account_error_falls_back_to_fal(tmp_path, monkeypatch):
     assert result == output_path
     assert calls["openai"] == 1
     assert calls["fal"] == 1
+
+
+def test_openai_over_budget_raises_without_spending(tmp_path, monkeypatch):
+    """2026-09-29 사용자 재현: 예산 게이트가 없어 1분 테스트 job 하나에
+    $10 넘게 청구됐다. 예산이 이미 다 찬 job에서는 실제 POST 없이
+    ProviderRequestBudgetExceeded로 즉시 막혀야 한다."""
+    monkeypatch.setattr(budget, "_job_path", lambda _job_id, _name: tmp_path / _name)
+    monkeypatch.setattr(budget.runtime_config, "get", lambda: {
+        "usd_krw": 1400,
+        "max_budget_per_video_krw": 100,
+    })
+    calls = {"openai": 0}
+
+    def fake_post(*args, **kwargs):
+        calls["openai"] += 1
+        raise AssertionError("예산 초과 상태에서는 실제 요청을 보내면 안 된다")
+
+    monkeypatch.setattr("requests.post", fake_post)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-key")
+
+    provider = NanaBananaProvider()
+    with pytest.raises(ProviderRequestBudgetExceeded):
+        provider._generate_openai_image(
+            "a scene", str(tmp_path / "scene.png"), "sk-fake-key", job_id=99,
+        )
+    assert calls["openai"] == 0
 
 
 def test_openai_and_fal_failure_falls_back_to_gemini(tmp_path, monkeypatch):

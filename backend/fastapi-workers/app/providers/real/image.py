@@ -35,7 +35,11 @@ from pathlib import Path
 
 from app.providers.base import ImageProvider
 from app.providers.real.prompt_builder import STYLE_LOCK
-from app.utils.budget import ProviderRequestBudgetExceeded
+from app.utils.budget import (
+    ProviderRequestBudgetExceeded,
+    can_charge_openai_image,
+    record_openai_image_cost,
+)
 from app.utils.image_request_control import ImageRequestHeld, payload_evidence, digest
 
 logger = logging.getLogger(__name__)
@@ -221,9 +225,15 @@ class NanaBananaProvider(ImageProvider):
                 character_image_paths = kwargs.get("character_image_paths") or []
                 if not character_image_paths and kwargs.get("character_image_path"):
                     character_image_paths = [kwargs.get("character_image_path")]
-                if self._generate_openai_image(base_prompt, output_path, openai_key, character_image_paths):
+                if self._generate_openai_image(
+                    base_prompt, output_path, openai_key, character_image_paths,
+                    job_id=kwargs.get("openai_job_id"),
+                    scene_key=kwargs.get("openai_scene_key"),
+                ):
                     logger.info(f"OpenAI 이미지 생성 성공: {output_path}")
                     return True
+            except ProviderRequestBudgetExceeded:
+                raise
             except Exception as e:
                 logger.warning(f"OpenAI 이미지 생성 실패: {e}")
             return False
@@ -540,16 +550,38 @@ class NanaBananaProvider(ImageProvider):
             logger.error(f"Fal.ai Flux API 예외 발생: {e}")
             return False
 
+    # 2026-09-29: OpenAI 공식 문서 기준 gpt-image-1의 1536x1024 장당 단가는
+    # low $0.016 / medium $0.063 / high $0.25다. quality를 명시하지 않아 실제
+    # 등급을 예측할 수 없으므로, 사전 예산 체크는 안전하게 high 상한을 쓴다.
+    # (검증 안 된 추정치이므로 실제 청구액은 응답 usage 기준으로 별도 기록한다.)
+    _OPENAI_IMAGE_ESTIMATED_USD = 0.25
+    # 2026-09-29: 실측 청구 근거. gpt-image-2.5 계열 공식 문서는 출력 토큰당
+    # $30/백만으로 명시하지만, gpt-image-1 자체의 토큰 단가는 공식 문서에서
+    # 확인하지 못했다 — 같은 값을 쓴 최선의 추정치이며, 실제 결제 내역과
+    # 다를 수 있다는 점을 명시적으로 남긴다(AGENTS.md: 추측 금지 원칙).
+    _OPENAI_OUTPUT_TOKEN_USD_PER_MILLION = 30.0
+
     def _generate_openai_image(self, prompt: str, output_path: str, api_key: str,
                                character_image_paths: list[str] | None = None,
-                               model: str = "gpt-image-1", size: str = "1536x1024") -> bool:
+                               model: str = "gpt-image-1", size: str = "1536x1024",
+                               job_id: int | None = None, scene_key: str | None = None) -> bool:
         """OpenAI Images API로 이미지를 생성한다.
 
         참조 이미지가 있으면 /v1/images/edits(이미지 기반 수정)를, 없으면
         /v1/images/generations을 쓴다. 2026-09-29 파일럿에서 채널 캐릭터
         참조 이미지 기반 결과가 얼굴·배경 모두 사용자 승인을 받았다.
+
+        2026-09-29: 예산 게이트가 없어 1분 테스트 job 하나에 $10 넘게
+        청구된 사고가 있었다(크레딧이 바닥날 때까지 계속 재시도). job_id가
+        주어지면 요청 직전 영상 전체 예산(₩40,000/₩70,000)을 확인하고,
+        성공 후 실측 비용을 같은 원장에 기록한다.
         """
         import requests
+
+        if job_id is not None and not can_charge_openai_image(job_id, self._OPENAI_IMAGE_ESTIMATED_USD):
+            raise ProviderRequestBudgetExceeded(
+                f"OpenAI 이미지 예산 초과 예상(추정 ${self._OPENAI_IMAGE_ESTIMATED_USD}/장): job={job_id}"
+            )
 
         headers = {"Authorization": f"Bearer {api_key}"}
         reference_paths = [p for p in (character_image_paths or []) if p and os.path.exists(p)]
@@ -583,6 +615,14 @@ class NanaBananaProvider(ImageProvider):
                     return False
                 with open(output_path, "wb") as out:
                     out.write(base64.b64decode(b64))
+                if job_id is not None:
+                    usage = body.get("usage") or {}
+                    output_tokens = int(usage.get("output_tokens") or 0)
+                    actual_usd = (output_tokens / 1_000_000) * self._OPENAI_OUTPUT_TOKEN_USD_PER_MILLION
+                    try:
+                        record_openai_image_cost(job_id, actual_usd, scene_key=scene_key)
+                    except Exception as e:
+                        logger.warning(f"OpenAI 이미지 비용 기록 실패(생성은 성공): {e}")
                 return True
 
             # 401/403: 계정·키 문제. 재시도해도 풀리지 않으므로 즉시 다음

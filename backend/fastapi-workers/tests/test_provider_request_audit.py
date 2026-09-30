@@ -12,7 +12,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.utils import budget
-from app.utils.budget import ProviderRequestAudit, ProviderRequestBudgetExceeded, record_cost
+from app.utils.budget import (
+    ProviderRequestAudit,
+    ProviderRequestBudgetExceeded,
+    can_charge_openai_image,
+    record_cost,
+    record_openai_image_cost,
+)
 from app.providers.real.image import GeminiImageGenerationError, NanaBananaProvider
 from app.utils.image_request_control import ImageRequestHeld
 
@@ -125,6 +131,41 @@ def test_flash_2k_attempt_uses_its_own_model_rate_and_kind(tmp_path: Path, monke
     assert ledger["items"][0]["model"] == "gemini-3.1-flash-image"
     assert ledger["items"][0]["kind"] == "gemini_flash_image_request"
     assert ledger["items"][0]["estimated_usd"] == 0.101
+
+
+def test_can_charge_openai_image_blocks_once_projected_cost_exceeds_budget(tmp_path: Path, monkeypatch):
+    """2026-09-29 사용자 재현: OpenAI 이미지 생성엔 예산 게이트가 없어서
+    1분 테스트 job 하나에 $10 넘게 청구된 사고가 있었다. 이 게이트가 영상
+    전체 예산(₩40,000)을 넘기 전에 다음 요청을 막는지 고정한다."""
+    monkeypatch.setattr(budget, "_job_path", lambda _job_id, _name: tmp_path / _name)
+    monkeypatch.setattr(budget.runtime_config, "get", lambda: {
+        "usd_krw": 1400,
+        "max_budget_per_video_krw": 1000,
+    })
+
+    assert can_charge_openai_image(1, 0.25) is True
+    record_openai_image_cost(1, 0.25, scene_key="image:0")
+    # 350원(0.25달러) 기록 후, 남은 예산(650원)보다 비싼 다음 요청은 막는다.
+    assert can_charge_openai_image(1, 0.5) is False
+    # 남은 예산 안에 드는 요청은 계속 허용한다.
+    assert can_charge_openai_image(1, 0.4) is True
+
+
+def test_record_openai_image_cost_appends_to_the_shared_job_ledger(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(budget, "_job_path", lambda _job_id, _name: tmp_path / _name)
+    monkeypatch.setattr(budget.runtime_config, "get", lambda: {
+        "usd_krw": 1400,
+        "max_budget_per_video_krw": 40000,
+    })
+
+    ledger = record_openai_image_cost(7, 0.186, scene_key="image:3")
+
+    assert ledger["items"][0]["kind"] == "openai_image"
+    assert ledger["items"][0]["provider"] == "openai"
+    assert ledger["items"][0]["scene_key"] == "image:3"
+    assert ledger["total_krw"] == round(0.186 * 1400)
+    saved = json.loads((tmp_path / "cost_ledger.json").read_text(encoding="utf-8"))
+    assert saved["total_krw"] == ledger["total_krw"]
 
 
 def test_pro_priority_attempt_uses_priority_rate_and_records_requested_tier(tmp_path: Path, monkeypatch):
