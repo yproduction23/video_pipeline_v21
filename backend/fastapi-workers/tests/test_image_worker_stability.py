@@ -9,6 +9,7 @@ from app import runtime_config
 from app.utils.retry_policy import classify_image_error
 from app.workers.images_worker import (
     ImagesWorker,
+    _base_prompt_from_scene_spec,
     _bounded_text_generation_prompt,
     _clear_scene_from_request_review,
     _image_prompt_cache_key,
@@ -306,6 +307,47 @@ class ReviewReasonsIncludingHeldScenesTests(unittest.TestCase):
 
     def test_no_held_scenes_leaves_reasons_unchanged(self):
         self.assertEqual(_review_reasons_including_held_scenes(["ART_DIRECTION:x"], []), ["ART_DIRECTION:x"])
+
+
+class BasePromptFromSceneSpecTests(unittest.TestCase):
+    """2026-09-30 job 12 scene 4/5/6 재현: 배치 경로는 SceneDirector가 지정한
+    scene_spec(의상·동작·소품·카메라)이 있으면 build_prompt(spec)으로 구체적
+    프롬프트를 만드는데, generate_single_scene()은 scene_spec을 전혀 읽지
+    않아 항상 더 일반적인 compile_editorial_prompt로 대체돼 승인 장면의
+    구체적 연출 지시가 재생성 시 전부 사라졌다."""
+
+    _VALID_SPEC = {
+        "scene_id": "4",
+        "narration": "그런데 한국군이 자료 공유와 현장 출입을 거부했다는 겁니다.",
+        "headline": "자료 거부",
+        "metaphor": "문 앞에서 막히는 장면으로 표현",
+        "character_role": "조사 요청자",
+        "character_costume": "유엔 하늘색 조끼 차림의 골디, 하얀 장갑, 클립보드 소지",
+        "character_action": "골디가 굳게 닫힌 철문 앞에서 손을 뻗은 자세",
+        "character_emotion": "당혹스럽고 억울한 표정",
+        "setting": "군 시설 외벽, 콘크리트 담장, 철문, 황혼 빛",
+        "props": ["철문", "클립보드"],
+        "camera": "미디엄샷",
+        "side_characters": "",
+        "mood": "negative",
+    }
+
+    def test_returns_none_when_no_scene_spec(self):
+        self.assertIsNone(_base_prompt_from_scene_spec(None))
+        self.assertIsNone(_base_prompt_from_scene_spec({}))
+        self.assertIsNone(_base_prompt_from_scene_spec({"scene_id": ""}))
+
+    def test_builds_director_prompt_with_the_specific_costume_action_and_setting(self):
+        prompt = _base_prompt_from_scene_spec(self._VALID_SPEC)
+        self.assertIsNotNone(prompt)
+        assert prompt is not None
+        self.assertIn("유엔 하늘색 조끼", prompt)
+        self.assertIn("철문", prompt)
+        self.assertIn("당혹스럽고 억울한 표정", prompt)
+
+    def test_falls_back_to_none_when_spec_reconstruction_fails(self):
+        broken = {"scene_id": "4"}  # 필수 필드 누락
+        self.assertIsNone(_base_prompt_from_scene_spec(broken))
 
 
 if __name__ == "__main__":

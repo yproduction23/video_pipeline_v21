@@ -212,6 +212,22 @@ class VisualQaUnavailableError(RuntimeError):
     """검수 연결 오류 때문에 같은 이미지를 다시 과금하면 안 되는 상태."""
 
 
+def _base_prompt_from_scene_spec(scene_spec_dict: object) -> str | None:
+    """scene_spec(SceneDirector 지시)이 있으면 배치 경로와 같은 build_prompt()로
+    구체적 의상·동작·소품·카메라 프롬프트를 만든다. 없거나 재구성에 실패하면
+    None을 반환해 호출부가 범용 compile_editorial_prompt로 대체하게 한다.
+    """
+    if not isinstance(scene_spec_dict, dict) or not scene_spec_dict.get("scene_id"):
+        return None
+    try:
+        from app.pipeline.scene_director import SceneSpec
+        from app.providers.real.prompt_builder import build_prompt as build_director_prompt
+        return build_director_prompt(SceneSpec(**scene_spec_dict))
+    except Exception:
+        logger.warning("scene_spec으로 프롬프트 생성 실패, 범용 프롬프트로 대체", exc_info=True)
+        return None
+
+
 def _clear_scene_from_request_review(job_dir: Path, job_id: int, index: int) -> None:
     """개별 장면 재생성이 성공하면 배치 경로와 같은 조립 차단 게이트를 갱신한다.
 
@@ -1302,6 +1318,15 @@ Rules:
             raise ValueError("단일 장면 재생성에는 승인 장면 원문이 필요합니다.")
 
         base_prompt = str(ctx.get("prompt_en") or ctx.get("prompt") or "").strip()
+        if not base_prompt:
+            # 2026-09-30 발견: 배치 경로(_generate_parallel_scenes)는 scene_spec이
+            # 있으면(SceneDirector가 장면별 의상·행동·소품·카메라를 직접 지정)
+            # 항상 build_prompt(spec)을 쓴다. 이 단일 장면 경로는 scene_spec을
+            # 전혀 읽지 않아 항상 더 일반적인 compile_editorial_prompt로
+            # 대체됐다 — 원래 승인 장면이 SceneDirector로 연출됐어도 재생성 시
+            # 그 구체적 의상·동작·소품·카메라 지시가 전부 사라졌다. job/scene에
+            # 무관한 공통 계약 버그다.
+            base_prompt = _base_prompt_from_scene_spec(ctx.get("scene_spec")) or ""
         if not base_prompt:
             # CUSTOM 카테고리 등 금융과 무관한 주제도 이 경로를 탄다(예: 정치·
             # 안보 사안). "financial narration"으로 고정하면 실제 art_direction과
