@@ -103,7 +103,7 @@ _SUPPORTED_IMAGE_PROVIDERS = {"openai", "gemini", "fal"}
 # 2026-09-29: 회사 Gemini 계정이 무기명 카드라 결제 등록이 Google 정책상
 # 구조적으로 불가능해, OpenAI를 메인으로 두고 Fal/Gemini를 fallback으로
 # 쓰기로 했다(사용자 승인, 채널 캐릭터 참조 이미지 파일럿 통과).
-IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "openai").lower()
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "gemini").lower()
 if IMAGE_PROVIDER not in _SUPPORTED_IMAGE_PROVIDERS:
     raise RuntimeError(f"지원하지 않는 이미지 생성 공급자입니다: {IMAGE_PROVIDER}")
 # 이미지 품질을 예산 때문에 낮추면 사실 장면과 일반 장면의 품질 계약이

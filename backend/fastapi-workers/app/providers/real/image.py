@@ -207,8 +207,11 @@ class NanaBananaProvider(ImageProvider):
 
         # 공급자 선택. 2026-09-29: 회사 Gemini 계정이 무기명 카드라 결제 등록이
         # Google 정책상 구조적으로 불가능해, OpenAI를 메인으로 하고 Fal/Gemini를
-        # fallback으로 쓰기로 했다(사용자 승인, 채널 캐릭터 참조 이미지 파일럿 통과).
-        provider_preference = str(kwargs.get("image_provider", "openai")).lower()
+        # fallback으로 쓰기로 했었다(사용자 승인, 채널 캐릭터 참조 이미지 파일럿 통과).
+        # 2026-10-01: 회사가 본인 명의 카드로 Gemini 결제 등록을 다시 완료해
+        # 쿼터가 복구됐다. Gemini를 메인으로 되돌리고, OpenAI는 삭제하지 않고
+        # 보류(fallback) 기능으로 유지한다(사용자 결정).
+        provider_preference = str(kwargs.get("image_provider", "gemini")).lower()
 
         openai_key = os.getenv("OPENAI_API_KEY")
         fal_key = os.getenv("FAL_KEY") or os.getenv("FAL_API_KEY")
@@ -333,10 +336,11 @@ class NanaBananaProvider(ImageProvider):
                 "refusing untracked fallback"
             )
 
-        # 2026-09-29: OpenAI를 메인으로 하고 Fal → Gemini 순으로 대체한다.
+        # 2026-10-01: Gemini 결제 복구로 다시 메인이다. Fal → OpenAI 순으로
+        # 대체한다(OpenAI는 삭제하지 않고 보류 fallback으로 유지).
         # provider_preference로 다른 공급자를 먼저 요청하면 그 공급자를
         # 앞세우고 나머지를 같은 상대 순서로 뒤에 붙인다.
-        _DEFAULT_ORDER = ("openai", "fal", "gemini")
+        _DEFAULT_ORDER = ("gemini", "fal", "openai")
         if provider_preference in _DEFAULT_ORDER:
             order = (provider_preference, *(p for p in _DEFAULT_ORDER if p != provider_preference))
         else:
