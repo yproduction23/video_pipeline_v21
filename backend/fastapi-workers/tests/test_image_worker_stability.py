@@ -8,6 +8,8 @@ from unittest.mock import patch
 from app import runtime_config
 from app.utils.retry_policy import classify_image_error
 from app.workers.images_worker import (
+    FinalImageValidationError,
+    GeneratedImageVisualContractError,
     ImagesWorker,
     _base_prompt_from_scene_spec,
     _bounded_text_generation_prompt,
@@ -131,6 +133,27 @@ class ImageWorkerStabilityTests(unittest.TestCase):
         self.assertTrue(_requires_full_scene_regeneration({
             "failure_categories": ["text_generated_deterministic_numeric"],
         }))
+
+    def test_corrupted_final_file_requires_fresh_scene_candidate_not_a_local_edit(self):
+        """2026-10-01 job 12 scene 6 재현: 손상된 최종 파일에는 국소 편집으로
+        고칠 유효한 소스가 없으므로 항상 전체 재생성이어야 한다."""
+        self.assertTrue(_requires_full_scene_regeneration({
+            "failure_categories": ["final_image_invalid"],
+        }))
+
+    def test_final_image_validation_error_routes_through_scene_local_retry_not_batch_abort(self):
+        """2026-10-01 job 12 scene 6 재현: 공급자 호출은 성공했지만 최종 파일이
+        손상된 경우, 예전에는 평범한 RuntimeError라 classify_image_error가
+        "unclassified RuntimeError"로 분류해 NonRetryableImageGenerationError로
+        배치 전체(무관한 scene 7·8 포함)를 즉시 중단시켰다.
+        GeneratedImageVisualContractError를 상속해 다른 장면별 콘텐츠 거부와
+        같은 장면 로컬 재시도 경로를 타야 한다."""
+        self.assertTrue(issubclass(FinalImageValidationError, GeneratedImageVisualContractError))
+        exc = FinalImageValidationError(
+            "final image validation failed",
+            {"failure_categories": ["final_image_invalid"], "reason": "final image validation failed"},
+        )
+        self.assertEqual(exc.review["failure_categories"], ["final_image_invalid"])
 
     def test_screen_text_contract_does_not_invalidate_content_prompt_cache(self):
         common = {

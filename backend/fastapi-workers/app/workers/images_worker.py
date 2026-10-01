@@ -208,6 +208,18 @@ class DeterministicSurfaceMissingError(GeneratedImageVisualContractError):
     """승인 수치를 안전하게 넣을 빈 실제 소품 표면을 찾지 못한 경우다."""
 
 
+class FinalImageValidationError(GeneratedImageVisualContractError):
+    """공급자 호출 자체는 성공했지만 최종 파일이 손상·누락된 경우다.
+
+    2026-10-01 발견: 이전에는 평범한 RuntimeError였고, classify_image_error가
+    메시지를 인식하지 못해 "unclassified RuntimeError"로 비재시도 처리돼
+    NonRetryableImageGenerationError로 배치 전체가 즉시 중단됐다. 그 결과 scene 6
+    하나의 파일 손상 때문에 전혀 무관한 scene 7·8까지 시도조차 못 했다.
+    GeneratedImageVisualContractError를 상속해 다른 장면별 콘텐츠 거부와 같은
+    경로(장면별 재시도 → 소진 시 ImageRequestHeld)를 타게 한다.
+    """
+
+
 class VisualQaUnavailableError(RuntimeError):
     """검수 연결 오류 때문에 같은 이미지를 다시 과금하면 안 되는 상태."""
 
@@ -548,6 +560,9 @@ def _requires_full_scene_regeneration(review: dict | None) -> bool:
     return bool(categories & {
         "local_edit_blur_smear_artifact",
         "text_generated_deterministic_numeric",
+        # 파일 자체가 손상·누락된 경우 손댈 유효한 소스가 없으므로 국소 편집이
+        # 아니라 항상 전체 재생성이어야 한다.
+        "final_image_invalid",
     })
 
 
@@ -3048,7 +3063,10 @@ Rules:
                             job_id=job_id, scene_key=f"image:{index}",
                         )
                         if not valid_image(bg_path):
-                            raise RuntimeError("provider returned a missing, undersized, or invalid background")
+                            raise FinalImageValidationError(
+                                "provider returned a missing, undersized, or invalid background",
+                                {"failure_categories": ["final_image_invalid"], "reason": "invalid background"},
+                            )
                         
                         self._normalize_canvas(bg_path)
                         self._compose_layered_scene(
@@ -3101,7 +3119,10 @@ Rules:
                             ),
                         )
                         if not valid_image(raw_img_path):
-                            raise RuntimeError("provider returned a missing, undersized, or invalid image")
+                            raise FinalImageValidationError(
+                                "provider returned a missing, undersized, or invalid image",
+                                {"failure_categories": ["final_image_invalid"], "reason": "invalid raw image"},
+                            )
                         gemini_pressure.outcome()
                         provider_request_started = False
 
@@ -3143,7 +3164,10 @@ Rules:
                         
 
                     if not valid_image(img_path):
-                        raise RuntimeError("final image validation failed")
+                        raise FinalImageValidationError(
+                            "final image validation failed",
+                            {"failure_categories": ["final_image_invalid"], "reason": "final image validation failed"},
+                        )
                     if localized_edit:
                         preservation = assess_local_edit_preservation(
                             retry_source_path,
