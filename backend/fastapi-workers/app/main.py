@@ -206,6 +206,7 @@ class PipelineConfigUpdate(BaseModel):
     tts_stability_intro: Optional[float] = None
     tts_stability_body: Optional[float] = None
     tts_cer_threshold: Optional[float] = None
+    tts_duration_tolerance: Optional[float] = None
     tts_max_retries: Optional[int] = None
     tts_postprocess_enabled: Optional[bool] = None
     tts_sentence_pause_ms: Optional[int] = None
