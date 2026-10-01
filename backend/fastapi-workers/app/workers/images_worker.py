@@ -3248,7 +3248,14 @@ Rules:
                         )
                         continue
                     if isinstance(exc, VisualQaUnavailableError):
-                        raise NonRetryableImageGenerationError(
+                        # 2026-10-01 job 13 scene 0 재현(job 12 scene 7과 동일 메시지로
+                        # 기존에도 재현됨): 검수 연결 문제는 이 장면 하나의 문제이지
+                        # 다른 장면과 무관하다. 예전에는 NonRetryableImageGenerationError로
+                        # 바뀌어 대기 중인 다른 모든 scene의 futures까지 취소시켰다.
+                        # 같은 이미지를 다시 과금해 만들지 않는다는 이 예외의 설계
+                        # 의도(클래스 docstring)는 그대로 지키되, 장면 로컬 보류로 바꿔
+                        # 나머지 장면은 계속 진행되게 한다.
+                        raise ImageRequestHeld(
                             f"scene {index} 비전 검수 연결을 확인할 때까지 동일 이미지를 재생성하지 않음: {exc}"
                         ) from exc
                     if isinstance(exc, DeterministicSurfaceMissingError):

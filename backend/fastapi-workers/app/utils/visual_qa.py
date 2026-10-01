@@ -446,6 +446,18 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
             if response is not None and response.status_code == 200:
                 parts = (response.json().get("candidates") or [{}])[0].get("content", {}).get("parts") or []
                 verdict = _parse_json(next((part.get("text") for part in parts if part.get("text")), ""))
+                if not verdict:
+                    # 2026-10-01 job 13 scene 0 재현(job 12 scene 7과 동일 메시지로
+                    # 이미 재현됨): Gemini가 200을 반환했지만 candidates/parts가
+                    # 비어 있거나 응답이 JSON으로 파싱되지 않을 수 있다. 네트워크
+                    # 실패나 429/5xx와 마찬가지로 "검수 자체를 완료 못 함" 상태이므로
+                    # 같은 Claude 폴백을 태워야 멀쩡한 이미지가 검수 불능으로
+                    # 버려지지 않는다.
+                    logger.warning(
+                        "Gemini visual QA returned 200 without a parseable verdict for scene %s; falling back to Claude",
+                        index,
+                    )
+                    verdict = _claude_visual_review(payload)
             elif response is None or response.status_code == 429 or response.status_code >= 500:
                 verdict = _claude_visual_review(payload)
             if not verdict:

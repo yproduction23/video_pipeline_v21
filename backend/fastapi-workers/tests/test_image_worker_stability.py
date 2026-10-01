@@ -411,5 +411,110 @@ class BasePromptFromSceneSpecTests(unittest.TestCase):
         self.assertIsNone(_base_prompt_from_scene_spec(broken))
 
 
+class VisualQaUnavailableDoesNotAbortTheBatchTests(unittest.TestCase):
+    """2026-10-01 job 13 scene 0 재현: Gemini 비전 검수가 200을 반환했지만
+    검증 가능한 판정으로 파싱되지 않자(visual_qa_unavailable:200:0),
+    VisualQaUnavailableError가 즉시 NonRetryableImageGenerationError로
+    바뀌어 대기 중이던 다른 모든 장면의 futures까지 취소시켰다. job 12
+    scene 7에서도 같은 메시지로 재현된 바 있어 job 하나만의 문제가
+    아니라 공통 계약 버그다. 검수 연결 문제는 이 장면 하나만의 문제이지
+    다른 장면과 무관하므로, FinalImageValidationError(이 세션에서 이미
+    고친 scene 6 파일 손상 사례)와 같은 원칙으로 장면 로컬 보류
+    (ImageRequestHeld)로 가야 한다. 같은 이미지를 다시 과금해 만들지는
+    않는다는 VisualQaUnavailableError의 원래 설계 의도는 그대로 유지한다
+    (계약 위반 재시도 경로로 승격하지 않음)."""
+
+    def test_one_scenes_qa_connection_failure_still_lets_other_scenes_complete(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import ImagesWorker, VisualQaUnavailableError
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_image(self, **kwargs):
+                self.calls.append(kwargs["section"])
+                # valid_image()는 15000바이트 초과를 요구한다. 노이즈 이미지는
+                # 단색과 달리 PNG 압축으로 작아지지 않아 그 기준을 넘는다.
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_visual_qa(ctx, _img_path):
+            if ctx["index"] == 0:
+                raise VisualQaUnavailableError("장면 비전 검수를 완료하지 못함: visual_qa_unavailable:200:0")
+            return {}
+
+        scenes = [
+            {
+                "title": f"장면 {index + 1}",
+                "section": f"scene_{index}",
+                "narration": f"승인 내레이션 {index}",
+                "prompt_en": f"editorial finance scene {index}",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+            for index in range(3)
+        ]
+        provider = Provider()
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 3,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+             patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+             patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+             patch.object(budget, "_job_path", lambda job, name: Path(temp_dir) / name), \
+             patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+             patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
+             patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+             patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa):
+            with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                ImagesWorker()._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=provider,
+                    job_dir=Path(temp_dir),
+                    job_id=9002,
+                )
+
+            # 핵심 회귀 검증: scene 0의 검수 연결 실패가 scene 1·2의 제출/완료를
+            # 막지 않아야 한다 (예전에는 NonRetryableImageGenerationError로 바뀌어
+            # 대기 중인 futures를 전부 취소시켰다).
+            self.assertEqual(sorted(provider.calls), ["scene_0", "scene_1", "scene_2"])
+
+            review = json.loads((Path(temp_dir) / "image_request_review.json").read_text(encoding="utf-8"))
+            self.assertEqual([s["index"] for s in review["scenes"]], [0])
+
+
 if __name__ == "__main__":
     unittest.main()

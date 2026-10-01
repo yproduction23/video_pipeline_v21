@@ -455,6 +455,37 @@ def test_local_edit_preservation_rejects_a_blurred_text_patch(tmp_path: Path):
     assert result["passed"] is False
 
 
+def test_gemini_200_with_unparseable_body_falls_back_to_claude(tmp_path: Path):
+    """2026-10-01 job 13 scene 0 재현(job 12 scene 7과 동일 메시지로 이미
+    재현된 바 있음): Gemini가 HTTP 200을 반환했지만 candidates/parts가
+    비어 있거나 JSON으로 파싱되지 않으면, 기존 코드는 네트워크 실패나
+    429/5xx일 때만 타던 Claude 폴백을 타지 않고 바로
+    visual_qa_unavailable 경고를 남긴 채 포기했다. 그 결과 이미지 자체는
+    멀쩡한데도 장면 전체가 검수 불능으로 처리됐다. 429/5xx와 마찬가지로
+    "검수 자체를 완료 못 함"인 이 경우에도 Claude로 넘어가야 한다."""
+    image = tmp_path / "scene.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    empty_candidates = Mock(status_code=200)
+    empty_candidates.json.return_value = {"candidates": []}
+    scene = {
+        "index": 0,
+        "image_path": str(image),
+        "text": "주주환원 방식입니다.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review", return_value=empty_candidates,
+    ), patch(
+        "app.utils.visual_qa._claude_visual_review", return_value=_accepted_verdict(),
+    ) as fallback:
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    assert report["warnings"] == []
+    assert len(report["reviewed"]) == 1
+    fallback.assert_called_once()
+
+
 def test_scene_visual_qa_uses_claude_only_after_gemini_server_failure(tmp_path: Path):
     image = tmp_path / "scene.png"
     Image.new("RGB", (1920, 1080), "navy").save(image)
