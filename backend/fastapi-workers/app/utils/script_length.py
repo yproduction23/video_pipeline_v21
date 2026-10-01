@@ -23,7 +23,15 @@ MAX_SCRIPT_DURATION_TOLERANCE = 0.05
 # 기본값(0.25)이 바로 그 의도였는데, 두 검사가 같은 5% 캡을 공유하면서
 # 실제 음성 검사가 부당하게 좁아졌다(job 12: 60초 목표에서 75~77초가
 # 나와도 정상 범위일 수 있는데 5%(≈3초) 캡에 걸려 계속 실패).
-MAX_TTS_MEASURED_DURATION_TOLERANCE = 0.30
+#
+# 2026-10-01 사용자 결정: 짧은 영상이든 5·10·15분 영상이든 목표 분량에
+# 정확히 맞출 필요 없다며 tts_duration_tolerance를 25%→50%로 넓혔다.
+# 당시(2026-09-29) 정했던 이 안전 상한(0.30)이 /pipeline/config로 바뀐
+# 50% 설정값을 다시 30%로 깎아, 설정 UI에서는 "반영됨"으로 보이는데도
+# 실제 검사는 그대로 막히는 숨은 공통 계약 캡이 됐다(job 13: 60초 목표에
+# 85.2초=+42%가 나왔는데 "허용 30% 범위"로 거부). 사용자의 최종 결정을
+# 안전 상한에도 반영해 50%로 올린다.
+MAX_TTS_MEASURED_DURATION_TOLERANCE = 0.50
 
 
 def effective_duration_tolerance(configured: float) -> float:
@@ -32,7 +40,7 @@ def effective_duration_tolerance(configured: float) -> float:
 
 
 def effective_tts_measured_duration_tolerance(configured: float) -> float:
-    """실측 음성 길이 검사 허용치. 설정값(기본 25%)을 그대로 쓰되 1~30% 사이로만 제한한다."""
+    """실측 음성 길이 검사 허용치. 설정값(기본 25%)을 그대로 쓰되 1~50% 사이로만 제한한다."""
     return max(0.01, min(float(configured), MAX_TTS_MEASURED_DURATION_TOLERANCE))
 
 
