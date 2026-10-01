@@ -16,6 +16,7 @@ from app.workers.images_worker import (
     _clear_scene_from_request_review,
     _image_prompt_cache_key,
     _image_provider_for_attempt,
+    _persist_single_scene_visual_qa_review,
     _requires_full_scene_regeneration,
     _review_reasons_including_held_scenes,
     _sanitize_unplanned_prompt_structure,
@@ -305,6 +306,43 @@ class ClearSceneFromRequestReviewTests(unittest.TestCase):
             job_dir = Path(temp_dir)
             _clear_scene_from_request_review(job_dir, 99, 0)
             self.assertFalse((job_dir / "image_request_review.json").exists())
+
+
+class PersistSingleSceneVisualQaReviewTests(unittest.TestCase):
+    """2026-10-01 job 12 scene 0/4/5 재현: generate_single_scene()으로 고친
+    장면이 다음 전체 배치 실행에서 "기존 PNG 검증"의 캐시 히트를 찾지 못해
+    Spring의 원본(미보정) 데이터로 처음부터 다시 생성되며 같은 문제로
+    반복해서 되돌아갔다. 배치 경로(persist_visual_qa_review)와 동일한
+    visual_qa_cache.json에 써야 다음 배치 실행이 이미 통과한 파일을 그대로
+    재사용한다."""
+
+    def test_writes_review_keyed_by_scene_index(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            review = {"policy_version": 19, "image_sha256": "abc123", "decision": "accept"}
+            _persist_single_scene_visual_qa_review(job_dir, 4, review)
+
+            cache = json.loads((job_dir / "visual_qa_cache.json").read_text(encoding="utf-8"))
+            self.assertEqual(cache["4"], review)
+
+    def test_merges_with_existing_cache_without_dropping_other_scenes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            (job_dir / "visual_qa_cache.json").write_text(
+                json.dumps({"1": {"policy_version": 19, "image_sha256": "existing"}}), encoding="utf-8",
+            )
+            review = {"policy_version": 19, "image_sha256": "new-hash"}
+            _persist_single_scene_visual_qa_review(job_dir, 0, review)
+
+            cache = json.loads((job_dir / "visual_qa_cache.json").read_text(encoding="utf-8"))
+            self.assertEqual(cache["1"]["image_sha256"], "existing")
+            self.assertEqual(cache["0"], review)
+
+    def test_is_a_no_op_when_review_has_no_image_sha256(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            _persist_single_scene_visual_qa_review(job_dir, 0, {"decision": "accept"})
+            self.assertFalse((job_dir / "visual_qa_cache.json").exists())
 
 
 class ReviewReasonsIncludingHeldScenesTests(unittest.TestCase):

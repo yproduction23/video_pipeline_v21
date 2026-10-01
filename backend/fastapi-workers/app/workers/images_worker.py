@@ -240,6 +240,30 @@ def _base_prompt_from_scene_spec(scene_spec_dict: object) -> str | None:
         return None
 
 
+def _persist_single_scene_visual_qa_review(job_dir: Path, index: int, review: dict) -> None:
+    """개별 장면 재생성의 통과 판정을 배치 경로와 같은 visual_qa_cache.json에 남긴다.
+
+    2026-10-01 job 12 scene 0/4/5 재현: generate_single_scene()은 성공해도 이
+    캐시에 쓰지 않았다. 그 결과 다음 전체 배치 실행이 "기존 PNG 검증"에서
+    캐시 히트를 찾지 못해 이미 고친 장면을 Spring의 원본(미보정) 데이터로
+    처음부터 다시 생성해, 수동으로 고친 장면이 매번 같은 문제로 되돌아갔다.
+    job_id·scene index에 무관한 공통 경로다.
+    """
+    if not isinstance(review, dict) or not review.get("image_sha256"):
+        return
+    cache_path = job_dir / "visual_qa_cache.json"
+    try:
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, ValueError):
+        cache = {}
+    cache[str(index)] = review
+    staged = cache_path.with_suffix(".tmp")
+    staged.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(staged, cache_path)
+
+
 def _clear_scene_from_request_review(job_dir: Path, job_id: int, index: int) -> None:
     """개별 장면 재생성이 성공하면 배치 경로와 같은 조립 차단 게이트를 갱신한다.
 
@@ -1467,6 +1491,7 @@ Rules:
                     "fal_preflight_attached": isinstance(ctx.get("fal_motion_safety"), dict),
                 },
             )
+            _persist_single_scene_visual_qa_review(target_dir, index, ctx.get("visual_qa_review"))
             _clear_scene_from_request_review(target_dir, job_id, index)
             return ctx
         finally:
