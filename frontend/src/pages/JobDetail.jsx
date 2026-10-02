@@ -170,6 +170,7 @@ export default function JobDetail() {
   const [isGuidedConfirmOpen, setIsGuidedConfirmOpen] = useState(false)
   const [showEngPrompt, setShowEngPrompt] = useState({})
   const [showCostDetails, setShowCostDetails] = useState(false)
+  const [lightboxImage, setLightboxImage] = useState(null)
 
   const [selectedVoiceId, setSelectedVoiceId] = useState('default_ko')
   const [previewText, setPreviewText] = useState('오늘 코스피가 올랐다고요? 숫자만 보고 뛰어들면, 시장은 늘 한 발 먼저 웃습니다.')
@@ -1050,6 +1051,26 @@ export default function JobDetail() {
                   {job.autonomy === 'GUIDED' ? '업로드 검토 및 발행' : '즉시 YouTube 업로드'}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 cursor-zoom-out"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div className="max-w-4xl max-h-full flex flex-col items-center gap-3" onClick={e => e.stopPropagation()}>
+            <img src={lightboxImage.src} alt={lightboxImage.caption} className="max-w-full max-h-[80vh] object-contain rounded-lg border border-slate-300" />
+            <div className="flex items-center justify-between w-full gap-3">
+              <p className="text-sm text-white/90 break-words">{lightboxImage.caption}</p>
+              <button
+                onClick={() => setLightboxImage(null)}
+                className="flex-shrink-0 text-xs bg-white/10 text-white px-3 py-1.5 rounded-lg border border-white/30 hover:bg-white/20 transition"
+              >
+                닫기
+              </button>
             </div>
           </div>
         </div>
@@ -2078,7 +2099,13 @@ export default function JobDetail() {
                       {heldImageScenes.map((held) => (
                         <div key={held.index} className="flex gap-3 bg-white/60 border border-amber-200/60 rounded-xl p-3">
                           {held.image_path && (
-                            <div className="w-32 aspect-video bg-navy-700 rounded overflow-hidden border border-amber-300/60 flex-shrink-0">
+                            <div
+                              className="w-32 aspect-video bg-navy-700 rounded overflow-hidden border border-amber-300/60 flex-shrink-0 cursor-zoom-in"
+                              onClick={() => setLightboxImage({
+                                src: `/api/files/download?path=${encodeURIComponent(held.image_path)}&token=${token}&salt=${imageSalt}`,
+                                caption: `씬 #${held.index} 거부된 후보 · ${held.reason || ''}`,
+                              })}
+                            >
                               <img
                                 src={`/api/files/download?path=${encodeURIComponent(held.image_path)}&token=${token}&salt=${imageSalt}`}
                                 alt={`씬 ${held.index} 거부된 후보`}
