@@ -171,12 +171,28 @@ export default function Admin() {
   })
 
   const characterLibraryMutation = useMutation({
-    mutationFn: ({ channelId, characterDescription, regenerate, includeRoleCostumes = false }) =>
-      apiClient.post(`/channels/${channelId}/character-library`, { characterDescription, regenerate, includeRoleCostumes }).then(r => r.data),
+    mutationFn: ({ channelId, characterDescription, regenerate, includeRoleCostumes = false, poseNames }) =>
+      apiClient.post(`/channels/${channelId}/character-library`, { characterDescription, regenerate, includeRoleCostumes, poseNames }).then(r => r.data),
     onSuccess: (_, variables) => {
       qc.invalidateQueries({ queryKey: ['character-libraries'] })
       qc.invalidateQueries({ queryKey: ['admin-channels'] })
       refetchChannels()
+      if (variables.poseNames?.length === 1) {
+        // 방금 다시 만든 포즈 하나만 캐시를 비워 새 이미지를 다시 받아온다.
+        const key = `${variables.channelId}:${variables.poseNames[0]}`
+        setLibraryPoseUrls(prev => {
+          if (prev[key]) URL.revokeObjectURL(prev[key])
+          const next = { ...prev }
+          delete next[key]
+          return next
+        })
+        apiClient.get(`/channels/${variables.channelId}/character-library/pose/${variables.poseNames[0]}`, { responseType: 'blob' })
+          .then(response => {
+            setLibraryPoseUrls(prev => ({ ...prev, [key]: URL.createObjectURL(response.data) }))
+          })
+        alert(`'${variables.poseNames[0]}' 포즈를 다시 만들었습니다.`)
+        return
+      }
       alert(variables.includeRoleCostumes ? '역할별 의상 15종을 성공적으로 생성했습니다.' : (variables.regenerate ? '캐릭터 포즈를 전체 재생성했습니다.' : '포즈 에셋을 생성했습니다.'))
     },
     onError: (err) => alert('캐릭터 포즈 생성 실패: ' + (err.response?.data?.message || err.message)),
@@ -679,14 +695,27 @@ export default function Admin() {
                           <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
                             {libInfo.poses.map(p => {
                               const url = libraryPoseUrls[`${channel.channelId}:${p.pose}`]
+                              const isRegeneratingThisPose = characterLibraryMutation.isPending
+                                && characterLibraryMutation.variables?.channelId === channel.channelId
+                                && characterLibraryMutation.variables?.poseNames?.[0] === p.pose
                               return (
                                 <div key={p.pose} className="text-center">
-                                  <div className="aspect-square bg-slate-100 rounded-lg overflow-hidden border border-slate-200 flex items-center justify-center">
+                                  <div className="aspect-square bg-slate-100 rounded-lg overflow-hidden border border-slate-200 flex items-center justify-center relative">
                                     {url
                                       ? <img src={url} alt={p.label} className="w-full h-full object-contain" />
                                       : <span className="text-[10px] text-slate-400">없음</span>}
                                   </div>
                                   <p className="mt-1 text-[10px] font-semibold text-slate-600 truncate" title={p.label}>{p.label}</p>
+                                  <button
+                                    onClick={() => characterLibraryMutation.mutate({
+                                      channelId: channel.channelId, characterDescription,
+                                      regenerate: true, includeRoleCostumes: false, poseNames: [p.pose],
+                                    })}
+                                    disabled={isRegeneratingThisPose}
+                                    className="mt-1 w-full text-[10px] font-bold text-cyan-800 bg-cyan-50 border border-cyan-200 rounded px-1 py-0.5 hover:bg-cyan-100 disabled:opacity-50"
+                                  >
+                                    {isRegeneratingThisPose ? '생성 중...' : '재생성'}
+                                  </button>
                                 </div>
                               )
                             })}

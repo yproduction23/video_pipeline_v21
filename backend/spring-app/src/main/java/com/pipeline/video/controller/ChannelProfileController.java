@@ -278,8 +278,12 @@ public class ChannelProfileController {
             return ResponseEntity.badRequest().build();
         }
 
+        boolean hasPoseNames = request.getPoseNames() != null && !request.getPoseNames().isEmpty();
+        // 특정 포즈만 지정했다면 교정이 목적이므로, 이미 있는 파일이라도
+        // 반드시 다시 만든다(그렇지 않으면 깨진 기존 파일을 그대로 건너뛴다).
+        boolean effectiveRegenerate = request.isRegenerate() || hasPoseNames;
         Map<String, Object> result = fastApiClient.generateCharacterLibrary(
-                id, description, request.isRegenerate(), request.isIncludeRoleCostumes());
+                id, description, effectiveRegenerate, request.isIncludeRoleCostumes(), request.getPoseNames());
         Object posesDir = result.get("poses_dir");
         if (posesDir instanceof String path && !path.isBlank()) {
             profile.setCharacterPosesDir(path);
