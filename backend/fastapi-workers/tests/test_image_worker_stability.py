@@ -760,6 +760,12 @@ class HeldScenesNoLongerDiscardCompletedResultsTests(unittest.TestCase):
             self.assertEqual([s["index"] for s in response["scenes"]], [0])
             self.assertTrue(response["requires_manual_review"])
             self.assertIn("SCENE_HELD_FOR_REVIEW:scene_1", response["review_reasons"])
+            # 2026-10-02 사용자 요청: 운영자가 왜 막혔는지 화면에서 봐야 하므로,
+            # 짧은 코드가 아니라 실제 거부 사유 전체가 응답에 담겨야 한다.
+            self.assertEqual(response["held_scenes"], [
+                {"index": 1, "status": "needs_review",
+                 "reason": "장면 누적 요청 상한 도달", "next_allowed_at": 0},
+            ])
 
     def test_a_truly_unaccounted_failure_still_raises_incomplete(self):
         """보류되지 않고 설명도 안 된 실패(아래 임계 미만 일시 오류)까지

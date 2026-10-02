@@ -3543,6 +3543,11 @@ Rules:
             }),
             "requires_manual_review": bool(review_reasons),
             "review_reasons": review_reasons,
+            # 2026-10-02 사용자 요청: review_reasons는 "SCENE_HELD_FOR_REVIEW:scene_1"
+            # 같은 짧은 코드만 담아 운영자가 왜 막혔는지 화면에서 볼 수 없었다.
+            # 실제 거부 사유(비전 계약 위반 상세, 요청 상한 등)를 그대로 내려보내
+            # Spring의 IMAGE_QC_REPORT 자산에 보존되고 UI에 표시될 수 있게 한다.
+            "held_scenes": held_scenes,
         }
 
     # ============================

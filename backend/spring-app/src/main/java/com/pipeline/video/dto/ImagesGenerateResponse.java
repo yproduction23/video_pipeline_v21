@@ -47,6 +47,9 @@ public class ImagesGenerateResponse {
     @JsonProperty("review_reasons")
     private List<String> reviewReasons;
 
+    @JsonProperty("held_scenes")
+    private List<Map<String, Object>> heldScenes;
+
     @JsonProperty("operational_contract_audit")
     private Map<String, Object> operationalContractAudit;
 }

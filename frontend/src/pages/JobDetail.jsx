@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -197,8 +197,15 @@ export default function JobDetail() {
     ? 3000
     : false
 
+  // job 쿼리는 3초마다 재조회된다(line 192). 이 effect가 매번 재실행되면
+  // 사용자가 드롭다운에서 고른 목소리가 저장되기 전에(ttsVoiceId가 아직
+  // 비어있는 동안) 채널 기본값으로 계속 덮어써져, 실행을 눌러도 항상
+  // 채널 기본 목소리로만 생성되는 버그가 있었다. job이 바뀔 때만 기본값을
+  // 채워 넣고, 같은 job을 계속 보는 동안은 사용자의 선택을 보존한다.
+  const voiceDefaultsSeededForJobId = useRef(null)
   useEffect(() => {
-    if (job && channels.length > 0) {
+    if (job && channels.length > 0 && voiceDefaultsSeededForJobId.current !== job.id) {
+      voiceDefaultsSeededForJobId.current = job.id
       const channel = channels.find(c => c.channelId === job.channelId)
       if (channel && channel.voiceId) {
         setSelectedVoiceId(channel.voiceId)
@@ -256,6 +263,9 @@ export default function JobDetail() {
   })
   const { data: imageAssets = [] } = useQuery({
     queryKey: ['assets', id, 'SCENE_IMAGE'], queryFn: () => jobsApi.assets(id, 'SCENE_IMAGE'), enabled: !!job, refetchInterval: autoRefreshInterval,
+  })
+  const { data: imageQcAssets = [] } = useQuery({
+    queryKey: ['assets', id, 'IMAGE_QC_REPORT'], queryFn: () => jobsApi.assets(id, 'IMAGE_QC_REPORT'), enabled: !!job, refetchInterval: autoRefreshInterval,
   })
   const { data: ttsAssets = [] } = useQuery({
     queryKey: ['assets', id, 'TTS_AUDIO'], queryFn: () => jobsApi.assets(id, 'TTS_AUDIO'), enabled: !!job, refetchInterval: autoRefreshInterval,
@@ -334,6 +344,17 @@ export default function JobDetail() {
   const sortedImageList = useMemo(() => {
     return [...imageList].sort((a, b) => (a.index || 0) - (b.index || 0))
   }, [imageList])
+
+  // 2026-10-02 사용자 요청: 완료된 장면만 보이고 보류/실패한 장면은 사유를
+  // 전혀 볼 수 없었다. 이미지 생성 응답이 통째로 저장되는 IMAGE_QC_REPORT
+  // 자산에서 최신 held_scenes를 읽어 실패 사유를 그대로 보여준다.
+  const heldImageScenes = useMemo(() => {
+    if (!imageQcAssets.length) return []
+    try {
+      const latest = JSON.parse(imageQcAssets[imageQcAssets.length - 1].metaJson || '{}')
+      return [...(latest.held_scenes || [])].sort((a, b) => (a.index || 0) - (b.index || 0))
+    } catch { return [] }
+  }, [imageQcAssets])
 
   // Large 20-minute jobs can have 200+ scenes. Keep the editor responsive by
   // rendering ten review cards at a time.
@@ -423,6 +444,16 @@ export default function JobDetail() {
       alert('수정 실패: ' + (err.response?.data?.message || err.message))
     },
     onSettled: () => setActiveSceneActionIndex(null),
+  })
+
+  const retryHeldImagesMut = useMutation({
+    mutationFn: () => jobsApi.generateImages(id),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['approvals', id])
+      qc.invalidateQueries(['assets', id])
+    },
+    onError: (err) => alert('재시도 실패: ' + (err.response?.data?.message || err.message)),
   })
 
   const splitSceneMut = useMutation({
@@ -2024,6 +2055,38 @@ export default function JobDetail() {
                   </div>
                   )
                 })()}
+
+                {step.key === 'images' && heldImageScenes.length > 0 && (
+                  <div className="px-5 pb-4 border-t border-slate-200">
+                    <div className="flex items-center justify-between mt-3 mb-3">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle size={15} className="text-amber-500"/>
+                        <span className="text-sm text-navy-400">
+                          {heldImageScenes.length}개 씬 검토 필요 (실패 사유 아래 참고)
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => retryHeldImagesMut.mutate()}
+                        disabled={retryHeldImagesMut.isPending}
+                        className="flex items-center gap-1.5 text-xs bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20 border border-accent-cyan/30 px-3 py-1.5 rounded-lg font-semibold transition disabled:opacity-50"
+                      >
+                        {retryHeldImagesMut.isPending ? <Loader size={12} className="animate-spin"/> : <Zap size={12}/>}
+                        전체 재시도
+                      </button>
+                    </div>
+                    <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 bg-amber-50/40 rounded-xl p-3 border border-amber-200/60">
+                      {heldImageScenes.map((held) => (
+                        <div key={held.index} className="bg-white/60 border border-amber-200/60 rounded-xl p-3">
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">씬 #{held.index}</span>
+                            <span className="text-xs text-navy-400">{held.status === 'needs_review' ? '검토 필요' : held.status}</span>
+                          </div>
+                          <p className="text-xs text-slate-700 whitespace-pre-wrap break-words">{held.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })}
