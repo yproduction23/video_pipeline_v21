@@ -2076,12 +2076,27 @@ export default function JobDetail() {
                     </div>
                     <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 bg-amber-50/40 rounded-xl p-3 border border-amber-200/60">
                       {heldImageScenes.map((held) => (
-                        <div key={held.index} className="bg-white/60 border border-amber-200/60 rounded-xl p-3">
-                          <div className="flex items-center gap-1.5 mb-1.5">
-                            <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">씬 #{held.index}</span>
-                            <span className="text-xs text-navy-400">{held.status === 'needs_review' ? '검토 필요' : held.status}</span>
+                        <div key={held.index} className="flex gap-3 bg-white/60 border border-amber-200/60 rounded-xl p-3">
+                          {held.image_path && (
+                            <div className="w-32 aspect-video bg-navy-700 rounded overflow-hidden border border-amber-300/60 flex-shrink-0">
+                              <img
+                                src={`/api/files/download?path=${encodeURIComponent(held.image_path)}&token=${token}&salt=${imageSalt}`}
+                                alt={`씬 ${held.index} 거부된 후보`}
+                                className="w-full h-full object-cover"
+                                onError={e => { e.target.style.display = 'none' }}
+                              />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 mb-1.5">
+                              <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">씬 #{held.index}</span>
+                              <span className="text-xs text-navy-400">{held.status === 'needs_review' ? '검토 필요' : held.status}</span>
+                              {!held.image_path && (
+                                <span className="text-xs text-navy-400">(아직 후보 이미지 없음)</span>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-700 whitespace-pre-wrap break-words">{held.reason}</p>
                           </div>
-                          <p className="text-xs text-slate-700 whitespace-pre-wrap break-words">{held.reason}</p>
                         </div>
                       ))}
                     </div>

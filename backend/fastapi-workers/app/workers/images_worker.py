@@ -842,6 +842,18 @@ def _review_reasons_including_held_scenes(review_reasons: list[str], held_scenes
     return sorted(set(review_reasons) | held_reasons)
 
 
+def _held_scene_candidate_image_path(job_dir: Path, index: int) -> str | None:
+    """2026-10-02 사용자 요청: 보류 사유 텍스트만으로는 운영자가 실제로 뭐가
+    잘못됐는지 판단할 수 없다("실루엣이 깨짐 텍스트 깨짐 이런 텍스트가
+    아니라 실제 만들었던 이미지가 나와야"). 콘텐츠 계약 위반으로 보류된
+    장면은 preserve_retry_source()가 마지막 거부 후보를
+    scene_XXX_rejected.png로 이미 디스크에 남겨둔다. 그런 후보가 없는
+    경우(예: 장면 누적 요청 상한처럼 생성 자체가 시작되지 않은 경우)는
+    없는 경로를 지어내지 않고 None을 돌려준다."""
+    candidate = Path(job_dir) / f"scene_{index:03d}_rejected.png"
+    return str(candidate) if candidate.is_file() else None
+
+
 def _apply_info_scene_template(scene: dict) -> tuple[dict, object | None]:
     """검증 payload 기반으로만 v4 장면 계약을 주입한다."""
     template = select_template(scene, scene.get("proposed_template_id"))
@@ -3420,7 +3432,8 @@ Rules:
                         # 중복으로 넣지 않는다 — requires_manual_review/review_reasons로
                         # 정상 응답에 포함된다.
                         held_scenes.append({"index": index, "status": exc.status,
-                                            "reason": exc.reason, "next_allowed_at": exc.next_allowed_at})
+                                            "reason": exc.reason, "next_allowed_at": exc.next_allowed_at,
+                                            "image_path": _held_scene_candidate_image_path(job_dir, index)})
                         write_request_review(job_dir, job_id, held_scenes)
                         submit_next()
                         continue
@@ -3447,7 +3460,8 @@ Rules:
                         # 배치를 "Gemini Pro 과부하"로 멈추지 않고 이 장면만
                         # 장면 로컬 보류로 넘겨 나머지 장면은 계속 진행되게 한다.
                         held_scenes.append({"index": index, "status": "needs_review",
-                                            "reason": str(exc), "next_allowed_at": 0})
+                                            "reason": str(exc), "next_allowed_at": 0,
+                                            "image_path": _held_scene_candidate_image_path(job_dir, index)})
                         write_request_review(job_dir, job_id, held_scenes)
                         submit_next()
                         continue

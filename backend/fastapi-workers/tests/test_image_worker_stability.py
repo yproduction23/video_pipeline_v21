@@ -764,7 +764,7 @@ class HeldScenesNoLongerDiscardCompletedResultsTests(unittest.TestCase):
             # 짧은 코드가 아니라 실제 거부 사유 전체가 응답에 담겨야 한다.
             self.assertEqual(response["held_scenes"], [
                 {"index": 1, "status": "needs_review",
-                 "reason": "장면 누적 요청 상한 도달", "next_allowed_at": 0},
+                 "reason": "장면 누적 요청 상한 도달", "next_allowed_at": 0, "image_path": None},
             ])
 
     def test_a_truly_unaccounted_failure_still_raises_incomplete(self):
@@ -933,6 +933,176 @@ class ResumePathVisualQaUnavailableIsAlsoHeldNotRaisedRawTests(unittest.TestCase
             self.assertEqual([s["index"] for s in response["scenes"]], [1])
             self.assertTrue(response["requires_manual_review"])
             self.assertIn("SCENE_HELD_FOR_REVIEW:scene_0", response["review_reasons"])
+
+
+class HeldSceneIncludesLastRejectedCandidateImageTests(unittest.TestCase):
+    """2026-10-02 사용자 요청: "실루엣이 깨짐 텍스트 깨짐 이런 텍스트가 아니라
+    실제 만들었던 이미지가 나와야 내가 이해할 수 있을 것 같아" — 거부 사유
+    텍스트만으로는 운영자가 실제로 뭐가 잘못됐는지 판단할 수 없다. 콘텐츠
+    계약 위반으로 보류된 장면은 preserve_retry_source()가 이미 마지막 거부
+    후보를 scene_XXX_rejected.png로 디스크에 남겨두므로, 그 경로를 held_scenes
+    항목에 포함해 화면에서 바로 보여준다."""
+
+    def test_held_scene_with_a_saved_rejected_candidate_exposes_its_path(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import GeneratedImageVisualContractError, ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def generate_image(self, **kwargs):
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_visual_qa(ctx, _img_path):
+            if ctx["index"] == 0:
+                raise GeneratedImageVisualContractError(
+                    "장면 비전 계약 위반: visual_quality_floor",
+                    {"failure_categories": ["visual_quality_floor"], "reason": "품질 기준 미달"},
+                )
+            return {}
+
+        scenes = [
+            {
+                "title": "장면 1",
+                "section": "scene_0",
+                "narration": "승인 내레이션 0",
+                "prompt_en": "editorial finance scene 0",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+        ]
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+                 patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+                 patch.object(budget, "_job_path", lambda job, name: job_dir / name), \
+                 patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+                 patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
+                 patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa):
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=Provider(),
+                    job_dir=job_dir,
+                    job_id=9007,
+                )
+
+            held = response["held_scenes"][0]
+            self.assertEqual(held["index"], 0)
+            self.assertIsNotNone(held.get("image_path"))
+            self.assertTrue(Path(held["image_path"]).is_file())
+            self.assertEqual(Path(held["image_path"]).name, "scene_000_rejected.png")
+
+    def test_held_scene_without_a_saved_candidate_has_no_image_path(self):
+        """장면 누적 요청 상한처럼 후보 이미지가 아예 만들어지지 않은 경우,
+        거짓으로 경로를 지어내지 않고 비워둔다."""
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import ImageRequestHeld, ImagesWorker
+
+        class Provider:
+            def generate_image(self, **kwargs):
+                raise ImageRequestHeld("장면 누적 요청 상한 도달")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        scenes = [
+            {
+                "title": "장면 1",
+                "section": "scene_0",
+                "narration": "승인 내레이션 0",
+                "prompt_en": "editorial finance scene 0",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+        ]
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+                 patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+                 patch.object(budget, "_job_path", lambda job, name: job_dir / name):
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=Provider(),
+                    job_dir=job_dir,
+                    job_id=9008,
+                )
+
+            held = response["held_scenes"][0]
+            self.assertIsNone(held.get("image_path"))
 
 
 if __name__ == "__main__":
