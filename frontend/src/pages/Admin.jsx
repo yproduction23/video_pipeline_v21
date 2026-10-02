@@ -59,6 +59,9 @@ export default function Admin() {
   const [channelPreviewText, setChannelPreviewText] = useState({})
   const [channelPreviewUrls, setChannelPreviewUrls] = useState({})
   const [channelPreviewLoading, setChannelPreviewLoading] = useState({})
+  const [expandedLibraryChannel, setExpandedLibraryChannel] = useState('')
+  const [libraryPoseUrls, setLibraryPoseUrls] = useState({}) // "channelId:pose" -> blob url
+  const [libraryPosesLoading, setLibraryPosesLoading] = useState(false)
   const [newChannel, setNewChannel] = useState({
     channelId: '', channelName: '', characterKey: '', characterStylePrompt: '', referenceStyleProfile: 'black_han_sans_v1', voiceId: ''
   })
@@ -239,6 +242,33 @@ export default function Admin() {
       alert('음성 미리듣기 생성에 실패했습니다.')
     } finally {
       setChannelPreviewLoading(prev => ({ ...prev, [channelId]: false }))
+    }
+  }
+
+  const toggleLibraryGallery = async (channelId, poses) => {
+    if (expandedLibraryChannel === channelId) {
+      setExpandedLibraryChannel('')
+      return
+    }
+    setExpandedLibraryChannel(channelId)
+    const missing = poses.filter(p => !libraryPoseUrls[`${channelId}:${p.pose}`])
+    if (!missing.length) return
+    setLibraryPosesLoading(true)
+    try {
+      const fetched = await Promise.all(missing.map(async (p) => {
+        try {
+          const response = await apiClient.get(
+            `/channels/${channelId}/character-library/pose/${p.pose}`,
+            { responseType: 'blob' },
+          )
+          return [`${channelId}:${p.pose}`, URL.createObjectURL(response.data)]
+        } catch (_) {
+          return [`${channelId}:${p.pose}`, null]
+        }
+      }))
+      setLibraryPoseUrls(prev => ({ ...prev, ...Object.fromEntries(fetched) }))
+    } finally {
+      setLibraryPosesLoading(false)
     }
   }
 
@@ -630,7 +660,40 @@ export default function Admin() {
                       >
                         <ImagePlus size={14} /> 역할 의상 15종 생성
                       </button>
+                      {libInfo.exists && (
+                        <button
+                          onClick={() => toggleLibraryGallery(channel.channelId, libInfo.poses)}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-50 border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-100"
+                        >
+                          <Users size={14} />
+                          {expandedLibraryChannel === channel.channelId ? '포즈 닫기' : `포즈 보기 (${libInfo.pose_count ?? libInfo.poses.length})`}
+                        </button>
+                      )}
                     </div>
+
+                    {expandedLibraryChannel === channel.channelId && (
+                      <div className="pt-3 border-t border-slate-200">
+                        {libraryPosesLoading ? (
+                          <p className="text-xs text-slate-500">포즈 이미지 불러오는 중...</p>
+                        ) : (
+                          <div className="grid grid-cols-4 sm:grid-cols-6 gap-3">
+                            {libInfo.poses.map(p => {
+                              const url = libraryPoseUrls[`${channel.channelId}:${p.pose}`]
+                              return (
+                                <div key={p.pose} className="text-center">
+                                  <div className="aspect-square bg-slate-100 rounded-lg overflow-hidden border border-slate-200 flex items-center justify-center">
+                                    {url
+                                      ? <img src={url} alt={p.label} className="w-full h-full object-contain" />
+                                      : <span className="text-[10px] text-slate-400">없음</span>}
+                                  </div>
+                                  <p className="mt-1 text-[10px] font-semibold text-slate-600 truncate" title={p.label}>{p.label}</p>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
               })}
