@@ -516,5 +516,122 @@ class VisualQaUnavailableDoesNotAbortTheBatchTests(unittest.TestCase):
             self.assertEqual([s["index"] for s in review["scenes"]], [0])
 
 
+class ContentRejectionExhaustionIsNotMislabeledAsProviderOverloadTests(unittest.TestCase):
+    """2026-10-02 job 13 scene 1 재현: Gemini API 호출 자체는 매번
+    "공식 Gemini API 이미지 생성 성공"으로 성공했지만, 우리 쪽 비전 계약
+    검수가 매 시도(메인 공급자 2회 + 국소 편집 1회 + Fal.ai 대체 1회)를
+    계속 거부해 scene 1이 재시도 예산을 모두 소진했다. 이 마지막
+    "image generation failed after N attempts" RuntimeError는 원인
+    체인(from last_error) 없이 그냥 generic RuntimeError였고, 바깥
+    except 블록은 NonRetryableImageGenerationError/VisualQaUnavailableError가
+    아닌 예외를 전부 무조건 "일시적 공급자 장애"로 간주해 카운터를
+    올렸다. image_same_error_break_count=1이라 단 한 번의 콘텐츠 거부
+    소진만으로 "Gemini Pro 과부하"라는, 실제로는 틀린 메시지와 함께
+    대기 중인 다른 모든 scene의 futures까지 취소시켰다. 실제로는
+    공급자 장애가 전혀 아니라 scene 1 하나의 콘텐츠 계약 문제였다."""
+
+    def test_scene_exhausting_retries_on_content_rejections_is_held_not_treated_as_overload(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import (
+            GeneratedImageVisualContractError,
+            ImageProviderTemporarilyUnavailableError,
+            ImagesWorker,
+        )
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_image(self, **kwargs):
+                self.calls.append(kwargs["section"])
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_visual_qa(ctx, _img_path):
+            if ctx["index"] == 0:
+                # Gemini 호출은 매번 성공하지만, 내용은 계속 계약을 위반한다
+                # (job 13 scene 1처럼 실제 API 장애가 전혀 아님).
+                raise GeneratedImageVisualContractError(
+                    "장면 비전 계약 위반: visual_quality_floor",
+                    {"failure_categories": ["visual_quality_floor"], "reason": "품질 기준 미달"},
+                )
+            return {}
+
+        scenes = [
+            {
+                "title": f"장면 {index + 1}",
+                "section": f"scene_{index}",
+                "narration": f"승인 내레이션 {index}",
+                "prompt_en": f"editorial finance scene {index}",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+            for index in range(3)
+        ]
+        provider = Provider()
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 1,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+             patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+             patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+             patch.object(budget, "_job_path", lambda job, name: Path(temp_dir) / name), \
+             patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+             patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
+             patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+             patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa):
+            with self.assertRaises(RuntimeError) as ctx:
+                ImagesWorker()._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=provider,
+                    job_dir=Path(temp_dir),
+                    job_id=9003,
+                )
+
+            # 핵심 회귀 검증: 실제 공급자 장애가 아니므로
+            # ImageProviderTemporarilyUnavailableError(과부하 메시지)로 번지면
+            # 안 되고, scene 1·2는 취소되지 않고 계속 진행돼야 한다.
+            self.assertNotIsInstance(ctx.exception, ImageProviderTemporarilyUnavailableError)
+            self.assertIn("incomplete", str(ctx.exception))
+            # scene 0은 거부당할 때마다 재생성을 시도해 여러 번 호출되지만, 핵심은
+            # scene 1·2가 취소되지 않고 (최소 1번씩) 시도됐다는 점이다.
+            self.assertEqual(set(provider.calls), {"scene_0", "scene_1", "scene_2"})
+
+            review = json.loads((Path(temp_dir) / "image_request_review.json").read_text(encoding="utf-8"))
+            self.assertEqual([s["index"] for s in review["scenes"]], [0])
+
+
 if __name__ == "__main__":
     unittest.main()

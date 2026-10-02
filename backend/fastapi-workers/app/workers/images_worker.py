@@ -3325,10 +3325,15 @@ Rules:
                     # Gemini HTTP의 대기는 영속 요청 제어기만 소유한다.
                     # 감사 계약 밖의 예외도 로컬 루프로 재전송하지 않는다.
                     raise RuntimeError(f"감사되지 않은 공급자 오류: {type(exc).__name__}") from exc
+            # 2026-10-02 job 13 scene 1 재현: 아래에서 원인 체인(from last_error)을
+            # 지키지 않으면, 바깥 except 블록이 진짜 원인을 볼 수 없어 이 예외를
+            # 무조건 "일시적 공급자 장애"로 취급한다. 실제로는 Gemini API 호출은
+            # 매번 성공했고, 우리 쪽 콘텐츠 계약 검수만 반복해서 거부한 경우에도
+            # "Gemini Pro 과부하"라는 잘못된 메시지로 둔갑했다.
             raise RuntimeError(
                 f"scene {index} image generation failed after {max_retries} attempts"
                 f"{' (Fal.ai 대체 시도 포함)' if force_fal_last_resort else ''}: {last_error}"
-            )
+            ) from last_error
 
         configured_workers = max(1, min(int(runtime_config.value("gemini_max_concurrency")), 32))
         max_workers = gemini_pressure.recommended_concurrency(configured_workers)
@@ -3408,7 +3413,21 @@ Rules:
                         raise RuntimeError(
                             f"Image generation stopped before recovery: scene {index} has a non-retryable error: {exc}"
                         ) from exc
-                    signature = error_signature(exc.__cause__ or exc)
+                    root_cause = exc.__cause__ or exc
+                    if not classify_image_error(root_cause).retryable:
+                        # 2026-10-02 job 13 scene 1 재현: Gemini API 호출은 매번
+                        # 성공했지만(공식 응답 성공 로그 다수), 우리 쪽 콘텐츠 계약
+                        # 검수가 메인 공급자·국소 편집·Fal.ai 대체까지 전부 거부해
+                        # 재시도 예산을 소진했다. 진짜 원인(root_cause)이 네트워크·
+                        # 429·5xx 패턴이 아니면 실제 공급자 장애가 아니므로, 전체
+                        # 배치를 "Gemini Pro 과부하"로 멈추지 않고 이 장면만
+                        # 장면 로컬 보류로 넘겨 나머지 장면은 계속 진행되게 한다.
+                        held_scenes.append({"index": index, "status": "needs_review",
+                                            "reason": str(exc), "next_allowed_at": 0})
+                        write_request_review(job_dir, job_id, held_scenes)
+                        submit_next()
+                        continue
+                    signature = error_signature(root_cause)
                     same_error_counts[signature] += 1
                     if same_error_counts[signature] >= break_count:
                         for pending in futures:
