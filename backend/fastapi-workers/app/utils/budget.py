@@ -81,6 +81,7 @@ class ProviderRequestAudit:
         usd_krw: float,
         budget_limit_krw: int,
         request_metadata: dict[str, Any] | None = None,
+        enforce_request_lock: bool = True,
     ) -> None:
         self._path = path
         self._scene_key = scene_key
@@ -92,7 +93,7 @@ class ProviderRequestAudit:
         self._budget_limit_krw = int(budget_limit_krw)
         self._request_metadata = dict(request_metadata or {})
         self._run_id = uuid.uuid4().hex
-        self._control = ImageRequestControl() if provider == "gemini" else None
+        self._control = ImageRequestControl() if provider == "gemini" and enforce_request_lock else None
         self._last_token = None
 
     @classmethod
@@ -135,8 +136,17 @@ class ProviderRequestAudit:
         usd_krw: float,
         budget_limit_krw: int,
         request_metadata: dict[str, Any] | None = None,
+        enforce_request_lock: bool = True,
     ) -> "ProviderRequestAudit":
-        """V5처럼 작업 디렉터리가 다른 실행에도 같은 게이트를 사용한다."""
+        """V5처럼 작업 디렉터리가 다른 실행에도 같은 게이트를 사용한다.
+
+        ``enforce_request_lock=False``는 비용 예산 확인은 그대로 유지하되
+        ``ImageRequestControl``의 장면당 영구 재검토 잠금 상태 기계는 거치지
+        않는다. 관리자가 직접 결과를 보고 누르는 캐릭터 라이브러리 포즈
+        재생성처럼, 클릭 자체가 이미 인간 검수인 호출에만 사용한다. 자동
+        파이프라인의 Job 장면 생성(``for_job``)은 이 옵션이 없고 항상 잠금을
+        적용한다.
+        """
         if model not in _GEMINI_IMAGE_RATE_KEYS:
             raise ValueError(f"지원하지 않는 Gemini 이미지 생성 모델입니다: {model}")
         return cls(
@@ -153,6 +163,7 @@ class ProviderRequestAudit:
             usd_krw=usd_krw,
             budget_limit_krw=budget_limit_krw,
             request_metadata=request_metadata,
+            enforce_request_lock=enforce_request_lock,
         )
 
     @classmethod

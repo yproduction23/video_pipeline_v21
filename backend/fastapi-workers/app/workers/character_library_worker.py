@@ -322,6 +322,10 @@ class CharacterLibraryWorker:
                     # 포즈 15장 추정 비용(₩5천대)보다 훨씬 커서, 폭주 호출만 막는
                     # 상한 역할을 한다.
                     budget_limit_krw=int(runtime_config.value("max_budget_per_video_krw")),
+                    # 관리자가 직접 결과를 보고 누르는 캐릭터 라이브러리 재생성은
+                    # 클릭 자체가 이미 인간 검수다. 자동 Job 장면 생성과 같은
+                    # ImageRequestControl의 영구 재검토 잠금을 공유하지 않는다.
+                    enforce_request_lock=False,
                 )
                 ai_provider.generate_image(
                     prompt=prompt,

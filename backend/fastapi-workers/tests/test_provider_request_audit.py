@@ -84,6 +84,45 @@ def test_reservation_blocks_post_before_a_network_call(tmp_path: Path):
     assert not path.exists()
 
 
+def test_needs_review_lock_blocks_a_normal_for_path_retry(tmp_path: Path):
+    path = tmp_path / "request_ledger.json"
+
+    def make_audit():
+        return ProviderRequestAudit.for_path(
+            path=path, scene_key="character_library:channel_b:explorer",
+            model="gemini-3-pro-image", unit_usd=0.1, usd_krw=1000, budget_limit_krw=300,
+        )
+
+    token = make_audit().before_attempt(attempt=1)
+    make_audit().after_attempt(token, outcome="rejected", retryable=False, permanent=True)
+
+    with pytest.raises(ImageRequestHeld, match="영구 오류"):
+        make_audit().before_attempt(attempt=1)
+
+
+def test_enforce_request_lock_false_lets_admin_retry_past_a_needs_review_lock(tmp_path: Path):
+    """캐릭터 라이브러리 포즈 재생성처럼 관리자가 직접 결과를 검수하는 호출은
+    영상 Job 장면 생성과 같은 영구 잠금 상태 기계를 공유하지 않아야 한다."""
+    path = tmp_path / "request_ledger.json"
+
+    def make_audit():
+        return ProviderRequestAudit.for_path(
+            path=path, scene_key="character_library:channel_b:explorer",
+            model="gemini-3-pro-image", unit_usd=0.1, usd_krw=1000, budget_limit_krw=300,
+            enforce_request_lock=False,
+        )
+
+    token = make_audit().before_attempt(attempt=1)
+    make_audit().after_attempt(token, outcome="rejected", retryable=False, permanent=True)
+
+    # 잠금 상태 기계를 전혀 거치지 않으므로 같은 scene_key로도 바로 재시도할 수 있다.
+    retry_token = make_audit().before_attempt(attempt=1)
+    make_audit().after_attempt(retry_token, status_code=200, outcome="http_200")
+
+    ledger = json.loads(path.read_text(encoding="utf-8"))
+    assert [item["request_control"] for item in ledger["items"]] == [{}, {}]
+
+
 def test_v4_success_record_does_not_duplicate_a_reserved_gemini_attempt(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(budget, "_job_path", lambda _job_id, _name: tmp_path / _name)
     monkeypatch.setattr(budget.runtime_config, "get", lambda: {
