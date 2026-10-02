@@ -355,7 +355,7 @@ public class FastApiClient {
                                                   String characterImagePath, String characterStylePrompt,
                                                   String characterPosesDir) {
         return generateImages(jobId, ttsMetaJson, scriptMetaJson, characterImagePath,
-                characterStylePrompt, characterPosesDir, null, null, null, null, null, null);
+                characterStylePrompt, characterPosesDir, null, null, null, null, null, null, null);
     }
 
     public ImagesGenerateResponse getImageBatchStatus(Long jobId) {
@@ -381,7 +381,8 @@ public class FastApiClient {
                                                   String characterPosesDir,
                                                   String loraModelId, String loraTriggerWord,
                                                   Float loraScale, String autonomyMode,
-                                                  java.math.BigDecimal budgetLimitKrw, String budgetPolicyVersion) {
+                                                  java.math.BigDecimal budgetLimitKrw, String budgetPolicyVersion,
+                                                  List<Integer> sceneIndices) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("job_id", jobId);
@@ -407,6 +408,10 @@ public class FastApiClient {
             if (budgetLimitKrw != null) {
                 bodyMap.put("budget_limit_krw", budgetLimitKrw.intValue());
                 bodyMap.put("budget_policy_version", budgetPolicyVersion);
+            }
+            // 2026-10-02 사용자 요청: 검토 필요 목록에서 고른 씬만 재시도한다.
+            if (sceneIndices != null && !sceneIndices.isEmpty()) {
+                bodyMap.put("scene_indices", sceneIndices);
             }
             return objectMapper.readValue(
                     postJson(fastApiUrl + "/workers/images/generate", bodyMap),

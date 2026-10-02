@@ -171,6 +171,7 @@ export default function JobDetail() {
   const [showEngPrompt, setShowEngPrompt] = useState({})
   const [showCostDetails, setShowCostDetails] = useState(false)
   const [lightboxImage, setLightboxImage] = useState(null)
+  const [selectedHeldIndices, setSelectedHeldIndices] = useState(() => new Set())
 
   const [selectedVoiceId, setSelectedVoiceId] = useState('default_ko')
   const [previewText, setPreviewText] = useState('오늘 코스피가 올랐다고요? 숫자만 보고 뛰어들면, 시장은 늘 한 발 먼저 웃습니다.')
@@ -357,6 +358,13 @@ export default function JobDetail() {
     } catch { return [] }
   }, [imageQcAssets])
 
+  // 2026-10-02 사용자 요청: "내가 빼고 싶은걸 뺄 수 있게" — 검토 필요 목록이
+  // 바뀔 때마다 기본값은 전체 선택(기존 "전체 재시도"와 동일한 동작)으로
+  // 두고, 사용자가 특정 씬의 체크를 풀면 그 씬은 재시도 대상에서 빠진다.
+  useEffect(() => {
+    setSelectedHeldIndices(new Set(heldImageScenes.map(h => h.index)))
+  }, [heldImageScenes])
+
   // Large 20-minute jobs can have 200+ scenes. Keep the editor responsive by
   // rendering ten review cards at a time.
   const scenePageCount = Math.max(1, Math.ceil(sortedImageList.length / 10))
@@ -448,7 +456,7 @@ export default function JobDetail() {
   })
 
   const retryHeldImagesMut = useMutation({
-    mutationFn: () => jobsApi.generateImages(id),
+    mutationFn: (sceneIndices) => jobsApi.generateImages(id, sceneIndices),
     onSuccess: () => {
       qc.invalidateQueries(['job', id])
       qc.invalidateQueries(['approvals', id])
@@ -2083,21 +2091,44 @@ export default function JobDetail() {
                       <div className="flex items-center gap-2">
                         <AlertCircle size={15} className="text-amber-500"/>
                         <span className="text-sm text-navy-400">
-                          {heldImageScenes.length}개 씬 검토 필요 (실패 사유 아래 참고)
+                          {heldImageScenes.length}개 씬 검토 필요 (실패 사유 아래 참고 · {selectedHeldIndices.size}개 선택됨)
                         </span>
                       </div>
-                      <button
-                        onClick={() => retryHeldImagesMut.mutate()}
-                        disabled={retryHeldImagesMut.isPending}
-                        className="flex items-center gap-1.5 text-xs bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20 border border-accent-cyan/30 px-3 py-1.5 rounded-lg font-semibold transition disabled:opacity-50"
-                      >
-                        {retryHeldImagesMut.isPending ? <Loader size={12} className="animate-spin"/> : <Zap size={12}/>}
-                        전체 재시도
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setSelectedHeldIndices(
+                            selectedHeldIndices.size === heldImageScenes.length
+                              ? new Set()
+                              : new Set(heldImageScenes.map(h => h.index))
+                          )}
+                          className="text-xs text-navy-400 hover:text-accent-cyan underline underline-offset-2"
+                        >
+                          {selectedHeldIndices.size === heldImageScenes.length ? '전체 해제' : '전체 선택'}
+                        </button>
+                        <button
+                          onClick={() => retryHeldImagesMut.mutate(Array.from(selectedHeldIndices))}
+                          disabled={retryHeldImagesMut.isPending || selectedHeldIndices.size === 0}
+                          className="flex items-center gap-1.5 text-xs bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20 border border-accent-cyan/30 px-3 py-1.5 rounded-lg font-semibold transition disabled:opacity-50"
+                        >
+                          {retryHeldImagesMut.isPending ? <Loader size={12} className="animate-spin"/> : <Zap size={12}/>}
+                          선택 재시도 ({selectedHeldIndices.size})
+                        </button>
+                      </div>
                     </div>
                     <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 bg-amber-50/40 rounded-xl p-3 border border-amber-200/60">
                       {heldImageScenes.map((held) => (
                         <div key={held.index} className="flex gap-3 bg-white/60 border border-amber-200/60 rounded-xl p-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedHeldIndices.has(held.index)}
+                            onChange={() => setSelectedHeldIndices(prev => {
+                              const next = new Set(prev)
+                              if (next.has(held.index)) next.delete(held.index)
+                              else next.add(held.index)
+                              return next
+                            })}
+                            className="mt-1 w-4 h-4 flex-shrink-0 accent-accent-cyan cursor-pointer"
+                          />
                           {held.image_path && (
                             <div
                               className="w-32 aspect-video bg-navy-700 rounded overflow-hidden border border-amber-300/60 flex-shrink-0 cursor-zoom-in"

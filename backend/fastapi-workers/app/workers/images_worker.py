@@ -1308,7 +1308,8 @@ Rules:
                  character_poses_dir: str = None,
                  lora_model_id: str = None, lora_trigger_word: str = None,
                  lora_scale: float = 1.0, autonomy_mode: str | None = None,
-                 budget_limit_krw: int | None = None, budget_policy_version: str | None = None) -> dict:
+                 budget_limit_krw: int | None = None, budget_policy_version: str | None = None,
+                 scene_indices: list[int] | None = None) -> dict:
         """
         씬별 이미지를 생성합니다.
 
@@ -1331,6 +1332,7 @@ Rules:
                 lora_model_id=lora_model_id, lora_trigger_word=lora_trigger_word, lora_scale=lora_scale,
                 autonomy_mode=autonomy_mode,
                 budget_limit_krw=budget_limit_krw, budget_policy_version=budget_policy_version,
+                scene_indices=scene_indices,
             )
         finally:
             release_image_job_lock(job_id, lock_token)
@@ -1515,7 +1517,8 @@ Rules:
                   character_poses_dir: str = None,
                   lora_model_id: str = None, lora_trigger_word: str = None,
                   lora_scale: float = 1.0, autonomy_mode: str | None = None,
-                  budget_limit_krw: int | None = None, budget_policy_version: str | None = None) -> dict:
+                  budget_limit_krw: int | None = None, budget_policy_version: str | None = None,
+                  scene_indices: list[int] | None = None) -> dict:
         market_snapshot = {}
         self.market_snapshot = {}
         self.evidence_audit = {}
@@ -2087,6 +2090,7 @@ Rules:
                 character_poses_dir=character_poses_dir,
                 budget_preflight=budget_preflight,
                 entity_bindings=entity_bindings,
+                scene_indices=scene_indices,
             )
 
         generated = []
@@ -2583,7 +2587,7 @@ Rules:
         character_reference_paths, character_style_prompt,
         lora_model_id, lora_trigger_word, lora_scale,
         ai_provider, job_dir, job_id, use_composite=False, character_poses_dir=None,
-        budget_preflight=None, entity_bindings=None,
+        budget_preflight=None, entity_bindings=None, scene_indices=None,
     ) -> dict:
         """Render independent direct-AI scenes with bounded concurrency.
 
@@ -2591,6 +2595,12 @@ Rules:
         final path after validating a decodable image. A failed task never
         becomes a scene entry, and the method raises before quality/assembly
         when any scene failed. Re-running the job reuses validated outputs.
+
+        scene_indices: 2026-10-02 사용자 요청("내가 빼고 싶은걸 뺄 수 있게") —
+        지정하면 그 인덱스만 실제로 시도한다. 선택되지 않은 인덱스가 직전
+        실행에서 이미 보류(needs_review) 상태였다면, 이번 호출이 건드리지
+        않았다는 이유로 검토 목록에서 조용히 사라지지 않도록 그대로
+        이어서 담는다(아래 held_scenes 병합).
         """
         import shutil
 
@@ -2752,6 +2762,20 @@ Rules:
             }
 
         contexts = [make_context(scene, index) for index, scene in enumerate(scenes_meta)]
+        requested_indices = set(scene_indices) if scene_indices is not None else None
+        if requested_indices is not None:
+            contexts = [ctx for ctx in contexts if ctx["index"] in requested_indices]
+        carry_forward_held: dict[int, dict] = {}
+        if requested_indices is not None:
+            review_path = job_dir / "image_request_review.json"
+            try:
+                previous_review = json.loads(review_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                previous_review = {}
+            for entry in (previous_review.get("scenes") or []):
+                index = entry.get("index")
+                if isinstance(index, int) and index not in requested_indices:
+                    carry_forward_held[index] = entry
         if prompt_cache_dirty:
             staged_prompt_cache = prompt_cache_path.with_suffix(".tmp")
             staged_prompt_cache.write_text(
@@ -3381,7 +3405,9 @@ Rules:
         max_workers = gemini_pressure.recommended_concurrency(configured_workers)
         logger.info("Parallel image generation enabled: job=%s scenes=%s concurrency=%s retries=%s", job_id, len(contexts), max_workers, runtime_config.value("gemini_retry_max"))
         results = []
-        held_scenes = []
+        # 2026-10-02: 선택 재시도에서 건드리지 않은 장면은 직전 보류 사유를
+        # 그대로 이어받는다 — 그래야 검토 목록에서 조용히 사라지지 않는다.
+        held_scenes = list(carry_forward_held.values())
         failures = []
         same_error_counts: Counter[str] = Counter()
         break_count = max(1, int(runtime_config.value("image_same_error_break_count")))
@@ -3501,11 +3527,13 @@ Rules:
 
         # 2026-10-02: 보류된 scene이 있어도(held_scenes) 더 이상 예외를 던지지
         # 않고 완료된 scene만 담아 정상 응답을 반환하므로, 여기 도달했다고 해서
-        # 모든 장면이 끝났다는 뜻은 아니다. held_scenes가 남아있는데 게이트를
-        # 비우면 바로 위 루프에서 write_request_review()로 기록해둔 보류 사유를
-        # 그 자리에서 지워버린다.
-        if not held_scenes and (job_dir / "image_request_review.json").exists():
-            write_request_review(job_dir, job_id, [])
+        # 모든 장면이 끝났다는 뜻은 아니다. 선택 재시도(scene_indices)로 이번에
+        # 건드리지 않은 장면이 있을 수도 있고, 선택한 장면이 전부 성공해
+        # 루프 중간에 write_request_review()가 한 번도 안 불렸을 수도 있다.
+        # 두 경우 모두 디스크의 게이트 파일이 최신 held_scenes를 반영하도록
+        # 매번 다시 쓴다(비어 있으면 게이트가 풀린다).
+        if held_scenes or (job_dir / "image_request_review.json").exists():
+            write_request_review(job_dir, job_id, held_scenes)
 
         generated = []
         for result in sorted(results, key=lambda item: item["index"]):

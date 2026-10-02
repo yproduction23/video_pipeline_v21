@@ -69,6 +69,18 @@ public class ImagesService {
             ImageProviderTemporarilyUnavailableException.class
     })
     public ImagesGenerateResponse generate(Long jobId, String username) {
+        return generate(jobId, username, null);
+    }
+
+    /**
+     * sceneIndices를 지정하면 검토 필요 목록에서 사용자가 고른 씬만 재시도한다.
+     * 비워두면(null) 기존처럼 전체 씬을 처리한다.
+     */
+    @Transactional(noRollbackFor = {
+            ImageProviderRetryRequiredException.class,
+            ImageProviderTemporarilyUnavailableException.class
+    })
+    public ImagesGenerateResponse generate(Long jobId, String username, List<Integer> sceneIndices) {
         VideoJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
 
@@ -126,7 +138,7 @@ public class ImagesService {
                     jobId, ttsMetaJson, scriptMetaJson, character.imagePath(), character.stylePrompt(), character.posesDir(),
                     character.loraModelId(), character.loraTriggerWord(), character.loraScale(),
                     job.getAutonomy() == null ? null : job.getAutonomy().name(),
-                    remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION);
+                    remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION, sceneIndices);
         } catch (RuntimeException e) {
             if (isImageGenerationAlreadyRunning(e)) {
                 // GUIDED 화면의 명시적 생성 요청과 Temporal 재개가 동시에 도착할

@@ -142,7 +142,7 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
         when(autonomyService.isAuto(job)).thenReturn(true);
 
         imagesService.generate(1L, "AUTO");
@@ -174,7 +174,7 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
         when(autonomyService.isAuto(job)).thenReturn(true);
         doNothing().when(imagesService).confirm(eq(1L), eq("AUTO"));
 
@@ -203,7 +203,7 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT))
                 .thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("이미지 생성 오류: Image generation is already running for job 1"));
 
         ImagesGenerateResponse result = imagesService.generate(1L, "AUTO");
@@ -212,5 +212,36 @@ class ImagesServiceAutoGateTest {
         assertThat(job.getStatus()).isEqualTo(JobStatus.IMAGES_PENDING);
         verify(jobRepository, never()).save(job);
         verify(assetRepository, never()).save(any(Asset.class));
+    }
+
+    @Test
+    void generate_withSceneIndices_passesThemToFastApiClient() throws Exception {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+
+        Asset ttsAsset = new Asset();
+        ttsAsset.setMetaJson("{}");
+        Asset scriptAsset = new Asset();
+        scriptAsset.setMetaJson("{}");
+
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setRequiresManualReview(false);
+
+        CharacterAssetResolver.ResolvedCharacter mockChar = new CharacterAssetResolver.ResolvedCharacter(
+                "profile-1", "/path/to/img", "style", "/path/to/poses", null, null, null, 1.0f, "0123456789abcdef"
+        );
+
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
+        when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3))))
+                .thenReturn(result);
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        imagesService.generate(1L, "SONG", List.of(1, 3));
+
+        verify(fastApiClient).generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3)));
     }
 }

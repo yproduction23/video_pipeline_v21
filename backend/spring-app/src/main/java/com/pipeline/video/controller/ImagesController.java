@@ -1,6 +1,7 @@
 package com.pipeline.video.controller;
 
 import com.pipeline.video.dto.ImagesConfirmRequest;
+import com.pipeline.video.dto.ImagesGenerateRequest;
 import com.pipeline.video.dto.ImagesGenerateResponse;
 import com.pipeline.video.service.ImagesService;
 import lombok.RequiredArgsConstructor;
@@ -8,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -26,8 +28,10 @@ public class ImagesController {
     @PostMapping("/generate")
     public ResponseEntity<ImagesGenerateResponse> generate(
             @PathVariable Long jobId,
+            @RequestBody(required = false) ImagesGenerateRequest request,
             @AuthenticationPrincipal String username) {
-        return ResponseEntity.ok(imagesService.generate(jobId, username));
+        List<Integer> sceneIndices = request == null ? null : request.getSceneIndices();
+        return ResponseEntity.ok(imagesService.generate(jobId, username, sceneIndices));
     }
 
     @PostMapping("/confirm")

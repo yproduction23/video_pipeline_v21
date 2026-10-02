@@ -1244,5 +1244,128 @@ class AcceptedScenesAreNotReQueriedOnRetryTests(unittest.TestCase):
             self.assertFalse(second_response["held_scenes"])
 
 
+class SelectedSceneRetryLeavesUnselectedHeldScenesUntouchedTests(unittest.TestCase):
+    """2026-10-02 사용자 요청: "전체 재시도를 하는게 아니라... 내가 빼고 싶은걸
+    뺄 수 있게" — 검토 필요 목록에서 사용자가 고른 씬만 실제로 재시도하고,
+    고르지 않은 씬은 공급자 호출도, 요청 상한 소모도 없이 직전 보류 사유를
+    그대로 유지해야 한다."""
+
+    def _common_patches(self, job_dir, configured_value):
+        from app.utils import budget
+        from app.workers.images_worker import ImagesWorker
+
+        return [
+            patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value),
+            patch("app.workers.images_worker.is_job_stopped", lambda job_id: False),
+            patch.object(budget, "_job_path", lambda job, name: job_dir / name),
+            patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None),
+            patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None),
+            patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}),
+        ]
+
+    def test_only_the_requested_indices_are_attempted_others_keep_their_prior_held_entry(self):
+        from app import runtime_config
+        from app.workers.images_worker import ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_image(self, **kwargs):
+                self.calls.append(kwargs["section"])
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        scenes = [
+            {
+                "title": f"장면 {index + 1}",
+                "section": f"scene_{index}",
+                "narration": f"승인 내레이션 {index}",
+                "prompt_en": f"editorial finance scene {index}",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+            for index in range(3)
+        ]
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            # 직전 실행에서 세 씬 모두 보류된 상태를 재현한다.
+            (job_dir / "image_request_review.json").write_text(json.dumps({
+                "job_id": 9010, "requires_manual_review": True,
+                "request_gate_cleared": False, "assembly_allowed": False,
+                "scenes": [
+                    {"index": 0, "status": "needs_review", "reason": "장면 누적 요청 상한 도달",
+                     "next_allowed_at": 0, "image_path": None},
+                    {"index": 1, "status": "needs_review", "reason": "장면 누적 요청 상한 도달",
+                     "next_allowed_at": 0, "image_path": None},
+                    {"index": 2, "status": "needs_review", "reason": "장면 누적 요청 상한 도달",
+                     "next_allowed_at": 0, "image_path": None},
+                ],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            provider = Provider()
+            patches = self._common_patches(job_dir, configured_value)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", lambda ctx, path: {}), \
+                 patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=provider,
+                    job_dir=job_dir,
+                    job_id=9010,
+                    scene_indices=[1],
+                )
+
+            # 선택한 scene 1만 실제로 시도됐다 — scene 0·2는 공급자 호출조차 없었다.
+            self.assertEqual(provider.calls, ["scene_1"])
+            self.assertEqual([s["index"] for s in response["scenes"]], [1])
+            # scene 0·2는 이번 호출이 건드리지 않았으므로 직전 보류 사유를 그대로 유지한다.
+            held_by_index = {h["index"]: h for h in response["held_scenes"]}
+            self.assertEqual(set(held_by_index), {0, 2})
+            self.assertEqual(held_by_index[0]["reason"], "장면 누적 요청 상한 도달")
+            self.assertEqual(held_by_index[2]["reason"], "장면 누적 요청 상한 도달")
+
+            # 디스크의 게이트 파일도 같은 내용으로 갱신돼야 한다.
+            review = json.loads((job_dir / "image_request_review.json").read_text(encoding="utf-8"))
+            self.assertEqual({s["index"] for s in review["scenes"]}, {0, 2})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1121,10 +1121,15 @@ class ImagesGenerateRequest(BaseModel):
     autonomy_mode: Optional[Literal["GUIDED", "AUTO", "MANUAL"]] = None
     budget_limit_krw: Optional[int] = Field(default=None, ge=1, le=70_000)
     budget_policy_version: Optional[str] = Field(default=None, max_length=64)
+    # 2026-10-02 사용자 요청: 검토 필요 목록에서 재시도할 씬을 직접 고를 수
+    # 있어야 한다. 비워두면(None) 기존처럼 전체 씬을 처리한다.
+    scene_indices: Optional[list[int]] = None
 
 
 @app.post("/workers/images/generate")
 def images_generate(request: ImagesGenerateRequest):
+    if request.scene_indices is not None and not request.scene_indices:
+        raise HTTPException(400, "scene_indices가 빈 목록입니다; 재시도할 씬을 하나 이상 선택하세요.")
     try:
         return get_images_worker().generate(
             tts_meta_json=request.tts_meta,
@@ -1140,6 +1145,7 @@ def images_generate(request: ImagesGenerateRequest):
             autonomy_mode=request.autonomy_mode,
             budget_limit_krw=request.budget_limit_krw,
             budget_policy_version=request.budget_policy_version,
+            scene_indices=request.scene_indices,
         )
     except ImageProviderCreditRequiredError as e:
         logger.warning("이미지 생성 중단: 공급자 크레딧/쿼터 필요: %s", e)

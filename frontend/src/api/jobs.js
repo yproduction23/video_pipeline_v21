@@ -37,7 +37,9 @@ export const jobsApi = {
   confirmTts: (id) => apiClient.post(`/jobs/${id}/tts/confirm`, {}).then(r => r.data),
 
   // 이미지
-  generateImages: (id) => apiClient.post(`/jobs/${id}/images/generate`).then(r => r.data),
+  // sceneIndices를 지정하면 검토 필요 목록에서 고른 씬만 재시도한다.
+  generateImages: (id, sceneIndices) =>
+    apiClient.post(`/jobs/${id}/images/generate`, sceneIndices?.length ? { sceneIndices } : {}).then(r => r.data),
   confirmImages: (id) => apiClient.post(`/jobs/${id}/images/confirm`, {}).then(r => r.data),
   updateSceneImage: (id, index, payload) =>
     apiClient.post(`/jobs/${id}/images/scenes/${index}`, payload).then(r => r.data),
