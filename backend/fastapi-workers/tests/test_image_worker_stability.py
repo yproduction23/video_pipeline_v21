@@ -818,5 +818,116 @@ class HeldScenesNoLongerDiscardCompletedResultsTests(unittest.TestCase):
                     )
 
 
+class ResumePathVisualQaUnavailableIsAlsoHeldNotRaisedRawTests(unittest.TestCase):
+    """2026-10-02 job 13 scene 1 재현(배포 후에도 재현됨): render_one()의
+    retry 루프 안에서는 VisualQaUnavailableError를 ImageRequestHeld로
+    바꿨지만, retry 루프 시작 "전"에 있는 두 재개(resume) 지름길
+    (scene_XXX_raw.png만 있을 때, scene_XXX.png가 지문이 일치해 그대로
+    재검증될 때)은 자신만의 try/except를 따로 가지고 있어 저 수정이 닿지
+    않았다. 거기서 Gemini QA가 402를 반환하면(visual_qa_unavailable:402:N)
+    VisualQaUnavailableError가 그대로 빠져나가 바깥 except가 이를
+    NonRetryableImageGenerationError와 똑같이 취급해 배치 전체를
+    "non-retryable error"로 중단시켰다 — 정확히 이전에 고친 것과 같은
+    부류의 버그가 재개 경로에도 남아있었다."""
+
+    def test_existing_raw_image_whose_resume_qa_check_is_unavailable_is_held_not_raised(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import ImagesWorker, VisualQaUnavailableError
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_image(self, **kwargs):
+                self.calls.append(kwargs["section"])
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_visual_qa(ctx, _img_path):
+            if ctx["index"] == 0:
+                raise VisualQaUnavailableError("장면 비전 검수를 완료하지 못함: visual_qa_unavailable:402:0")
+            return {}
+
+        scenes = [
+            {
+                "title": f"장면 {index + 1}",
+                "section": f"scene_{index}",
+                "narration": f"승인 내레이션 {index}",
+                "prompt_en": f"editorial finance scene {index}",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+            for index in range(2)
+        ]
+        provider = Provider()
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            # scene 0은 이미 유효한 raw 이미지가 있는 "재개" 상태로 시작한다
+            # (최종 scene_000.png는 없음) — 이전 실행에서 이미지 생성 자체는
+            # 성공했지만 검수를 마치지 못하고 중단된 경우를 재현한다.
+            Image.effect_noise((640, 360), 60).convert("RGB").save(job_dir / "scene_000_raw.png", "PNG")
+
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+                 patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+                 patch.object(budget, "_job_path", lambda job, name: job_dir / name), \
+                 patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+                 patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
+                 patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa):
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=provider,
+                    job_dir=job_dir,
+                    job_id=9006,
+                )
+
+            # 핵심 회귀 검증: scene 0의 재개 경로 QA 실패가 scene 1의 제출/완료를
+            # 막지 않고, 배치 전체가 "non-retryable error"로 중단되지 않아야 한다.
+            self.assertEqual(provider.calls, ["scene_1"])
+            self.assertEqual([s["index"] for s in response["scenes"]], [1])
+            self.assertTrue(response["requires_manual_review"])
+            self.assertIn("SCENE_HELD_FOR_REVIEW:scene_0", response["review_reasons"])
+
+
 if __name__ == "__main__":
     unittest.main()

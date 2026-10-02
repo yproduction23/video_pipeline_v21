@@ -2869,6 +2869,16 @@ Rules:
                     contract_rejections += 1
                     retry_feedback = exc.review
                     logger.warning("기존 scene %s 원본 PNG의 비전 계약 위반을 감지해 재생성함: %s", index, exc)
+                except VisualQaUnavailableError as exc:
+                    # 2026-10-02 job 13 scene 1 재현: retry 루프 안의 같은 예외는
+                    # ImageRequestHeld로 바뀌지만, 이 재개(resume) 지름길은 루프
+                    # 시작 전에 있어 그 수정이 닿지 않았다. 검수 연결 문제로 이미
+                    # 유효한 기존 이미지를 다시 과금해 새로 만들면 안 되므로(클래스
+                    # 설계 의도), 재생성으로 넘기지 않고 바로 장면 로컬 보류로
+                    # 끝낸다.
+                    raise ImageRequestHeld(
+                        f"scene {index} 비전 검수 연결을 확인할 때까지 동일 이미지를 재생성하지 않음: {exc}"
+                    ) from exc
                 else:
                     return {
                         **ctx,
@@ -2917,6 +2927,13 @@ Rules:
                     contract_rejections += 1
                     retry_feedback = exc.review
                     logger.warning("기존 scene %s PNG의 비전 계약 위반을 감지해 재생성함: %s", index, exc)
+                except VisualQaUnavailableError as exc:
+                    # 위 재개 지름길과 같은 이유로, 이 지름길도 retry 루프 밖에
+                    # 있어 ImageRequestHeld 변환이 닿지 않았다. 같은 이미지를
+                    # 다시 과금해 만들지 않도록 바로 장면 로컬 보류로 끝낸다.
+                    raise ImageRequestHeld(
+                        f"scene {index} 비전 검수 연결을 확인할 때까지 동일 이미지를 재생성하지 않음: {exc}"
+                    ) from exc
                 else:
                     resumed_clean_plate = str(job_dir / f"scene_{index:03d}_bg.png")
                     if not Path(resumed_clean_plate).is_file():
