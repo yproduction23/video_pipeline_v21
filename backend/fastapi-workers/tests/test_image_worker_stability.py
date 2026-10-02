@@ -1105,5 +1105,144 @@ class HeldSceneIncludesLastRejectedCandidateImageTests(unittest.TestCase):
             self.assertIsNone(held.get("image_path"))
 
 
+class AcceptedScenesAreNotReQueriedOnRetryTests(unittest.TestCase):
+    """2026-10-02 사용자 요청: "전체 재시도"가 이미 통과한 장면까지 매번
+    비전 QA로 다시 평가해, 판정기의 비결정성 때문에 멀쩡했던 장면(예:
+    job 13 scene 6)이 재시도 때마다 예고 없이 다른 이미지로 바뀌었다.
+    scene_fingerprint가 지난 성공 당시(manifest에 기록된 값)와 정확히
+    같으면, 이미 한 번 통과를 거친 장면이므로 재검사 없이 그대로 보존한다.
+    사용자 결정: "완성 씬 보존, 보류 씬만 재시도"."""
+
+    def _common_patches(self, job_dir, configured_value):
+        from app.utils import budget
+        from app.workers.images_worker import ImagesWorker
+
+        return [
+            patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value),
+            patch("app.workers.images_worker.is_job_stopped", lambda job_id: False),
+            patch.object(budget, "_job_path", lambda job, name: job_dir / name),
+            patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None),
+            patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None),
+            patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}),
+        ]
+
+    def test_a_scene_whose_fingerprint_is_unchanged_since_its_last_success_skips_requery(self):
+        from app import runtime_config
+        from app.workers.images_worker import ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_image(self, **kwargs):
+                self.calls.append(kwargs["section"])
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        scenes = [
+            {
+                "title": "장면 1",
+                "section": "scene_0",
+                "narration": "승인 내레이션 0",
+                "prompt_en": "editorial finance scene 0",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+        ]
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            provider = Provider()
+            patches = self._common_patches(job_dir, configured_value)
+
+            # 1차 호출: 정상 생성 + 비전 QA 통과 -> images_manifest.json에
+            # 지문이 기록된다.
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", lambda ctx, path: {}), \
+                 patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                first_response = worker._generate_parallel_scenes(
+                    scenes_meta=[dict(s) for s in scenes],
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=provider,
+                    job_dir=job_dir,
+                    job_id=9009,
+                )
+            self.assertEqual(provider.calls, ["scene_0"])
+            self.assertEqual([s["index"] for s in first_response["scenes"]], [0])
+            original_image_bytes = (job_dir / "scene_000.png").read_bytes()
+
+            # 2차 호출(= "전체 재시도"): 장면 내용이 전혀 바뀌지 않았으므로
+            # scene_fingerprint가 1차와 같다. 비전 QA를 다시 호출하면 이번엔
+            # 실패를 던지도록 해, 재검사 자체가 아예 일어나지 않아야 함을
+            # 검증한다 — 호출됐다면 예외가 전파돼 테스트가 실패한다.
+            def visual_qa_should_not_be_called(ctx, path):
+                raise AssertionError(
+                    "이미 통과한 장면은 재시도 때 비전 QA를 다시 호출하면 안 됩니다."
+                )
+
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=visual_qa_should_not_be_called), \
+                 patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                second_response = worker._generate_parallel_scenes(
+                    scenes_meta=[dict(s) for s in scenes],
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=provider,
+                    job_dir=job_dir,
+                    job_id=9009,
+                )
+
+            # 공급자도 다시 호출되지 않는다(과금 없음) — scene_0은 1차 호출
+            # 때만 생성됐어야 한다.
+            self.assertEqual(provider.calls, ["scene_0"])
+            self.assertEqual([s["index"] for s in second_response["scenes"]], [0])
+            self.assertEqual((job_dir / "scene_000.png").read_bytes(), original_image_bytes)
+            self.assertFalse(second_response["held_scenes"])
+
+
 if __name__ == "__main__":
     unittest.main()

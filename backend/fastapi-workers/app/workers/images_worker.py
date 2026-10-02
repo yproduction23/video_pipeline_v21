@@ -2901,13 +2901,26 @@ Rules:
                         "quality_score": 90,
                         "_fingerprint": scene_fingerprint,
                     }
+            # 2026-10-02 사용자 결정("완성 씬 보존, 보류 씬만 재시도"): 장면
+            # 내용이 지난 성공 당시와 한 글자도 안 바뀌었으면(manifest 지문과
+            # 정확히 일치) 이미 한 번 비전 QA를 통과한 장면이다. 판정기가
+            # 완전히 결정론적이지 않아 "전체 재시도"마다 다시 평가하면 멀쩡한
+            # 장면이 예고 없이 교체될 수 있었다(예: job 13 scene 6). 재검사
+            # 없이 그대로 보존한다.
+            if valid_image(img_path) and manifest_fingerprint == scene_fingerprint and contract_rejections == 0:
+                resumed_clean_plate = str(job_dir / f"scene_{index:03d}_bg.png")
+                if not Path(resumed_clean_plate).is_file():
+                    resumed_clean_plate = None
+                return {**ctx, "image_path": img_path, "clean_plate_path": resumed_clean_plate,
+                        "asset_layout_metadata": _asset_layout_metadata(ctx, resumed_clean_plate),
+                        "generation_method": "resumed_accepted_no_requery", "quality_score": 90,
+                        "_fingerprint": scene_fingerprint}
             # v1은 비결정적인 LLM 영문 표현을 지문에 넣었기 때문에 동일 승인
             # 대본 재개도 전 장면을 재과금했다. 한 번만 기존 PNG를 엄격 OCR로
             # 재검증해 v2 안정 지문으로 승격한다.
             legacy_resume = loaded_manifest_version < IMAGE_LINEAGE_FINGERPRINT_VERSION and bool(manifest_fingerprint)
             if valid_image(img_path) and (
                 manifest_fingerprint is None
-                or manifest_fingerprint == scene_fingerprint
                 or legacy_resume
             ) and contract_rejections == 0:
                 # Validate/recreate the final composited still from its saved
