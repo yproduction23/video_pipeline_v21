@@ -3392,9 +3392,16 @@ Rules:
                     results.append(result)
                     logger.info("Parallel image scene complete: job=%s scene=%s", job_id, index)
                 except Exception as exc:
-                    failures.append((index, str(exc)))
                     logger.error("Parallel image scene failed: job=%s scene=%s error=%s", job_id, index, exc)
                     if isinstance(exc, ImageRequestHeld):
+                        # 2026-10-02 job 13 재현: 이 scene을 failures에도 넣으면
+                        # scene 0·6처럼 이미 완료된 장면이 있어도 아래 "if failures:"가
+                        # 무조건 예외를 던져 Spring이 completed scenes를 통째로 받지
+                        # 못했다(SCENE_IMAGE 자산 0개 → UI에 아무것도 안 보이고 장면별
+                        # 재생성 버튼도 못 씀). 보류 장면은 held_scenes/
+                        # image_request_review.json으로 이미 추적되므로 failures에
+                        # 중복으로 넣지 않는다 — requires_manual_review/review_reasons로
+                        # 정상 응답에 포함된다.
                         held_scenes.append({"index": index, "status": exc.status,
                                             "reason": exc.reason, "next_allowed_at": exc.next_allowed_at})
                         write_request_review(job_dir, job_id, held_scenes)
@@ -3427,6 +3434,10 @@ Rules:
                         write_request_review(job_dir, job_id, held_scenes)
                         submit_next()
                         continue
+                    # held_scenes와 달리 이 장면은 (아직 breaker 임계값 미만이라)
+                    # 어디에도 기록되지 않은 채 끝난다. 완료/보류 어느 쪽도 아니므로
+                    # 응답을 성공으로 둔갑시키지 않도록 failures에 남긴다.
+                    failures.append((index, str(exc)))
                     signature = error_signature(root_cause)
                     same_error_counts[signature] += 1
                     if same_error_counts[signature] >= break_count:
@@ -3444,7 +3455,12 @@ Rules:
             failed_indices = ", ".join(str(index) for index, _ in sorted(failures))
             raise RuntimeError(f"Image generation incomplete; failed scenes: {failed_indices}")
 
-        if (job_dir / "image_request_review.json").exists():
+        # 2026-10-02: 보류된 scene이 있어도(held_scenes) 더 이상 예외를 던지지
+        # 않고 완료된 scene만 담아 정상 응답을 반환하므로, 여기 도달했다고 해서
+        # 모든 장면이 끝났다는 뜻은 아니다. held_scenes가 남아있는데 게이트를
+        # 비우면 바로 위 루프에서 write_request_review()로 기록해둔 보류 사유를
+        # 그 자리에서 지워버린다.
+        if not held_scenes and (job_dir / "image_request_review.json").exists():
             write_request_review(job_dir, job_id, [])
 
         generated = []

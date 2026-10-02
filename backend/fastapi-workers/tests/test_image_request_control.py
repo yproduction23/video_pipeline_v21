@@ -446,10 +446,18 @@ def test_worker_shared_cooldown_skips_scenes_without_recovery_or_false_completio
                "scene_type": "general", "visual_mode": "general", "art_direction": {"character_required": True},
                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"}} for i in range(3)]
     for _ in range(2):
-        with pytest.raises(RuntimeError, match="incomplete"):
-            ImagesWorker()._generate_parallel_scenes(scenes_meta=scenes, directed_specs={}, market_snapshot={},
-                character_reference_paths=[], character_style_prompt="none", lora_model_id=None,
-                lora_trigger_word=None, lora_scale=None, ai_provider=provider, job_dir=tmp_path, job_id=99)
+        worker = ImagesWorker()
+        worker.tts_subtitle_sync = {}
+        worker.evidence_audit = {}
+        worker.visual_mix_plan = {}
+        # 2026-10-02: 보류된 장면만 있어도(완료 0건) 더 이상 예외를 던지지 않고
+        # requires_manual_review=True인 정상 응답을 돌려준다 — 완료된 장면이
+        # 하나라도 섞여 있을 때 그걸 통째로 버리지 않기 위한 같은 계약이다.
+        response = worker._generate_parallel_scenes(scenes_meta=scenes, directed_specs={}, market_snapshot={},
+            character_reference_paths=[], character_style_prompt="none", lora_model_id=None,
+            lora_trigger_word=None, lora_scale=None, ai_provider=provider, job_dir=tmp_path, job_id=99)
+        assert response["scenes"] == []
+        assert response["requires_manual_review"] is True
     assert provider.posts == 1
     review = json.loads((tmp_path / "image_request_review.json").read_text())
     assert review["assembly_allowed"] is False

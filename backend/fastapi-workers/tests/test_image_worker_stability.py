@@ -492,25 +492,33 @@ class VisualQaUnavailableDoesNotAbortTheBatchTests(unittest.TestCase):
              patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
              patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
              patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa):
-            with self.assertRaisesRegex(RuntimeError, "incomplete"):
-                ImagesWorker()._generate_parallel_scenes(
-                    scenes_meta=scenes,
-                    directed_specs={},
-                    market_snapshot={},
-                    character_reference_paths=[],
-                    character_style_prompt="none",
-                    lora_model_id=None,
-                    lora_trigger_word=None,
-                    lora_scale=None,
-                    ai_provider=provider,
-                    job_dir=Path(temp_dir),
-                    job_id=9002,
-                )
+            worker = ImagesWorker()
+            worker.tts_subtitle_sync = {}
+            worker.evidence_audit = {}
+            worker.visual_mix_plan = {}
+            response = worker._generate_parallel_scenes(
+                scenes_meta=scenes,
+                directed_specs={},
+                market_snapshot={},
+                character_reference_paths=[],
+                character_style_prompt="none",
+                lora_model_id=None,
+                lora_trigger_word=None,
+                lora_scale=None,
+                ai_provider=provider,
+                job_dir=Path(temp_dir),
+                job_id=9002,
+            )
 
             # 핵심 회귀 검증: scene 0의 검수 연결 실패가 scene 1·2의 제출/완료를
             # 막지 않아야 한다 (예전에는 NonRetryableImageGenerationError로 바뀌어
-            # 대기 중인 futures를 전부 취소시켰다).
+            # 대기 중인 futures를 전부 취소시켰다). 그리고 scene 0이 보류돼도
+            # 완료된 scene 1·2는 예외로 통째로 버려지지 않고 정상 응답에 담겨야
+            # Spring이 SCENE_IMAGE 자산으로 저장할 수 있다.
             self.assertEqual(sorted(provider.calls), ["scene_0", "scene_1", "scene_2"])
+            self.assertEqual([s["index"] for s in response["scenes"]], [1, 2])
+            self.assertTrue(response["requires_manual_review"])
+            self.assertIn("SCENE_HELD_FOR_REVIEW:scene_0", response["review_reasons"])
 
             review = json.loads((Path(temp_dir) / "image_request_review.json").read_text(encoding="utf-8"))
             self.assertEqual([s["index"] for s in review["scenes"]], [0])
@@ -534,11 +542,7 @@ class ContentRejectionExhaustionIsNotMislabeledAsProviderOverloadTests(unittest.
         from app import runtime_config
         from app.utils import budget
         from app.workers import images_worker
-        from app.workers.images_worker import (
-            GeneratedImageVisualContractError,
-            ImageProviderTemporarilyUnavailableError,
-            ImagesWorker,
-        )
+        from app.workers.images_worker import GeneratedImageVisualContractError, ImagesWorker
         from PIL import Image
 
         class Provider:
@@ -605,8 +609,139 @@ class ContentRejectionExhaustionIsNotMislabeledAsProviderOverloadTests(unittest.
              patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
              patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
              patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa):
-            with self.assertRaises(RuntimeError) as ctx:
-                ImagesWorker()._generate_parallel_scenes(
+            worker = ImagesWorker()
+            worker.tts_subtitle_sync = {}
+            worker.evidence_audit = {}
+            worker.visual_mix_plan = {}
+            response = worker._generate_parallel_scenes(
+                scenes_meta=scenes,
+                directed_specs={},
+                market_snapshot={},
+                character_reference_paths=[],
+                character_style_prompt="none",
+                lora_model_id=None,
+                lora_trigger_word=None,
+                lora_scale=None,
+                ai_provider=provider,
+                job_dir=Path(temp_dir),
+                job_id=9003,
+            )
+
+            # 핵심 회귀 검증: 실제 공급자 장애가 아니므로 "과부하"로 번지지 않고,
+            # scene 1·2는 취소되지 않고 계속 진행되며, scene 0이 보류돼도 완료된
+            # scene 1·2는 예외로 통째로 버려지지 않고 정상 응답에 담겨야 Spring이
+            # SCENE_IMAGE 자산으로 저장할 수 있다.
+            self.assertEqual([s["index"] for s in response["scenes"]], [1, 2])
+            self.assertTrue(response["requires_manual_review"])
+            self.assertIn("SCENE_HELD_FOR_REVIEW:scene_0", response["review_reasons"])
+            # scene 0은 거부당할 때마다 재생성을 시도해 여러 번 호출되지만, 핵심은
+            # scene 1·2가 취소되지 않고 (최소 1번씩) 시도됐다는 점이다.
+            self.assertEqual(set(provider.calls), {"scene_0", "scene_1", "scene_2"})
+
+            review = json.loads((Path(temp_dir) / "image_request_review.json").read_text(encoding="utf-8"))
+            self.assertEqual([s["index"] for s in review["scenes"]], [0])
+
+
+class HeldScenesNoLongerDiscardCompletedResultsTests(unittest.TestCase):
+    """2026-10-02 job 13 재현: scene 0·6은 성공했지만 scene 1~5·7~9가 보류되자,
+    _generate_parallel_scenes()는 completed scenes(results)를 담은 채로도
+    무조건 "Image generation incomplete" RuntimeError를 던져 응답 바디 전체를
+    버렸다. Spring의 ImagesService.generateImages()는 이 호출이 예외를
+    던지면 result가 끝내 할당되지 않아 성공한 장면조차 SCENE_IMAGE 자산으로
+    저장하지 못했다 — UI에 아무 이미지도 안 보이고, 심지어 장면별
+    재생성(기존 자산이 있어야 동작)도 쓸 수 없는 상태가 됐다.
+
+    Spring 쪽은 이미 이 상황을 위해 만들어져 있었다: ImagesGenerateResponse에
+    requiresManualReview/reviewReasons가 있고, ImagesService.generateImages()는
+    정상 응답을 받으면 완료된 장면을 먼저 저장한 뒤 requiresManualReview로
+    AUTO 자동확정만 차단한다(ImagesServiceAutoGateTest로 이미 커버됨). 유일한
+    버그는 FastAPI가 보류 장면이 하나라도 있으면 그 정상 응답 자체를 Spring에
+    전혀 보내지 않았다는 것이다. 보류되지 않고 진짜로 설명되지 않은 실패만
+    여전히 예외를 던져야 한다(아래 전송 실패 케이스로 회귀 방지)."""
+
+    def _common_patches(self, temp_dir):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import ImagesWorker
+
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        return [
+            patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value),
+            patch("app.workers.images_worker.is_job_stopped", lambda job_id: False),
+            patch.object(budget, "_job_path", lambda job, name: Path(temp_dir) / name),
+            patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None),
+            patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None),
+            patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}),
+        ]
+
+    def test_one_held_scene_still_returns_the_completed_scene_instead_of_raising(self):
+        from app.workers.images_worker import ImageRequestHeld, ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.calls = []
+
+            def generate_image(self, **kwargs):
+                self.calls.append(kwargs["section"])
+                if kwargs["section"] == "scene_1":
+                    raise ImageRequestHeld("장면 누적 요청 상한 도달")
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_visual_qa(ctx, _img_path):
+            return {}
+
+        scenes = [
+            {
+                "title": f"장면 {index + 1}",
+                "section": f"scene_{index}",
+                "narration": f"승인 내레이션 {index}",
+                "prompt_en": f"editorial finance scene {index}",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+            for index in range(2)
+        ]
+        provider = Provider()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            patches = self._common_patches(temp_dir)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa), \
+                 patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                # generate()가 정상 경로에서 채워주는 필드들을 직접 호출 시에는
+                # 미리 설정해야 한다(여기서는 성공 응답 조립까지 실제로 도달한다).
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
                     scenes_meta=scenes,
                     directed_specs={},
                     market_snapshot={},
@@ -617,20 +752,70 @@ class ContentRejectionExhaustionIsNotMislabeledAsProviderOverloadTests(unittest.
                     lora_scale=None,
                     ai_provider=provider,
                     job_dir=Path(temp_dir),
-                    job_id=9003,
+                    job_id=9004,
                 )
 
-            # 핵심 회귀 검증: 실제 공급자 장애가 아니므로
-            # ImageProviderTemporarilyUnavailableError(과부하 메시지)로 번지면
-            # 안 되고, scene 1·2는 취소되지 않고 계속 진행돼야 한다.
-            self.assertNotIsInstance(ctx.exception, ImageProviderTemporarilyUnavailableError)
-            self.assertIn("incomplete", str(ctx.exception))
-            # scene 0은 거부당할 때마다 재생성을 시도해 여러 번 호출되지만, 핵심은
-            # scene 1·2가 취소되지 않고 (최소 1번씩) 시도됐다는 점이다.
-            self.assertEqual(set(provider.calls), {"scene_0", "scene_1", "scene_2"})
+            # 핵심 회귀 검증: 예외를 던지는 대신, 완료된 scene 0을 담은 정상
+            # 응답을 반환하고 보류된 scene 1은 review_reasons로만 알린다.
+            self.assertEqual([s["index"] for s in response["scenes"]], [0])
+            self.assertTrue(response["requires_manual_review"])
+            self.assertIn("SCENE_HELD_FOR_REVIEW:scene_1", response["review_reasons"])
 
-            review = json.loads((Path(temp_dir) / "image_request_review.json").read_text(encoding="utf-8"))
-            self.assertEqual([s["index"] for s in review["scenes"]], [0])
+    def test_a_truly_unaccounted_failure_still_raises_incomplete(self):
+        """보류되지 않고 설명도 안 된 실패(아래 임계 미만 일시 오류)까지
+        조용히 성공으로 둔갑시키면 안 된다 — 회귀 방지용 대조군."""
+        from app.workers.images_worker import ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def generate_image(self, **kwargs):
+                if kwargs["section"] == "scene_1":
+                    raise RuntimeError("HTTP 503 temporarily unavailable")
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        scenes = [
+            {
+                "title": f"장면 {index + 1}",
+                "section": f"scene_{index}",
+                "narration": f"승인 내레이션 {index}",
+                "prompt_en": f"editorial finance scene {index}",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+            for index in range(2)
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            patches = self._common_patches(temp_dir)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", lambda ctx, path: {}), \
+                 patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+                with self.assertRaisesRegex(RuntimeError, "incomplete"):
+                    ImagesWorker()._generate_parallel_scenes(
+                        scenes_meta=scenes,
+                        directed_specs={},
+                        market_snapshot={},
+                        character_reference_paths=[],
+                        character_style_prompt="none",
+                        lora_model_id=None,
+                        lora_trigger_word=None,
+                        lora_scale=None,
+                        ai_provider=Provider(),
+                        job_dir=Path(temp_dir),
+                        job_id=9005,
+                    )
 
 
 if __name__ == "__main__":
