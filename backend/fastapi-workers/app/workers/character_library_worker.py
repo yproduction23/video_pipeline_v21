@@ -24,6 +24,9 @@ import re
 import hashlib
 from pathlib import Path
 
+from app import runtime_config
+from app.utils.budget import ProviderRequestAudit
+
 logger = logging.getLogger(__name__)
 
 IDENTITY_MANIFEST_VERSION = "3.0"
@@ -303,6 +306,23 @@ class CharacterLibraryWorker:
             logger.info(f"포즈 '{pose_name}' 생성 중... prompt_len={len(prompt)}")
 
             try:
+                # 2026-10-02 channel_b 재현: 이 유료 호출에 예산 추적 감사 객체를
+                # 전달하지 않아, 모든 유료 Gemini 호출을 막는 안전장치("영속
+                # 요청 감사 객체 없음; 유료 POST 차단")에 15개 포즈 전부 막혔다.
+                # 이 기능이 처음 실제로 쓰인 이번에야 발견됐다. job 비디오 예산
+                # 캡(PricingConfig)과는 별개로, 채널당 1회성 캐릭터 라이브러리
+                # 생성 비용을 추적하는 자체 원장을 channel_id별로 둔다.
+                audit = ProviderRequestAudit.for_path(
+                    path=poses_dir / "cost_ledger.json",
+                    scene_key=f"character_library:{channel_id}:{pose_name}",
+                    model="gemini-3-pro-image",
+                    unit_usd=float(runtime_config.value("img_cost_pro_2k_usd")),
+                    usd_krw=float(runtime_config.value("usd_krw")),
+                    # 영상 1건 예산 상한(PricingConfig)과 같은 안전판을 재사용한다.
+                    # 포즈 15장 추정 비용(₩5천대)보다 훨씬 커서, 폭주 호출만 막는
+                    # 상한 역할을 한다.
+                    budget_limit_krw=int(runtime_config.value("max_budget_per_video_krw")),
+                )
                 ai_provider.generate_image(
                     prompt=prompt,
                     output_path=str(raw_path),
@@ -310,6 +330,7 @@ class CharacterLibraryWorker:
                     image_provider="gemini",
                     gemini_model="gemini-3-pro-image",
                     gemini_image_size="2K",
+                    gemini_request_audit=audit,
                 )
             except Exception as e:
                 logger.error(f"포즈 '{pose_name}' 이미지 생성 실패: {e}")
