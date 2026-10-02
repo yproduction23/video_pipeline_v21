@@ -287,6 +287,13 @@ public class ChannelProfileController {
         Object posesDir = result.get("poses_dir");
         if (posesDir instanceof String path && !path.isBlank()) {
             profile.setCharacterPosesDir(path);
+            // V5 final lane은 포즈 합성을 쓰지 않고 character_image_path 한 장을
+            // 정체성 참조로 보낸다. 비어 있으면 V5가 채널과 무관한 기본 참조로
+            // 대체해 캐릭터 해부학·의상 품질 검사가 반복 실패한다. 운영자가 이미
+            // 다른 참조를 지정했다면 덮어쓰지 않는다.
+            if (profile.getCharacterImagePath() == null || profile.getCharacterImagePath().isBlank()) {
+                profile.setCharacterImagePath(path + "/neutral.png");
+            }
         }
         if (profile.getCharacterStylePrompt() == null || profile.getCharacterStylePrompt().isBlank()) {
             profile.setCharacterStylePrompt(description);
