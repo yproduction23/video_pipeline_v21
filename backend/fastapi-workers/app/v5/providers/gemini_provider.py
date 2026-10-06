@@ -100,6 +100,14 @@ def _load_default_references() -> list[str]:
     return [str(p) for p in paths]
 
 
+_PROP_REFERENCE_PREFIX = "prop_reference_"
+# 2026-10-06 사용자 요청: 대본 속 구체 사물(예: "전역모") 실사 참조는 캐릭터
+# 정체성·채널 화풍과 전혀 다른 계약이다. 기존 3장 상한(캐릭터 1 + 화풍 2)을
+# 줄이지 않고 별도 슬롯으로 덧붙이며, 과도한 평균화를 막기 위해 장면당 최대
+# 1장만 허용한다.
+_PROP_REFERENCE_MAX = 1
+
+
 def select_contextual_reference_paths(
     prompt: str,
     reference_image_paths: list[str] | None = None,
@@ -111,10 +119,20 @@ def select_contextual_reference_paths(
     명시적으로 선택된 캐릭터 참조는 보존한다. Job52 장면 참조는 전역 화풍
     라이브러리이지만 한 API 요청에는 가장 가까운 두 장만 보내며, 한 장면에
     서로 다른 의상·얼굴·구도 다섯 개를 동시에 평균내지 않는다.
+
+    "prop_reference_" 접두사가 붙은 경로(장면 소품 실사 참조)는 캐릭터/화풍
+    선택 로직에서 완전히 제외한 뒤, 최종 결과 뒤에 그대로 덧붙인다. 즉 이
+    함수의 3장 상한(max_references)을 소비하지 않는다.
     """
     candidates = list(reference_image_paths or _load_default_references())
     if not candidates:
         return []
+    prop_reference_paths = [
+        path for path in candidates if Path(path).name.startswith(_PROP_REFERENCE_PREFIX)
+    ][:_PROP_REFERENCE_MAX]
+    candidates = [path for path in candidates if path not in prop_reference_paths]
+    if not candidates:
+        return prop_reference_paths
     by_name = {Path(path).name: path for path in candidates}
     system_identity_names = {_FACE_RANGE_REF_NAME, *_FACE_ROLE_REF_NAMES.values()}
     explicit = [
@@ -154,7 +172,8 @@ def select_contextual_reference_paths(
     # 명시 캐릭터 1장 + 장면 화풍 2장이 기본 상한이다. 중복은 입력 순서를
     # 보존하며 제거한다.
     limit = max(1, min(int(max_references), 3))
-    return list(dict.fromkeys([*identity, *selected]))[:limit]
+    core = list(dict.fromkeys([*identity, *selected]))[:limit]
+    return [*core, *prop_reference_paths]
 
 
 def ensure_gemini_reference_contract(
@@ -187,7 +206,11 @@ def ensure_gemini_reference_contract(
         index + 1 for index, name in enumerate(reference_names)
         if "style_reference" in name or "style_scene_ref" in name or "channel_style_" in name
     ]
-    system_indices = set(face_range_indices + face_anchor_indices + style_indices)
+    prop_indices = [
+        index + 1 for index, name in enumerate(reference_names)
+        if name.startswith(_PROP_REFERENCE_PREFIX)
+    ]
+    system_indices = set(face_range_indices + face_anchor_indices + style_indices + prop_indices)
     character_indices = [
         index + 1 for index, name in enumerate(reference_names)
         if "character_reference" in name
@@ -258,6 +281,15 @@ def ensure_gemini_reference_contract(
             "references' structural treatment—solid scene-mounted monitors, printed wall boards, machine gauges, engraved or painted prop faces—rather "
             "than inventing a detached translucent glass card. A floating holographic surface is allowed only when the scene-local surface plan explicitly requests one."
         )
+    if prop_indices:
+        prop_index_list = ", ".join(str(index) for index in prop_indices)
+        clauses.append(
+            f"Reference images {prop_index_list} are real-world photographs of a specific object or symbol named in this scene's narration. "
+            "Use them only to correct that object's real shape, proportions, color, and distinguishing details — "
+            "never its style, lighting, character, composition, background, people, watermark, or any text/number visible in the photo. "
+            "Do not let it influence the mascot's identity, the channel's visual style, or the scene's framing."
+        )
+
     clauses.append(
         "Follow the scene-specific composition in the written prompt. A continuous scene, split comparison, stage, classroom, control room, laboratory, or other framing is allowed only when that scene calls for it. "
         "Do not force every scene into one studio template. Do not reproduce marks from any reference image."

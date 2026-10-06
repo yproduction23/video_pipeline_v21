@@ -235,6 +235,8 @@ class PipelineConfigUpdate(BaseModel):
     evidence_max_scenes: Optional[int] = None
     evidence_max_searches_per_scene: Optional[int] = None
     evidence_min_sentence_similarity: Optional[float] = None
+    prop_reference_search_enabled: Optional[bool] = None
+    prop_reference_max_terms_per_scene: Optional[int] = None
     bubble_font_max_px: Optional[int] = None
     bubble_font_min_px: Optional[int] = None
     subtitle_safe_area_pct: Optional[float] = None

@@ -361,3 +361,60 @@ def test_localized_retry_source_is_not_misclassified_as_character_identity(tmp_p
     assert "Reference image 1 is only the previously rejected full-scene edit source" in prompt
     assert "Reference image 2 contains exact, non-generatively altered face crops" in prompt
     assert "Reference image 1 is an explicitly selected character reference" not in prompt
+
+
+def test_prop_reference_image_is_appended_after_the_normal_cap_not_counted_in_it(tmp_path: Path):
+    character = tmp_path / "user_character_reference.png"
+    prop = tmp_path / "prop_reference_jeonyeokmo.png"
+    for path in (character, prop):
+        path.write_bytes(path.name.encode())
+
+    selected = select_contextual_reference_paths(
+        "stormy forecast weather-map outlook",
+        [str(character), str(prop), *_load_default_references()],
+    )
+
+    # 기존 캐릭터 1 + 화풍 2 = 3장은 그대로이고, 소품 참조는 그 뒤에 추가된다.
+    assert len(selected) == 4
+    assert Path(selected[0]).name == "user_character_reference.png"
+    assert [Path(path).name for path in selected[1:3]] == [
+        "channel_style_job52_risk_map.png",
+        "channel_style_job52_market_flow.png",
+    ]
+    assert Path(selected[3]).name == "prop_reference_jeonyeokmo.png"
+
+
+def test_prop_reference_image_survives_the_reduced_transient_failure_cap(tmp_path: Path):
+    prop = tmp_path / "prop_reference_jeonyeokmo.png"
+    prop.write_bytes(b"prop")
+
+    selected = select_contextual_reference_paths(
+        "semiconductor wafer production line",
+        [str(prop), *_load_default_references()],
+        max_references=2,
+    )
+
+    assert [Path(path).name for path in selected] == [
+        "channel_character_face_range_v2.png",
+        "channel_style_semiconductor_production_scene_v1.png",
+        "prop_reference_jeonyeokmo.png",
+    ]
+
+
+def test_prop_reference_contract_clause_describes_a_real_object_photo_only(tmp_path: Path):
+    refs = []
+    for name in (
+        "channel_character_face_range_v2.png",
+        "channel_style_job52_briefing.png",
+        "prop_reference_jeonyeokmo.png",
+    ):
+        path = tmp_path / name
+        path.write_bytes(name.encode())
+        refs.append(str(path))
+
+    prompt = ensure_gemini_reference_contract("soldier discharge scene", refs)
+
+    assert "Reference images 3 are real-world photographs" in prompt
+    assert "never its style, lighting, character, composition" in prompt
+    # 소품 참조가 캐릭터 식별 슬롯으로 잘못 분류되면 안 된다.
+    assert "Reference image 3 is an explicitly selected character reference" not in prompt

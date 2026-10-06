@@ -45,6 +45,7 @@ from app.v5.scene.runtime_contract import (
 )
 from app.v5.scene.longform_visual_mix import apply_longform_visual_mix
 from app.v5.providers.gemini_provider import _load_default_references, select_contextual_reference_paths
+from app.services.prop_reference import resolve_prop_reference_paths
 from app.utils.budget import ProviderRequestAudit, plan_preflight, record_cost, write_preflight
 from app.utils.image_request_control import ImageRequestHeld, write_request_review
 from app.utils.intro_motion import infer_total_duration_seconds, select_intro_motion_scene_indices, scene_duration_seconds
@@ -110,6 +111,30 @@ STYLE_SUFFIX = (
 IMAGE_LINEAGE_FINGERPRINT_VERSION = 12
 PROMPT_CACHE_POLICY_VERSION = 8
 PROMPT_CACHE_COMPATIBLE_VERSIONS = (6,)
+
+
+def _augment_with_prop_reference(
+    reference_paths: list[str],
+    narration_text: str,
+    job_dir: Path,
+) -> list[str]:
+    """런타임 설정이 켜져 있으면 장면 소품의 실사 참조를 덧붙인다.
+
+    2026-10-06 사용자 요청. 기본값이 꺼져 있으므로(PROP_REFERENCE_SEARCH_ENABLED)
+    대부분의 Job에서는 즉시 reference_paths를 그대로 반환한다. 실패해도
+    resolve_prop_reference_paths 내부에서 모두 흡수되므로 여기서는 추가
+    try/except 없이 호출한다.
+    """
+    if not runtime_config.value("prop_reference_search_enabled"):
+        return reference_paths
+    prop_paths = resolve_prop_reference_paths(
+        narration_text,
+        cache_dir=job_dir / "prop_references",
+        max_terms=int(runtime_config.value("prop_reference_max_terms_per_scene")),
+    )
+    if not prop_paths:
+        return reference_paths
+    return [*reference_paths, *prop_paths]
 
 
 def _reference_asset_fingerprints(paths: list[str]) -> list[dict[str, str]]:
@@ -2200,6 +2225,9 @@ Rules:
             scene_market_snapshot = scene.get("market_snapshot") or market_snapshot
             character_required = bool(art_direction.get("character_required", True))
             effective_reference_paths = character_reference_paths if character_required else []
+            effective_reference_paths = _augment_with_prop_reference(
+                effective_reference_paths, narration, job_dir
+            )
             pose_asset = art_direction.get("pose_asset") or pose
             # Keep a successful composite render on the normal quality path.
             # (The direct AI path assigns this inside its retry loop.)
@@ -2871,6 +2899,10 @@ Rules:
 
             character_required = bool(ctx["art_direction"].get("character_required", True))
             effective_reference_paths = character_reference_paths if character_required else []
+            scene_narration_text = ctx.get("text") or ctx.get("prompt_ko") or ""
+            effective_reference_paths = _augment_with_prop_reference(
+                effective_reference_paths, scene_narration_text, job_dir
+            )
             tier = image_profile.get("tier", "pro")
             scene_fingerprint = fingerprint(ctx)
             manifest_fingerprint = image_manifest.get(str(index))

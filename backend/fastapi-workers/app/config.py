@@ -151,6 +151,12 @@ ARTICLE_EVIDENCE_AUTO_ENABLED = os.getenv("ARTICLE_EVIDENCE_AUTO_ENABLED", "true
 EVIDENCE_MAX_SCENES = int(os.getenv("EVIDENCE_MAX_SCENES", "12"))
 EVIDENCE_MAX_SEARCHES_PER_SCENE = int(os.getenv("EVIDENCE_MAX_SEARCHES_PER_SCENE", "3"))
 EVIDENCE_MIN_SENTENCE_SIMILARITY = float(os.getenv("EVIDENCE_MIN_SENTENCE_SIMILARITY", "0.85"))
+# 2026-10-06 사용자 요청: 대본에 등장하는 구체적 소품/사물(예: "전역모")의
+# 실제 모습을 Gemini가 참고할 수 있도록, NAVER API HUB 이미지 검색으로 실물
+# 참조 사진을 찾아 캐릭터/화풍 참조와 별도 슬롯으로 추가한다. 신규 외부 연동
+# 이므로 기본값은 꺼둔다 — 검증 전까지는 기존 이미지 생성 흐름에 영향 없음.
+PROP_REFERENCE_SEARCH_ENABLED = os.getenv("PROP_REFERENCE_SEARCH_ENABLED", "false").lower() in {"1", "true", "yes"}
+PROP_REFERENCE_MAX_TERMS_PER_SCENE = int(os.getenv("PROP_REFERENCE_MAX_TERMS_PER_SCENE", "1"))
 SCENE_REVEAL_ENABLED = os.getenv("SCENE_REVEAL_ENABLED", "true").lower() in {"1", "true", "yes"}
 BUBBLE_FONT_MAX_PX = int(os.getenv("BUBBLE_FONT_MAX_PX", "110"))
 BUBBLE_FONT_MIN_PX = int(os.getenv("BUBBLE_FONT_MIN_PX", "68"))

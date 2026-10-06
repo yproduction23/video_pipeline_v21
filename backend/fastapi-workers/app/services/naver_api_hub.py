@@ -21,6 +21,7 @@ class NaverApiHubClient:
     """환경 변수로만 인증 정보를 받는 NAVER API HUB 클라이언트."""
 
     NEWS_ENDPOINT = "https://naverapihub.apigw.ntruss.com/search/v1/news"
+    IMAGE_ENDPOINT = "https://naverapihub.apigw.ntruss.com/search/v1/image"
     SEARCH_TREND_ENDPOINT = "https://naverapihub.apigw.ntruss.com/search-trend/v1/search"
 
     def __init__(self, client_id: str | None = None, client_secret: str | None = None):
@@ -76,6 +77,52 @@ class NaverApiHubClient:
         body = response.json()
         if not isinstance(body, dict):
             raise ValueError("NAVER 뉴스 API 응답 형식이 올바르지 않습니다")
+        return body
+
+    def search_images(
+        self,
+        query: str,
+        *,
+        display: int = 10,
+        start: int = 1,
+        sort: str = "sim",
+        filter: str = "all",
+    ) -> dict[str, Any]:
+        """이미지 검색 결과를 JSON으로 반환한다.
+
+        2026-10-06 사용자 요청: 대본에 등장하는 구체적 소품(예: "전역모")의
+        실제 참조 사진을 찾기 위한 용도. 엔드포인트/파라미터는 search_news와
+        동일한 API HUB 계열이며, 공식 문서로 확인한 필드명을 그대로 쓴다.
+        """
+        normalized_query = " ".join((query or "").split())
+        if not normalized_query:
+            raise ValueError("이미지 검색어는 비어 있을 수 없습니다")
+        if not 1 <= int(display) <= 100:
+            raise ValueError("display는 1~100이어야 합니다")
+        if not 1 <= int(start) <= 1000:
+            raise ValueError("start는 1~1000이어야 합니다")
+        if sort not in {"sim", "date"}:
+            raise ValueError("sort는 sim 또는 date여야 합니다")
+        if filter not in {"all", "large", "medium", "small"}:
+            raise ValueError("filter는 all/large/medium/small 중 하나여야 합니다")
+        response = httpx.get(
+            self.IMAGE_ENDPOINT,
+            params={
+                "query": normalized_query,
+                "display": int(display),
+                "start": int(start),
+                "sort": sort,
+                "filter": filter,
+                "format": "json",
+            },
+            headers=self._headers,
+            timeout=12,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not isinstance(body, dict):
+            raise ValueError("NAVER 이미지 검색 API 응답 형식이 올바르지 않습니다")
         return body
 
     def search_trend(

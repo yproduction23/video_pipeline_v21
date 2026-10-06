@@ -65,6 +65,8 @@ _state = {
     "evidence_max_scenes": _cfg.EVIDENCE_MAX_SCENES,
     "evidence_max_searches_per_scene": _cfg.EVIDENCE_MAX_SEARCHES_PER_SCENE,
     "evidence_min_sentence_similarity": _cfg.EVIDENCE_MIN_SENTENCE_SIMILARITY,
+    "prop_reference_search_enabled": _cfg.PROP_REFERENCE_SEARCH_ENABLED,
+    "prop_reference_max_terms_per_scene": _cfg.PROP_REFERENCE_MAX_TERMS_PER_SCENE,
     "scene_reveal_enabled": _cfg.SCENE_REVEAL_ENABLED,
     "bubble_font_max_px": _cfg.BUBBLE_FONT_MAX_PX,
     "bubble_font_min_px": _cfg.BUBBLE_FONT_MIN_PX,
