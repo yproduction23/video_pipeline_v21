@@ -541,9 +541,17 @@ def build_prompt(
     )
     is_general_scene = bool(scene_type_selection and scene_type_selection.scene_type == "general")
     is_selected_information_scene = bool(scene_type_selection and not is_general_scene)
+    # 2026-10-06 사용자 재현(job 14, 씬 0): scene_type은 승인 문구를 화면에 쓸 수
+    # 있는지를 결정하지 않는다(runtime_contract.py의 기존 주석과 동일한 원칙).
+    # "general"로 분류된 대사형 장면도 승인 대본에서 뽑은 정확한 문구와 그걸
+    # 적을 표면 계획이 있으면 그대로 반영해야 하며, 지금까지는 이 게이트가
+    # scene_type만 보고 조용히 strict_textless로 강등시켜 그 문구가 Gemini
+    # 프롬프트에 전혀 전달되지 않았다. PROP_SURFACE_MAP에 없는 archetype에서는
+    # 기존 안전 동작(strict_textless)으로 폴백한다.
+    has_mapped_surface_plan = has_explicit_surface_plan and spec.archetype in PROP_SURFACE_MAP
     priority_prop_instruction = ""
     if visual_text_policy == "script_captioned":
-        if is_selected_information_scene:
+        if is_selected_information_scene or has_mapped_surface_plan:
             priority_prop_instruction = _build_prop_prompt(
                 spec.archetype,
                 semantic_caption,

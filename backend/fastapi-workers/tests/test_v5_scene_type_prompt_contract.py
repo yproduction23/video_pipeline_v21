@@ -96,6 +96,63 @@ def test_explicit_text_surface_plan_enables_planned_surface_contract():
     assert "<fact_surface_contract>" in prompt
 
 
+def test_general_scene_with_explicit_surface_plan_still_embeds_the_approved_caption():
+    """2026-10-06 사용자 재현(job 14, 씬 0): "저 군대 안 갑니다!"는 승인 대본에서
+    정확히 추출된 문구이고 signboard 표면 계획까지 있었는데도, scene_type이
+    "general"이라는 이유만으로 visual_text_policy가 strict_textless로 강등되어
+    Gemini 프롬프트에 그 문구가 전혀 전달되지 않았다. scene_type은 승인 문구를
+    화면에 쓸 수 있는지를 결정하지 않는다 (runtime_contract.py의 기존 주석과
+    동일한 원칙) — 명시적 표면 계획이 있으면 general이어도 그대로 반영해야 한다.
+    """
+    selection = _new_archetype_selection("briefing_podium", scene_type="general")
+    prompt = build_prompt(
+        SceneSpec("general-with-plan", selection.archetype, "explain", "reporter", "present"),
+        scene_type_selection=selection,
+        visual_text_policy="script_captioned",
+        semantic_caption="저 군대 안 갑니다!",
+        text_surface_plan=[
+            {"text": "저 군대 안 갑니다!", "surface": "context_sign_1", "surface_kind": "signboard"},
+        ],
+    )
+
+    assert "SCENE-LOCAL TYPOGRAPHY" in prompt
+    assert "저 군대 안 갑니다!" in prompt
+    assert "<semantic_surface>" in prompt
+    assert "do not include any visible typographic mark" not in prompt.lower()
+
+
+def test_general_scene_without_a_surface_plan_still_downgrades_to_strict_textless():
+    """계획이 전혀 없는 general 장면까지 억지로 소품 문구를 넣으면 안 되므로,
+    기존 안전 동작(strict_textless 강등)은 그대로 유지돼야 한다."""
+    selection = _new_archetype_selection("briefing_podium", scene_type="general")
+    prompt = build_prompt(
+        SceneSpec("general-without-plan", selection.archetype, "explain", "reporter", "present"),
+        scene_type_selection=selection,
+        visual_text_policy="script_captioned",
+        semantic_caption="저 군대 안 갑니다!",
+    ).lower()
+
+    assert "do not include any visible typographic mark" in prompt
+    assert "scene-local typography" not in prompt
+
+
+def test_general_scene_with_surface_plan_but_unmapped_archetype_falls_back_safely():
+    """PROP_SURFACE_MAP에 없는 archetype(예: earnings_stage)에서는 KeyError로
+    죽는 대신 기존 strict_textless 안전 경로로 폴백해야 한다."""
+    selection = _new_archetype_selection("earnings_stage", scene_type="general")
+    prompt = build_prompt(
+        SceneSpec("general-unmapped-archetype", selection.archetype, "explain", "reporter", "present"),
+        scene_type_selection=selection,
+        visual_text_policy="script_captioned",
+        semantic_caption="저 군대 안 갑니다!",
+        text_surface_plan=[
+            {"text": "저 군대 안 갑니다!", "surface": "context_sign_1", "surface_kind": "signboard"},
+        ],
+    ).lower()
+
+    assert "do not include any visible typographic mark" in prompt
+
+
 def test_v5_costumes_are_contextual_ranges_not_one_fixed_uniform():
     from app.v5.scene.prompt_builder import COSTUME_MAP
 
