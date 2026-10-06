@@ -57,7 +57,7 @@ public class JobController {
         if (type != null) {
             try {
                 AssetType assetType = AssetType.valueOf(type.toUpperCase());
-                return ResponseEntity.ok(assetRepository.findByJobIdAndAssetType(id, assetType));
+                return ResponseEntity.ok(assetRepository.findByJobIdAndAssetTypeOrderByCreatedAtAsc(id, assetType));
             } catch (IllegalArgumentException e) {
                 return ResponseEntity.badRequest().build();
             }
