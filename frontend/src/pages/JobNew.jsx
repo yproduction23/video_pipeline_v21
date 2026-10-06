@@ -65,6 +65,7 @@ export default function JobNew() {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState(null)
   const [channels, setChannels] = useState([])
+  const [characterThumbUrls, setCharacterThumbUrls] = useState({}) // channelId -> blob url
   const [researchKeyword, setResearchKeyword] = useState('')
   const [researchVideos, setResearchVideos] = useState([])
   const [researchPage, setResearchPage] = useState(1)
@@ -79,6 +80,18 @@ export default function JobNew() {
         if (r.data.length > 0) {
           setForm(current => current.channelId ? current : { ...current, channelId: r.data[0].channelId })
         }
+        // 2026-10-06 사용자 요청: 채널 이름만 보고는 어떤 캐릭터인지 알 수
+        // 없었다. 포즈 라이브러리가 있는 채널은 neutral 포즈를 대표 썸네일로
+        // 같이 보여준다.
+        r.data
+          .filter(ch => ch.characterPosesDir)
+          .forEach(ch => {
+            apiClient.get(`/channels/${ch.channelId}/character-library/pose/neutral`, { responseType: 'blob' })
+              .then(res => {
+                setCharacterThumbUrls(prev => ({ ...prev, [ch.channelId]: URL.createObjectURL(res.data) }))
+              })
+              .catch(() => {})
+          })
       })
       .catch(e => console.error('채널 조회 실패:', e))
   }, [])
@@ -291,7 +304,15 @@ export default function JobNew() {
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2.5">
-                            <Tv size={16} className={isSelected ? 'text-cyan-700' : 'text-slate-500'} />
+                            {characterThumbUrls[ch.channelId] ? (
+                              <img
+                                src={characterThumbUrls[ch.channelId]}
+                                alt={`${ch.channelName} 캐릭터`}
+                                className="w-8 h-8 rounded-full object-cover border border-slate-200 bg-white flex-shrink-0"
+                              />
+                            ) : (
+                              <Tv size={16} className={isSelected ? 'text-cyan-700' : 'text-slate-500'} />
+                            )}
                             <span className={`text-xs font-bold ${isSelected ? 'text-cyan-900' : 'text-slate-900'}`}>
                               {ch.channelName}
                             </span>
