@@ -2852,6 +2852,11 @@ def _split_sections_for_visual_pacing(sections: list, max_chars: int = _SENTENCE
             scene["content"] = unit
             scene["text"] = unit
             scene["char_count"] = len(unit)
+            # 2026-10-06 job 14 재현: dict(source)는 분할 전 원본의 text_for_tts를
+            # 그대로 복사한다. content/text는 조각별로 바뀌는데 text_for_tts만
+            # 분할 전 전체 문장으로 남으면, 이를 최우선으로 읽는 TTS 입력에서
+            # 같은 문장이 조각 수만큼 반복된다. 항상 이 조각의 문장으로 맞춘다.
+            scene["text_for_tts"] = unit
             if len(units) > 1:
                 scene["title"] = f"{source.get('title', 'Scene')} · {part_index}"
             expanded.append(scene)

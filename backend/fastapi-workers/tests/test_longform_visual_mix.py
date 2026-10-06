@@ -56,6 +56,39 @@ def test_visual_pacing_never_splits_a_sentence_at_a_word_boundary():
         _validate_scene_delivery(scenes, target_scene_count=1)
 
 
+def test_visual_pacing_split_does_not_duplicate_stale_text_for_tts():
+    """2026-10-06 job 14 재현: 유승민 대한체육회장 문장이 TTS에 두 번 들렸다.
+
+    원본 장면에 이미 text_for_tts가 채워진 채로 들어오면(narration_contract가
+    분할 전에 먼저 채워둔 값), 분할 시 dict(source)가 그 값을 그대로 복사해
+    content/text는 올바르게 나뉘어도 text_for_tts는 각 조각 모두 분할 전
+    원본 전체 문장을 그대로 유지했다. Spring의 narrationFromMeta()는
+    text_for_tts를 최우선으로 읽으므로, 같은 문장이 TTS 입력에 두 번
+    들어갔다."""
+    first_sentence = "유승민 대한체육회장은 국가대표답게 품위를 갖춰야 한다고 지적했습니다."
+    second_sentence = "안철수 의원은 아시안게임 병역특례 제도 자체를 재고해야 한다고 주장했습니다."
+    combined = f"{first_sentence} {second_sentence}"
+    source = [{
+        "scene_id": "scene-004",
+        "scene_type": "general",
+        "content": combined,
+        "text": combined,
+        "visual_intent": combined,
+        # narration_contract가 분할 전에 이미 채워둔 전체 문장(실제 재현 조건).
+        "text_for_tts": combined,
+    }]
+
+    scenes = _split_sections_for_visual_pacing(source)
+
+    assert len(scenes) == 2
+    assert scenes[0]["content"] == first_sentence
+    assert scenes[1]["content"] == second_sentence
+    # 핵심 회귀 검증: text_for_tts도 content/text와 같은 조각으로 갈라져야
+    # 한다 — 분할 전 원본 전체 문장을 양쪽에 그대로 복사해서는 안 된다.
+    assert scenes[0]["text_for_tts"] == first_sentence
+    assert scenes[1]["text_for_tts"] == second_sentence
+
+
 def test_caption_contract_rejects_only_short_trailing_fragments():
     issues = _caption_chunk_issues([
         "오늘 코스피가 6860포인트를 기록했습니다.",
