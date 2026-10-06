@@ -35,6 +35,7 @@ export const jobsApi = {
   selectTtsVoice: (id, voiceId) =>
     apiClient.post(`/jobs/${id}/tts/select-voice`, { voiceId }).then(r => r.data),
   confirmTts: (id) => apiClient.post(`/jobs/${id}/tts/confirm`, {}).then(r => r.data),
+  deleteTts: (id) => apiClient.delete(`/jobs/${id}/tts`).then(r => r.data),
 
   // 이미지
   // sceneIndices를 지정하면 검토 필요 목록에서 고른 씬만 재시도한다.

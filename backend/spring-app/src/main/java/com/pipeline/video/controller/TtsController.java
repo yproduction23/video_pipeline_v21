@@ -50,4 +50,10 @@ public class TtsController {
         ttsService.confirm(jobId, username);
         return ResponseEntity.ok(Map.of("status", "OK"));
     }
+
+    @DeleteMapping
+    public ResponseEntity<Map<String, String>> delete(@PathVariable Long jobId) {
+        ttsService.deleteAudio(jobId);
+        return ResponseEntity.ok(Map.of("status", "OK"));
+    }
 }

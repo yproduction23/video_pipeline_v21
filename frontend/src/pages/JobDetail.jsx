@@ -455,6 +455,16 @@ export default function JobDetail() {
     onSettled: () => setActiveSceneActionIndex(null),
   })
 
+  const deleteTtsMut = useMutation({
+    mutationFn: () => jobsApi.deleteTts(id),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['approvals', id])
+      qc.invalidateQueries(['assets', id])
+    },
+    onError: (err) => alert('삭제 실패: ' + (err.response?.data?.message || err.message)),
+  })
+
   const retryHeldImagesMut = useMutation({
     mutationFn: (sceneIndices) => jobsApi.generateImages(id, sceneIndices),
     onSuccess: () => {
@@ -1289,6 +1299,23 @@ export default function JobDetail() {
                         </button>
                       </div>
                     )}
+                    {/* 2026-10-06 사용자 요청: 승인이 끝난 단계는 버그를 발견해도
+                        다시 돌릴 UI가 없었다(스크립트 확정 후 TTS 중복 버그처럼).
+                        백엔드는 승인 이후에도 재생성을 막지 않으므로, 완료된
+                        스크립트·TTS 단계에 명시적인 재생성 버튼을 둔다. */}
+                    {ss === 'done' && ['script', 'tts'].includes(step.key) && runningStep === null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm(`${step.label}을(를) 다시 생성할까요? 이후 단계(${step.key === 'script' ? 'TTS·이미지·영상' : '이미지·영상'})는 이 변경을 반영하려면 함께 다시 생성해야 합니다.`)) {
+                            handleRun(step)
+                          }
+                        }}
+                        className="text-xs bg-navy-700 text-gray-200 border border-slate-300 px-3 py-2 rounded-xl hover:bg-navy-600 transition font-medium flex items-center gap-1"
+                      >
+                        <Zap size={12}/> 다시 생성
+                      </button>
+                    )}
                     {ss === 'active' && isAuto && <Loader size={16} className="animate-spin text-accent-cyan"/>}
                   </div>
                 </div>
@@ -1790,13 +1817,27 @@ export default function JobDetail() {
 
                 {step.key === 'tts' && ttsInfo && (
                   <div className="px-5 pb-4 border-t border-slate-200">
-                    <div className="flex items-center gap-2 mt-3 mb-2.5">
-                      <Music size={15} className="text-accent-cyan"/>
-                      <span className="text-sm text-navy-400">
-                        {ttsInfo.total_duration ? `${(ttsInfo.total_duration/60).toFixed(1)}분` : ''}
-                        {ttsInfo.chunks && ` · ${ttsInfo.chunks.length}개 자막 청크`}
-                        {ttsInfo.used_gtts === true && <span className="ml-2 text-accent-green">✓ gTTS 실제 음성</span>}
-                      </span>
+                    <div className="flex items-center justify-between mt-3 mb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Music size={15} className="text-accent-cyan"/>
+                        <span className="text-sm text-navy-400">
+                          {ttsInfo.total_duration ? `${(ttsInfo.total_duration/60).toFixed(1)}분` : ''}
+                          {ttsInfo.chunks && ` · ${ttsInfo.chunks.length}개 자막 청크`}
+                          {ttsInfo.used_gtts === true && <span className="ml-2 text-accent-green">✓ gTTS 실제 음성</span>}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm('생성된 음성을 삭제할까요? 삭제 후에는 TTS를 다시 생성해야 합니다.')) {
+                            deleteTtsMut.mutate()
+                          }
+                        }}
+                        disabled={deleteTtsMut.isPending}
+                        className="text-xs text-red-300 hover:text-red-200 border border-red-900/40 bg-red-950/20 px-2.5 py-1 rounded-lg transition disabled:opacity-50"
+                      >
+                        {deleteTtsMut.isPending ? '삭제 중…' : '🗑 음성 삭제'}
+                      </button>
                     </div>
                     {ttsInfo.audio_path && (
                       <audio controls className="w-full h-9" style={{ filter: 'invert(0.9)' }}>

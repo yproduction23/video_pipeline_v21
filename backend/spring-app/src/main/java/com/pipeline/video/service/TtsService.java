@@ -164,6 +164,25 @@ public class TtsService {
         log.info("TTS 확정 완료: jobId={}", jobId);
     }
 
+    /**
+     * 2026-10-06 사용자 요청: 잘못 생성된 음성(예: 대본 분할 버그로 문장이
+     * 중복 낭독된 TTS)을 그대로 둔 채 다음 단계로 넘어갈 수 없게, 생성된
+     * TTS_AUDIO 자산을 지운다. 이미 TTS_PENDING을 지난 상태였다면 되돌려
+     * 다음 단계(이미지)가 더 이상 유효하지 않은 음성을 참조하지 않게 한다.
+     */
+    @Transactional
+    public void deleteAudio(Long jobId) {
+        VideoJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
+        assetRepository.deleteByJobIdAndAssetType(jobId, AssetType.TTS_AUDIO);
+        if (job.getStatus() != JobStatus.DRAFT && job.getStatus() != JobStatus.KEYWORD_PENDING
+                && job.getStatus() != JobStatus.SCRIPT_PENDING) {
+            job.setStatus(JobStatus.TTS_PENDING);
+            jobRepository.save(job);
+        }
+        log.info("TTS 음성 삭제 완료: jobId={}", jobId);
+    }
+
     // ============================
     // helpers
     // ============================
