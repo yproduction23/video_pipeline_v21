@@ -99,6 +99,7 @@ export default function JobNew() {
   const [form, setForm] = useState({
     title: benchmark?.title || '',
     channelId: location.state?.channelId || '',
+    characterOverride: '',
     category: 'KOSPI',
     autonomy: 'GUIDED',
     longformTargetMinutes: 15,
@@ -109,6 +110,7 @@ export default function JobNew() {
     dataVisualsEnabled: false,
     contentNature: '',
   })
+  const [useCharacterOverride, setUseCharacterOverride] = useState(false)
 
   const selectedChannel = channels.find(c => c.channelId === form.channelId) || null
   // 비어 있으면 채널 기본값을 따르고, 그것도 없으면 사실형이다.
@@ -148,7 +150,7 @@ export default function JobNew() {
   }, [searchParams, location.state])
 
   const canProceed = () => {
-    if (step === 1) return form.title.trim().length > 0 && !!form.channelId
+    if (step === 1) return form.title.trim().length > 0 && !!form.channelId && (!useCharacterOverride || !!form.characterOverride)
     if (step === 2) return true
     if (step === 3) return true
     return false
@@ -341,6 +343,58 @@ export default function JobNew() {
                   <p className="text-xs font-semibold text-amber-700 mt-2">
                     제외 분야: {selectedChannel.genreExcluded} (검색 결과에서 자동 제외됩니다)
                   </p>
+                )}
+                <label className="flex items-center gap-2 mt-3 text-xs font-semibold text-slate-600 cursor-pointer w-fit">
+                  <input
+                    type="checkbox"
+                    checked={useCharacterOverride}
+                    onChange={(e) => {
+                      setUseCharacterOverride(e.target.checked)
+                      if (!e.target.checked) setForm(f => ({ ...f, characterOverride: '' }))
+                    }}
+                    className="w-3.5 h-3.5 accent-accent-cyan"
+                  />
+                  이 작업에 다른 채널의 캐릭터 사용 (주제·분야는 위 채널 설정 그대로 유지)
+                </label>
+                {useCharacterOverride && (
+                  <div className="grid grid-cols-2 gap-3 mt-2 p-3 rounded-xl bg-slate-50/80 border border-slate-200">
+                    {channels.map(ch => {
+                      const isOverrideSelected = form.characterOverride === ch.channelId
+                      return (
+                        <button
+                          key={ch.channelId}
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, characterOverride: ch.channelId }))}
+                          className={`relative text-left p-3 rounded-xl border-2 transition-all flex items-center gap-2.5 ${
+                            isOverrideSelected
+                              ? 'border-cyan-600 bg-cyan-50/80 shadow-md'
+                              : 'border-slate-200 bg-white hover:border-slate-300'
+                          }`}
+                        >
+                          {characterThumbUrls[ch.channelId] ? (
+                            <img
+                              src={characterThumbUrls[ch.channelId]}
+                              alt={`${ch.channelName} 캐릭터`}
+                              className="w-8 h-8 rounded-full object-cover border border-slate-200 bg-white flex-shrink-0"
+                            />
+                          ) : (
+                            <Tv size={16} className="text-slate-400 flex-shrink-0" />
+                          )}
+                          <span className={`text-xs font-bold ${isOverrideSelected ? 'text-cyan-900' : 'text-slate-900'}`}>
+                            {ch.channelName}
+                          </span>
+                          {isOverrideSelected && (
+                            <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-cyan-600 text-white flex items-center justify-center shadow-xs">
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {useCharacterOverride && !form.characterOverride && (
+                  <p className="text-xs font-semibold text-amber-700 mt-1.5">캐릭터를 선택해 주세요.</p>
                 )}
               </div>
 
