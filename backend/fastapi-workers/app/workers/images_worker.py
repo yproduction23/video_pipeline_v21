@@ -849,9 +849,18 @@ def _held_scene_candidate_image_path(job_dir: Path, index: int) -> str | None:
     장면은 preserve_retry_source()가 마지막 거부 후보를
     scene_XXX_rejected.png로 이미 디스크에 남겨둔다. 그런 후보가 없는
     경우(예: 장면 누적 요청 상한처럼 생성 자체가 시작되지 않은 경우)는
-    없는 경로를 지어내지 않고 None을 돌려준다."""
+    없는 경로를 지어내지 않고 None을 돌려준다.
+
+    2026-10-06 사용자 요청("6번씬이 안보여"): 국소 편집 드리프트·안전한
+    수치 표면 미발견처럼 전체 재생성으로 전환하는 경우 scene_XXX_rejected.png는
+    다음 로컬 편집 기준으로 쓰이지 않도록 의도적으로 삭제된다. 그 직전에
+    preserve_for_display()가 scene_XXX_last_candidate.png로 복사해 두므로,
+    기본 경로가 없으면 이 영구 경로를 대신 반환한다."""
     candidate = Path(job_dir) / f"scene_{index:03d}_rejected.png"
-    return str(candidate) if candidate.is_file() else None
+    if candidate.is_file():
+        return str(candidate)
+    display_candidate = Path(job_dir) / f"scene_{index:03d}_last_candidate.png"
+    return str(display_candidate) if display_candidate.is_file() else None
 
 
 def _apply_info_scene_template(scene: dict) -> tuple[dict, object | None]:
@@ -2869,6 +2878,13 @@ Rules:
             provider_transient_failures = 0
             retry_feedback: dict | None = None
             retry_source_path = str(job_dir / f"scene_{index:03d}_rejected.png")
+            # 2026-10-06 사용자 요청: 국소 편집이 드리프트하거나 안전한 수치
+            # 표면을 못 찾으면 retry_source_path를 다음 전체 재생성 전에
+            # 지운다(그 후보를 다시 참조하면 같은 결함이 누적되므로). 하지만
+            # 그 파일은 운영자가 "검토 필요"에서 보는 유일한 실물 이미지라,
+            # 지우기 전에 이 영구 경로로 한 번 더 복사해 둔다 — 지워도
+            # 운영자가 마지막으로 거부된 이미지를 계속 볼 수 있게 한다.
+            display_candidate_path = str(job_dir / f"scene_{index:03d}_last_candidate.png")
             full_regeneration_after_local_drift = False
             # 2026-09-29 사용자 결정: 메인 공급자(OpenAI)가 같은 장면에서 장면별
             # 표적 교정 예산을 다 써도 계약을 못 넘기면, 포기하기 전에 이 장면만
@@ -2879,6 +2895,14 @@ Rules:
                 """실패 프레임을 다음 요청의 국소 편집 기준으로 보존한다."""
                 if valid_image(source_path):
                     shutil.copy2(source_path, retry_source_path)
+
+            def preserve_for_display(source_path: str | None = None) -> None:
+                """retry_source_path(또는 명시한 source_path)를 폐기하거나
+                애초에 저장하지 않기 전에, 운영자가 볼 마지막 거부 후보를
+                별도 영구 경로로 복사해 둔다."""
+                src = source_path or retry_source_path
+                if valid_image(src):
+                    shutil.copy2(src, display_candidate_path)
             # 외부 이미지 응답 저장 직후 OCR/합성 단계에서 프로세스가 끊기면
             # 유효한 원본 PNG만 남을 수 있다. 같은 원본을 다시 과금하지 않고
             # 최신 문자 게이트를 통과한 경우에만 최종 PNG로 승격한다.
@@ -2902,6 +2926,7 @@ Rules:
                         preserve_retry_source(img_path)
                     else:
                         full_regeneration_after_local_drift = True
+                        preserve_for_display(img_path)
                     contract_rejections += 1
                     retry_feedback = exc.review
                     logger.warning("기존 scene %s 원본 PNG의 비전 계약 위반을 감지해 재생성함: %s", index, exc)
@@ -2973,6 +2998,7 @@ Rules:
                         preserve_retry_source(img_path)
                     else:
                         full_regeneration_after_local_drift = True
+                        preserve_for_display(img_path)
                     contract_rejections += 1
                     retry_feedback = exc.review
                     logger.warning("기존 scene %s PNG의 비전 계약 위반을 감지해 재생성함: %s", index, exc)
@@ -3304,6 +3330,7 @@ Rules:
                         # 폐기한다. 같은 실패 프레임을 다시 편집해 드리프트를 누적하지
                         # 않고, 원래 장면 프롬프트로 새 후보를 만든 뒤 장면 계약 전체를
                         # 다시 검수한다.
+                        preserve_for_display(img_path)
                         Path(retry_source_path).unlink(missing_ok=True)
                         full_regeneration_after_local_drift = True
                         contract_rejections = 0
@@ -3326,6 +3353,7 @@ Rules:
                         ) from exc
                     if isinstance(exc, DeterministicSurfaceMissingError):
                         _audit_scene_quality(ctx, img_path, outcome="rejected", category="surface_composition")
+                        preserve_for_display(img_path)
                         Path(retry_source_path).unlink(missing_ok=True)
                         full_regeneration_after_local_drift = True
                         contract_rejections += 1
@@ -3346,6 +3374,7 @@ Rules:
                             # 흐린 인물·녹은 패널·인페인팅 얼룩은 한 부분만 다시
                             # 그리면 주변 화풍과 구도가 더 흔들린다. 실패 프레임을
                             # 참조 편집하지 않고 동일 장면 계약으로 새 후보를 만든다.
+                            preserve_for_display(img_path)
                             Path(retry_source_path).unlink(missing_ok=True)
                             full_regeneration_after_local_drift = True
                         else:

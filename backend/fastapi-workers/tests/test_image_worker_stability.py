@@ -1367,5 +1367,104 @@ class SelectedSceneRetryLeavesUnselectedHeldScenesUntouchedTests(unittest.TestCa
             self.assertEqual({s["index"] for s in review["scenes"]}, {0, 2})
 
 
+class HeldSceneStillExposesACandidateWhenForcedFullRegenerationDiscardsItTests(unittest.TestCase):
+    """2026-10-06 사용자 요청("6번씬이 안보여"): 국소 편집 드리프트나 안전한
+    결정론 수치 표면을 못 찾아 전체 재생성으로 전환하는 경로는
+    scene_XXX_rejected.png를 의도적으로 지운다(다음 국소 편집이 같은 결함을
+    다시 참조하지 않도록). 그런데 이 파일이 운영자가 보는 유일한 실물
+    이미지라, 지워지면 "검토 필요" 목록에 썸네일이 통째로 사라졌다."""
+
+    def test_deterministic_surface_missing_still_leaves_a_displayable_candidate(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import DeterministicSurfaceMissingError, ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def generate_image(self, **kwargs):
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_visual_qa(ctx, _img_path):
+            raise DeterministicSurfaceMissingError(
+                "장면 비전 계약 위반: deterministic_surface_oversized",
+                {"failure_categories": ["deterministic_surface_oversized"], "reason": "안전한 수치 표면 없음"},
+            )
+
+        scenes = [
+            {
+                "title": "장면 1",
+                "section": "scene_0",
+                "narration": "승인 내레이션 0",
+                "prompt_en": "editorial finance scene 0",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+        ]
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+                 patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+                 patch.object(budget, "_job_path", lambda job, name: job_dir / name), \
+                 patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+                 patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
+                 patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa), \
+                 patch("app.workers.images_worker._audit_scene_quality", lambda *a, **k: None):
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=Provider(),
+                    job_dir=job_dir,
+                    job_id=9011,
+                )
+
+            held = response["held_scenes"][0]
+            self.assertEqual(held["index"], 0)
+            # 핵심 회귀 검증: scene_000_rejected.png는 다음 국소 편집 기준으로
+            # 쓰이지 않도록 지워지지만, 운영자는 여전히 실물 이미지를 봐야 한다.
+            self.assertFalse((job_dir / "scene_000_rejected.png").exists())
+            self.assertIsNotNone(held.get("image_path"))
+            self.assertTrue(Path(held["image_path"]).is_file())
+            self.assertEqual(Path(held["image_path"]).name, "scene_000_last_candidate.png")
+
+
 if __name__ == "__main__":
     unittest.main()
