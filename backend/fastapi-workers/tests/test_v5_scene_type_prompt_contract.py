@@ -227,6 +227,35 @@ def test_strict_textless_with_explicit_surface_plan_demands_one_blank_signboard(
     assert "do not draw text, digits, symbols, chart labels, or factual values there" in prompt
 
 
+def test_general_strict_textless_scene_does_not_request_chart_iconography():
+    """2026-10-07 사용자 재현(job 14, 씬 0): "저 군대 안 갑니다!" 기자회견
+    장면처럼 정보형이 아닌 일반 서사 장면인데도, strict_textless의 공용
+    배경 지시문이 "차트·게이지·막대/곡선 실루엣"을 요구해 금융 데이터와
+    전혀 무관한 장면에 막대그래프가 계속 그려졌다. 정보형이 아니면 차트류
+    도상을 아예 요구하지 않아야 한다."""
+    selection = recommend_v5_archetype({
+        "scene_type": "general",
+        "content": "인터뷰 발언을 설명합니다.",
+    })
+    spec = SceneSpec("general-quote", selection.archetype, "explain", "reporter", "present")
+
+    prompt = build_prompt(
+        spec,
+        visual_text_policy="strict_textless",
+        scene_type_selection=selection,
+        text_surface_plan=[{
+            "text": "저 군대 안 갑니다!",
+            "surface": "context_sign_1",
+            "surface_kind": "signboard",
+        }],
+    ).lower()
+
+    assert "do not add charts, gauges, dials, bar or curve silhouettes" in prompt
+    assert "abstract bar and curve silhouettes without axes" not in prompt
+    assert "color-only control dials" not in prompt
+    assert "reserved for a short caption to be composited afterward" in prompt
+
+
 def test_general_scene_does_not_receive_a_number_or_fact_surface_instruction():
     selection = recommend_v5_archetype({
         "scene_type": "general",

@@ -693,13 +693,29 @@ def build_prompt(
             "up": "a clear rising non-numeric trend line and upward arrow",
             "neutral": "a balanced non-numeric trend line and connecting arrows",
         }[semantic_direction]
-        background_information_density = (
-            "BACKGROUND INFORMATION DENSITY: build a fully dressed explanatory set, not a simple backdrop. "
-            "Include color-only control dials, clusters of signal lights, dense non-linguistic connection lines, "
-            "abstract bar and curve silhouettes without axes, map markers, layered physical props, and colored light shapes. "
-            f"Use {primary_surface} or another storyboard-planned scene-native zone for {direction_visual} and leave only the exact planned numeric typography area calm enough for deterministic compositing. "
-            "Every visual surface must contain meaningful non-linguistic detail rather than an empty placeholder."
-        )
+        if is_selected_information_scene:
+            background_information_density = (
+                "BACKGROUND INFORMATION DENSITY: build a fully dressed explanatory set, not a simple backdrop. "
+                "Include color-only control dials, clusters of signal lights, dense non-linguistic connection lines, "
+                "abstract bar and curve silhouettes without axes, map markers, layered physical props, and colored light shapes. "
+                f"Use {primary_surface} or another storyboard-planned scene-native zone for {direction_visual} and leave only the exact planned numeric typography area calm enough for deterministic compositing. "
+                "Every visual surface must contain meaningful non-linguistic detail rather than an empty placeholder."
+            )
+        else:
+            # 2026-10-07 사용자 재현(job 14, 씬 0): 정보형이 아닌 일반 서사
+            # 장면(인터뷰 발언 등)인데도 이 분기가 "차트·게이지·막대/곡선
+            # 실루엣"을 요구해, 금융 데이터와 무관한 장면 배경에 막대그래프가
+            # 계속 끼어들었다. 정보형이 아니면 장면에 맞는 소품/건축/조명만
+            # 요구하고 차트류 도상은 아예 금지한다.
+            background_information_density = (
+                "BACKGROUND INFORMATION DENSITY: build a fully dressed, story-specific set, not a simple backdrop. "
+                "Use only scene-native architecture, furniture, lighting, and props that belong to this narration. "
+                "Do not add charts, gauges, dials, bar or curve silhouettes, data readouts, or any market/analytical iconography — "
+                "this scene is not about market or financial data. "
+                f"On {primary_surface} or another storyboard-planned scene-native zone, leave one calm, visually quiet area "
+                "reserved for a short caption to be composited afterward. "
+                "Every other surface must contain meaningful, scene-appropriate detail rather than an empty placeholder."
+            )
         exclusions = (
             "DO NOT INCLUDE any visible typographic mark. The image must contain no writing-like strokes anywhere: "
             "no readable or pseudo-readable words, glyphs, numerals, captions, branding marks, or watermarks. "
