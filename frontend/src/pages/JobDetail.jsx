@@ -424,6 +424,18 @@ export default function JobDetail() {
     },
   })
 
+  const reclassifyScriptMut = useMutation({
+    mutationFn: () => jobsApi.reclassifyScript(id),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['assets', id, 'SCRIPT'])
+      alert('장면 분류 정보를 최신 기준으로 갱신했습니다. 대사 원문은 변경되지 않았습니다.')
+    },
+    onError: (err) => {
+      alert('분류 정보 갱신 실패: ' + (err.response?.data?.message || err.message))
+    },
+  })
+
   const confirmKeywordMut = useMutation({
     mutationFn: (keyword) => jobsApi.confirmKeyword(id, keyword),
     onSuccess: () => {
@@ -1314,6 +1326,25 @@ export default function JobDetail() {
                         className="text-xs bg-navy-700 text-gray-200 border border-slate-300 px-3 py-2 rounded-xl hover:bg-navy-600 transition font-medium flex items-center gap-1"
                       >
                         <Zap size={12}/> 다시 생성
+                      </button>
+                    )}
+                    {/* 2026-10-07 사용자 요청: 분류 버그(자동 번호 제목·재작성
+                        플레이스홀더 문구로 인한 오분류) 수정 이전에 승인된
+                        대본은 옛 scene_type·배경 설정을 그대로 쓴다. 대사
+                        원문은 바꾸지 않고 분류 메타데이터만 최신 코드로
+                        다시 계산한다(Claude 미호출). */}
+                    {ss === 'done' && step.key === 'script' && runningStep === null && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (confirm('장면 분류 정보(배경·주제)만 최신 기준으로 다시 계산할까요? 대사 원문은 전혀 바뀌지 않습니다. 이후 이미지를 다시 생성해야 반영됩니다.')) {
+                            reclassifyScriptMut.mutate()
+                          }
+                        }}
+                        disabled={reclassifyScriptMut.isPending}
+                        className="text-xs bg-navy-700 text-gray-200 border border-slate-300 px-3 py-2 rounded-xl hover:bg-navy-600 transition font-medium flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {reclassifyScriptMut.isPending ? <Loader size={12} className="animate-spin"/> : <Zap size={12}/>} 분류 정보 갱신
                       </button>
                     )}
                     {ss === 'active' && isAuto && <Loader size={16} className="animate-spin text-accent-cyan"/>}

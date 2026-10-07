@@ -877,6 +877,10 @@ class ScriptFlowRevalidateRequest(BaseModel):
     narrative_plan: dict = Field(default_factory=dict)
     previous_flow: dict = Field(default_factory=dict)
 
+
+class ScriptReclassifySceneRequest(BaseModel):
+    sections: list[dict] = Field(default_factory=list)
+
 @app.post("/workers/script/generate")
 def script_generate(request: ScriptGenerateRequest):
     try:
@@ -949,6 +953,21 @@ def script_flow_revalidate(request: ScriptFlowRevalidateRequest):
     result["revalidated_from"] = previous.get("method")
     result["revalidation_method"] = "previous_claude_semantics_plus_current_deterministic"
     return result
+
+
+@app.post("/workers/script/reclassify-scenes")
+def script_reclassify_scenes(request: ScriptReclassifySceneRequest):
+    """이미 승인된 대본의 scene_type·배경 분류만 최신 코드로 다시 계산한다.
+
+    2026-10-07 사용자 재현: 분류 버그 수정 이전에 승인된 대본은 옛 scene_type과
+    art_direction.topic/setting/props를 그대로 쓴다. Claude를 호출하지 않으며,
+    승인 대본 원문과 이미 확정된 archetype은 건드리지 않는다.
+    """
+    from app.workers.script_worker import reclassify_scenes
+
+    if not request.sections:
+        raise HTTPException(400, "sections가 비어 있습니다.")
+    return {"sections": reclassify_scenes(request.sections)}
 
 
 # ============================

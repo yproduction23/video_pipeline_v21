@@ -305,6 +305,46 @@ public class ScriptService {
         }
     }
 
+    /**
+     * 2026-10-07 사용자 재현(job 14, 씬 0): 분류 버그(자동 번호 제목·재작성
+     * 플레이스홀더 문구로 인한 오분류, 수정 완료) 이전에 승인된 대본은 DB에
+     * 저장된 옛 scene_type·art_direction을 그대로 쓴다. revalidate()와 달리
+     * SCRIPT_PENDING 상태로 제한하지 않는다 — 이미 승인되어 다음 단계로 넘어간
+     * Job도 분류 메타데이터만 최신 코드로 다시 계산해야 하기 때문이다. Claude를
+     * 호출하지 않으며, 승인 대본 원문(내레이션)은 전혀 건드리지 않는다.
+     */
+    public Map<String, Object> reclassifyScenes(Long jobId, String username) {
+        Asset latest = assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(jobId, AssetType.SCRIPT)
+                .orElseThrow(() -> new IllegalStateException("재분류할 SCRIPT 자산이 없습니다."));
+        try {
+            Map<String, Object> previous = objectMapper.readValue(latest.getMetaJson(), Map.class);
+            Object rawSections = previous.get("sections");
+            if (!(rawSections instanceof List<?> storedSections) || storedSections.isEmpty()) {
+                throw new IllegalStateException("재분류할 장면(sections)이 없습니다.");
+            }
+            List<Map<String, Object>> sections = storedSections.stream()
+                    .filter(Map.class::isInstance)
+                    .map(item -> (Map<String, Object>) item)
+                    .toList();
+            List<Map<String, Object>> reclassified = fastApiClient.reclassifyScriptScenes(sections);
+            Map<String, Object> refreshed = new LinkedHashMap<>(previous);
+            refreshed.put("sections", reclassified);
+            refreshed.put("reclassified_by", username != null ? username : "system");
+            refreshed.put("reclassification_reason", "분류 버그 수정 이후 scene_type·배경 메타데이터 갱신 (내레이션 미변경)");
+            assetRepository.save(Asset.builder()
+                    .jobId(jobId)
+                    .assetType(AssetType.SCRIPT)
+                    .metaJson(safeJson(refreshed))
+                    .build());
+            return Map.of(
+                    "status", "RECLASSIFIED",
+                    "scene_count", reclassified.size()
+            );
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("SCRIPT 자산 JSON 재분류 실패: " + e.getMessage(), e);
+        }
+    }
+
     @Transactional
     public void confirm(Long jobId, String finalScript, List<Map<String, Object>> inputSections, String username) {
         VideoJob job = jobRepository.findById(jobId)

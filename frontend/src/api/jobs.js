@@ -26,6 +26,7 @@ export const jobsApi = {
   // 스크립트
   generateScript: (id) => apiClient.post(`/jobs/${id}/script/generate`).then(r => r.data),
   revalidateScript: (id) => apiClient.post(`/jobs/${id}/script/revalidate`).then(r => r.data),
+  reclassifyScript: (id) => apiClient.post(`/jobs/${id}/script/reclassify`).then(r => r.data),
   confirmScript: (id, script, sections = []) =>
     apiClient.post(`/jobs/${id}/script/confirm`, { finalScript: script, sections }).then(r => r.data),
 

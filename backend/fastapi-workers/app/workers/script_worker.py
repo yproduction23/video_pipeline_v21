@@ -25,7 +25,7 @@ from app.workers.market_data_collector import MarketDataCollector
 from app.config import CLAUDE_MODEL, SCENE_DURATION_SEC
 from app import runtime_config
 from app.utils.quality_gate import enrich_scene_plans, assess_scene_plan, assess_script_house_style
-from app.utils.art_direction import direct_scenes, assess_art_diversity
+from app.utils.art_direction import direct_scenes, assess_art_diversity, _topic
 from app.utils.market_charts import extract_market_chart
 from app.services.info_surface.hero_stat import hero_stat_from_chart
 from app.services.overlay.editorial_overlay import OverlaySlot
@@ -3328,6 +3328,29 @@ def _classify_scene_types(sections: list[dict]) -> list[dict]:
         scene["selection_reason"] = selection_reason
         classified.append(scene)
     return _rebalance_scene_type_distribution(classified)
+
+
+def reclassify_scenes(sections: list[dict]) -> list[dict]:
+    """이미 승인된 대본 장면의 scene_type·배경 분류만 최신 코드로 다시 계산한다.
+
+    2026-10-07 사용자 재현(job 14, 씬 0): 그 이전에 승인된 대본은 자동 번호
+    제목("장면 001")과 길이 재작성 플레이스홀더 문구가 섞여 들어가 분류가
+    잘못됐던 버그(수정 완료)의 혜택을 못 받고, DB에 저장된 옛 scene_type과
+    art_direction.topic/setting/props를 그대로 쓴다. 이 함수는 Claude를
+    호출하지 않는 순수 결정론 함수로, 승인 대본 원문(content/text/
+    text_for_tts/screen_texts 등)과 이미 확정된 archetype/specific_props는
+    전혀 건드리지 않고 분류 메타데이터만 갱신한다.
+    """
+    classified = _classify_scene_types(sections)
+    for scene in classified:
+        text = str(scene.get("content") or scene.get("text") or "")
+        topic_name, setting, props = _topic(text)
+        direction = dict(scene.get("art_direction") or {})
+        direction["topic"] = topic_name
+        direction["setting"] = setting
+        direction["props"] = props
+        scene["art_direction"] = direction
+    return classified
 
 
 def _rebalance_scene_type_distribution(scenes: list[dict]) -> list[dict]:

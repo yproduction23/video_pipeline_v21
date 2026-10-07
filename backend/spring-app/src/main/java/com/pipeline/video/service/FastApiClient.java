@@ -310,6 +310,27 @@ public class FastApiClient {
         }
     }
 
+    /** 2026-10-07: 이미 승인된 대본의 scene_type·배경 분류만 최신 코드로 다시 계산한다. Claude 호출 없음. */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> reclassifyScriptScenes(List<Map<String, Object>> sections) {
+        try {
+            Map<String, Object> bodyMap = new HashMap<>();
+            bodyMap.put("sections", sections != null ? sections : List.of());
+            Map<String, Object> response = objectMapper.readValue(
+                    postJson(fastApiUrl + "/workers/script/reclassify-scenes", bodyMap), Map.class);
+            Object rawSections = response.get("sections");
+            if (!(rawSections instanceof List<?> result)) {
+                throw new RuntimeException("재분류 응답에 sections가 없습니다.");
+            }
+            return result.stream()
+                    .filter(Map.class::isInstance)
+                    .map(item -> (Map<String, Object>) item)
+                    .toList();
+        } catch (Exception e) {
+            throw new RuntimeException("장면 재분류 오류: " + e.getMessage(), e);
+        }
+    }
+
     // Phase 3-3 — TTS
     public TtsGenerateResponse generateTts(Long jobId, String script, String voiceId) {
         return generateTts(jobId, script, voiceId, null, null, null);

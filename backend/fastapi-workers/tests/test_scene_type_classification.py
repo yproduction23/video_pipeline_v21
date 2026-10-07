@@ -1,4 +1,9 @@
-from app.workers.script_worker import ScriptWorker, _classify_scene_types, _needs_dialogue_length_rewrite
+from app.workers.script_worker import (
+    ScriptWorker,
+    _classify_scene_types,
+    _needs_dialogue_length_rewrite,
+    reclassify_scenes,
+)
 
 
 def test_scene_type_classification_keeps_reason_for_each_supported_type():
@@ -108,6 +113,55 @@ def test_longform_diagram_scenes_are_rebalanced_into_general_situations():
     assert len(diagram_scenes) == 3  # round(30 * 0.10)
     assert len(general_scenes) == 27
     assert all("상한" in scene["selection_reason"] for scene in general_scenes)
+
+
+def test_reclassify_scenes_refreshes_metadata_but_keeps_narration_byte_identical():
+    """2026-10-07 사용자 재현(job 14, 씬 0): 2026-10-06에 승인된 대본은 오늘
+    고친 분류 버그(자동 번호 제목, 플레이스홀더 문구) 수정의 혜택을 못 받고
+    DB에 저장된 옛 scene_type·배경 설정을 그대로 쓴다. reclassify_scenes는
+    Claude를 호출하지 않고 scene_type과 art_direction의 topic/setting/props만
+    최신 코드로 다시 계산하며, 승인 대본 원문(TTS/자막의 단일 기준)은 한
+    글자도 바꾸지 않는다."""
+    stale_scene = {
+        "title": "장면 001",
+        "section": "intro",
+        "content": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "text": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "text_for_tts": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "screen_texts": ["저 군대 안 갑니다!"],
+        "archetype": "briefing_podium",
+        "specific_props": "마이크 앞에 놓인 금메달, 조명이 쏟아지는 발표대",
+        "scene_type": "metric",  # 옛 코드가 남긴 오분류
+        "selection_reason": "대본에 검증 대상 수치·등락·규모 표현이 있어 지표형으로 분류",
+        "art_direction": {
+            "family": "hero_metaphor",
+            "topic": "finance",
+            "setting": "premium Korean finance editorial studio",
+            "props": ["financial chart silhouette", "briefing screen", "document folder"],
+            "wardrobe": "tailored navy analyst suit with a gold accent",
+            "character_required": True,
+        },
+    }
+
+    result = reclassify_scenes([stale_scene])
+    scene = result[0]
+
+    # 서사 신호만으로 다시 분류하면 general로 바뀐다 (더는 metric이 아님).
+    assert scene["scene_type"] == "general"
+    # 배경도 더는 금융으로 강제되지 않는다.
+    assert scene["art_direction"]["topic"] != "finance"
+    assert "finance" not in scene["art_direction"]["setting"].lower()
+    # 이미 올바른 archetype/소품 지시(스크립트 단계 결정)는 그대로 유지된다.
+    assert scene["archetype"] == "briefing_podium"
+    assert scene["specific_props"] == stale_scene["specific_props"]
+    # 승인 대본 원문은 한 글자도 바뀌지 않는다.
+    assert scene["content"] == stale_scene["content"]
+    assert scene["text"] == stale_scene["text"]
+    assert scene["text_for_tts"] == stale_scene["text_for_tts"]
+    assert scene["screen_texts"] == stale_scene["screen_texts"]
+    # art_direction의 다른 필드(family/wardrobe 등)도 그대로 유지된다.
+    assert scene["art_direction"]["family"] == "hero_metaphor"
+    assert scene["art_direction"]["wardrobe"] == "tailored navy analyst suit with a gold accent"
 
 
 def test_short_dialogue_requests_a_length_rewrite_before_tts():

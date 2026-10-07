@@ -48,4 +48,12 @@ public class ScriptController {
             @AuthenticationPrincipal String username) {
         return ResponseEntity.ok(scriptService.revalidate(jobId, username));
     }
+
+    /** 2026-10-07: 이미 승인된 대본의 scene_type·배경 분류만 다시 계산 (내레이션 미변경, Claude 미호출). */
+    @PostMapping("/reclassify")
+    public ResponseEntity<Map<String, Object>> reclassify(
+            @PathVariable Long jobId,
+            @AuthenticationPrincipal String username) {
+        return ResponseEntity.ok(scriptService.reclassifyScenes(jobId, username));
+    }
 }
