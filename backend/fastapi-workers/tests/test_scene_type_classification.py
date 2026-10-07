@@ -48,6 +48,22 @@ def test_auto_numbered_scene_title_does_not_force_a_spurious_metric_classificati
     assert scene["scene_type"] != "metric"
 
 
+def test_dialogue_rewrite_placeholder_prompt_ko_does_not_force_text_classification():
+    """2026-10-07 사용자 재현(job 14, 씬 0): title 수정 후에도 여전히
+    "text"로 분류됐다. _structured_script_from_dialogue_lines()가 모든
+    장면에 공통으로 넣는 고정 플레이스홀더 prompt_ko("대사 의미를 설명하는
+    한국형 금융 상황 장면")의 "의미"가 텍스트형 신호와 우연히 겹친 것이
+    원인이었다. 이 틀 문구는 실제 시각 프롬프트가 아니므로 분류 근거에서
+    빠져야 한다."""
+    scene = _classify_scene_types([{
+        "section": "intro",
+        "content": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "prompt_ko": "대사 의미를 설명하는 한국형 금융 상황 장면",
+    }])[0]
+
+    assert scene["scene_type"] == "general"
+
+
 def test_graph_signal_has_priority_over_data_section_metric_fallback():
     scene = _classify_scene_types([{
         "section": "data",

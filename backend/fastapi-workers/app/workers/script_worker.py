@@ -3273,8 +3273,17 @@ def _scene_type_source_text(scene: dict) -> str:
     실제 내용과 무관하게 모든 장면이 숫자를 "가진" 것으로 걸려 metric으로
     분류됐다. title은 순번 라벨일 뿐 서사 신호가 아니므로 분류 근거에서
     제외한다.
+
+    같은 재현에서 "prompt_ko"도 실제 장면 내용이 아니라
+    _structured_script_from_dialogue_lines()가 모든 장면에 공통으로 넣는
+    고정 플레이스홀더("대사 의미를 설명하는 한국형 금융 상황 장면")를 담고
+    있었다 — 실제 시각 프롬프트는 이미지 생성 단계에서 별도로 채워지며
+    스크립트 JSON의 prompt_ko는 갱신되지 않는다. 이 틀 문구의 "의미"가
+    텍스트형 신호와 우연히 겹쳐 금융과 무관한 장면을 텍스트형으로 몰았다.
+    대사 내용은 이미 content/text에 있으므로 prompt_ko 없이도 신호가
+    충분하다.
     """
-    fields = ("content", "text", "prompt_ko", "prompt_en", "visual_intent")
+    fields = ("content", "text", "prompt_en", "visual_intent")
     return "\n".join(str(scene.get(field) or "") for field in fields).lower()
 
 
