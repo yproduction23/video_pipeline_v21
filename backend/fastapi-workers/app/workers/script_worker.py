@@ -3266,8 +3266,15 @@ _TEXT_SIGNALS = (
 
 
 def _scene_type_source_text(scene: dict) -> str:
-    """분류 근거가 된 기존 대본·시각 의도 텍스트만 합친다."""
-    fields = ("title", "content", "text", "prompt_ko", "prompt_en", "visual_intent")
+    """분류 근거가 된 기존 대본·시각 의도 텍스트만 합친다.
+
+    2026-10-07 사용자 재현(job 14, 씬 0): "title"은 "장면 001"처럼 항상
+    자동 번호가 매겨져 있어, 이걸 합친 텍스트에 숫자 판별 정규식을 돌리면
+    실제 내용과 무관하게 모든 장면이 숫자를 "가진" 것으로 걸려 metric으로
+    분류됐다. title은 순번 라벨일 뿐 서사 신호가 아니므로 분류 근거에서
+    제외한다.
+    """
+    fields = ("content", "text", "prompt_ko", "prompt_en", "visual_intent")
     return "\n".join(str(scene.get(field) or "") for field in fields).lower()
 
 

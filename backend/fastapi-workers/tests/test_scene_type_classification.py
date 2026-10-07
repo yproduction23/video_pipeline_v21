@@ -32,6 +32,22 @@ def test_scene_type_classification_keeps_reason_for_each_supported_type():
     assert all(scene["selection_reason"] for scene in scenes)
 
 
+def test_auto_numbered_scene_title_does_not_force_a_spurious_metric_classification():
+    """2026-10-07 사용자 재현(job 14, 씬 0): "저 군대 안 갑니다!" 인터뷰 발언
+    장면에 숫자·시장 신호가 전혀 없는데도 "metric"으로 분류돼, V5 아키타입
+    추천이 금융 차트가 있는 data_lab으로 떨어졌다. 원인은
+    _scene_type_source_text가 "title" 필드도 합쳐서 숫자를 찾는데, 모든
+    장면 제목이 "장면 001"처럼 자동 번호가 매겨져 있어 실제 내용과 무관하게
+    항상 숫자가 걸렸기 때문이다."""
+    scene = _classify_scene_types([{
+        "title": "장면 001",
+        "section": "intro",
+        "content": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+    }])[0]
+
+    assert scene["scene_type"] != "metric"
+
+
 def test_graph_signal_has_priority_over_data_section_metric_fallback():
     scene = _classify_scene_types([{
         "section": "data",
