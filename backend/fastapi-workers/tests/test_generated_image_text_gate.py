@@ -215,6 +215,25 @@ def test_retry_keeps_information_props_and_targets_only_bad_surface():
     assert "detached glass card" in prompt
 
 
+def test_retry_feedback_asks_to_remove_an_unexpected_chart():
+    """2026-10-07 사용자 재현(job 14, 씬 0): 비전 검수가 비정보형 장면의
+    차트를 적발해도, 재시도 프롬프트에 그 교정 지시가 없으면 다음 시도도
+    같은 차트를 또 그릴 수 있다."""
+    scene = {"art_direction": {}}
+    prompt = _bounded_text_generation_prompt(
+        "A press briefing room with a podium and a presentation screen.",
+        retry=True,
+        retry_feedback={
+            "failure_categories": ["unexpected_chart_or_data_visualization"],
+            "reason": "금융 데이터와 무관한 장면에 막대그래프가 그려짐",
+        },
+        audit_target=scene,
+    ).lower()
+
+    assert "remove every bar chart, line graph, pie chart" in prompt
+    assert "this narration is not about market or financial data" in prompt
+
+
 def test_explicit_opaque_equipment_surface_is_binding_without_global_layout():
     scene = {
         "screen_texts": ["영업이익"],

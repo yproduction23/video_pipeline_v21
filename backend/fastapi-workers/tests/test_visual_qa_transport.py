@@ -186,6 +186,64 @@ def test_visual_qa_no_longer_hard_fails_on_sclera_iris_separation(tmp_path: Path
     assert "character_warm_brown_iris" not in failures
 
 
+def test_visual_qa_rejects_unexpected_chart_in_a_general_narrative_scene(tmp_path: Path):
+    """2026-10-07 사용자 재현(job 14, 씬 0): "저 군대 안 갑니다!" 인터뷰 발언
+    장면처럼 금융 데이터와 무관한 general 장면인데도 Gemini가 막대그래프를
+    그렸다. 프롬프트로 "차트 금지"를 요청해도 매번 지켜지지 않으므로,
+    비전 검수가 비정보형 장면의 차트를 적발해 재생성을 유발해야 한다."""
+    image = tmp_path / "unexpected-chart.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    verdict = _accepted_verdict()
+    verdict.update({
+        "chart_or_data_visualization_present": True,
+        "decision": "review",
+        "reason": "금융 데이터와 무관한 장면에 막대그래프가 그려짐",
+    })
+    scene = {
+        "index": 0,
+        "image_path": str(image),
+        "scene_type": "general",
+        "text": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    assert "unexpected_chart_or_data_visualization" in report["reviewed"][0]["failure_categories"]
+
+
+def test_visual_qa_allows_charts_in_an_actual_information_scene(tmp_path: Path):
+    """metric/graph 같은 정보형 장면은 차트가 정상 콘텐츠이므로 같은 플래그가
+    걸리면 안 된다."""
+    image = tmp_path / "expected-chart.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    verdict = _accepted_verdict()
+    verdict.update({
+        "chart_or_data_visualization_present": True,
+        "decision": "accept",
+        "reason": "지표형 장면의 정상적인 차트",
+    })
+    scene = {
+        "index": 1,
+        "image_path": str(image),
+        "scene_type": "metric",
+        "text": "코스피 하락폭을 점검합니다.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    assert "unexpected_chart_or_data_visualization" not in report["reviewed"][0]["failure_categories"]
+
+
 def test_visual_qa_prompt_no_longer_asks_reviewer_to_require_sclera_iris_layers(tmp_path: Path):
     """2026-09-29: hard_failures 매핑만 지우면 리뷰어 LLM이 여전히 공막/홍채를
     검사 기준에 포함시켜 decision=review/score<78로 재시도를 유발할 수 있다

@@ -267,6 +267,15 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
             encoded = _encode_review_image(image_path)
             direction = scene.get("art_direction") or {}
             render_contract = scene.get("v5_render_contract") or {}
+            # 2026-10-07 사용자 재현(job 14, 씬 0): "general"(비정보형) 장면은
+            # app/v5/scene/prompt_builder.py의 strict_textless 분기가 차트·게이지
+            # 도상을 명시적으로 금지하지만, Gemini가 그 지시를 항상 지키지는
+            # 않는다. scene_type == "general"이면 차트가 전혀 기대되지 않는다
+            # (이 값은 prompt_builder.py의 is_selected_information_scene과 같은
+            # 기준: scene_type_selection.scene_type == "general"인지 여부다).
+            chart_expected = str(
+                render_contract.get("scene_type") or scene.get("scene_type") or ""
+            ).strip().lower() != "general"
             text_contract = scene.get("image_text_contract") or {}
             visual_quality_contract = scene.get("scene_visual_quality_contract") or build_scene_visual_quality_contract(
                 scene,
@@ -398,7 +407,11 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                 "because its exact glyphs are absent from the narration; first decide whether it claims a real fact); unexpected_text_regions "
                 "(array of {text:string,bbox:[x,y,width,height],confidence:0-1} using normalized 0..1 coordinates, tightly covering each actual malformed or unsupported string only); "
                 "white_sticker_halo_present (boolean); missing_required_props (string array); "
-                "number_panel_only (boolean); decision ('accept' or 'review'); reason (short Korean text).\n\n"
+                "number_panel_only (boolean); "
+                "chart_or_data_visualization_present (boolean; true when the image shows a bar chart, line graph, pie chart, "
+                "candlestick chart, or data dashboard with plotted series or axes — a stock-market or financial-data visualization. "
+                "A single arrow, a plain rising/falling trend line with no plotted series, or an unrelated diagram is false); "
+                "decision ('accept' or 'review'); reason (short Korean text).\n\n"
                 f"Narration: {scene.get('text') or ''}\n"
                 f"Approved exact visible strings: {json.dumps(approved_texts, ensure_ascii=False)}\n"
                 f"Required exact visible strings: {json.dumps(required_approved_texts, ensure_ascii=False)}\n"
@@ -418,7 +431,8 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                 f"Explicit character position, empty means unrestricted: {expected_position}\n"
                 f"Explicit character frame occupancy, empty means unrestricted: {expected_occupancy or ''}\n"
                 f"Composition strict: {composition_strict}\n"
-                f"Character required: {character_required}"
+                f"Character required: {character_required}\n"
+                f"Chart or financial data-visualization imagery expected in this scene: {chart_expected}"
             )
             payload = {
                 "contents": [{"parts": [
@@ -631,6 +645,8 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                 hard_failures.append("style_family_mismatch")
             if not bool(verdict.get("scene_information_density_match", False)):
                 hard_failures.append("scene_information_density")
+            if not chart_expected and bool(verdict.get("chart_or_data_visualization_present")):
+                hard_failures.append("unexpected_chart_or_data_visualization")
             if (
                 bool(deterministic_surface_contract.get("required"))
                 and not bool(verdict.get("deterministic_surface_scale_match", False))

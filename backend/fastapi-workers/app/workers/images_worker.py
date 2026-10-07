@@ -578,6 +578,13 @@ def _bounded_text_generation_prompt(
             suffix += " Strengthen only the narration's missing causal relationship using concrete scene-specific objects and action; avoid generic finance decoration."
         if "scene_information_density" in categories:
             suffix += " Restore useful Job-52-like information density outside the bounded text surface with relevant layered props, mechanisms, context, and depth; do not fill space with random labels or numbers."
+        if "unexpected_chart_or_data_visualization" in categories:
+            suffix += (
+                " Remove every bar chart, line graph, pie chart, candlestick chart, or data dashboard from this scene — "
+                "this narration is not about market or financial data. Replace that surface with scene-native objects, architecture, "
+                "or props that actually belong to the story (e.g. a plain presentation screen, a document, a window, a wall), "
+                "and keep one calm bordered area reserved for a short caption to be composited afterward."
+            )
         if "style_family_mismatch" in categories:
             suffix += " Restore the shared original 2D editorial-comic family while preserving this scene's unique location, palette, costume, and emotion."
         if "visual_quality_floor" in categories:
