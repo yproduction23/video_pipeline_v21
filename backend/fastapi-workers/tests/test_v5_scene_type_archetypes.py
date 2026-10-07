@@ -12,6 +12,23 @@ from app.v5.scene.scene_type_archetypes import (
 )
 
 
+def test_dialogue_rewrite_placeholder_does_not_route_general_scenes_to_classroom():
+    """2026-10-07 사용자 재현(job 14, 씬 0): scene_type을 general로 고친
+    뒤에도 archetype이 classroom으로 떨어졌다. _scene_text()가 title과
+    prompt_ko를 포함하는데, 길이 재작성을 거친 장면의 prompt_ko는
+    _structured_script_from_dialogue_lines()가 넣는 고정 플레이스홀더
+    ("대사 의미를 설명하는...")였고 그 "설명"이 classroom 힌트와 우연히
+    겹쳤다. 실제 대사 내용에는 "설명" 같은 단어가 전혀 없다."""
+    selection = recommend_v5_archetype({
+        "scene_type": "general",
+        "title": "장면 001",
+        "content": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "prompt_ko": "대사 의미를 설명하는 한국형 금융 상황 장면",
+    })
+
+    assert selection.archetype != "classroom"
+
+
 def test_mapping_candidates_all_exist_and_have_physical_information_surfaces():
     validate_archetype_mapping()
 

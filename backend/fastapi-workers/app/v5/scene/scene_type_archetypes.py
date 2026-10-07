@@ -180,9 +180,15 @@ _STOCK_CALCULATOR_HINTS: tuple[str, ...] = (
 
 def _scene_text(scene: dict) -> str:
     # narration/script/text_for_tts 키를 앞에 추가한다 (WO-1과 동일 우선순위 정책).
+    # 2026-10-07 사용자 재현(job 14, 씬 0): "title"("장면 001" 자동 번호)과
+    # "prompt_ko"(길이 재작성 장면에서 _structured_script_from_dialogue_lines가
+    # 넣는 고정 플레이스홀더 "대사 의미를 설명하는 한국형 금융 상황 장면")는
+    # 실제 장면 내용이 아니다. 두 필드가 섞여 비금융 일반 서사가 "설명" 힌트와
+    # 우연히 겹쳐 classroom으로 잘못 라우팅됐다(app/workers/script_worker.py의
+    # _scene_type_source_text와 같은 버그 패턴).
     fields = (
         "narration", "script", "narration_text", "text_for_tts",
-        "title", "content", "text", "prompt_ko", "prompt_en", "visual_intent",
+        "content", "text", "prompt_en", "visual_intent",
     )
     return "\n".join(str(scene.get(field) or "") for field in fields).lower()
 
