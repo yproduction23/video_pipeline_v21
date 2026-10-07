@@ -2,6 +2,23 @@ import os
 import pytest
 from app.utils.art_direction import direct_scenes, select_archetype_for_scene, keyword_fallback
 
+
+def test_non_finance_topic_does_not_fall_back_to_a_financial_chart_studio():
+    """2026-10-07 사용자 재현(job 14, 씬 0): 채널이 금융 외 사회·스포츠 이슈도
+    정상적으로 다루는데도, TOPICS 키워드에 안 걸리는 장면은 전부 "금융 브리핑
+    스튜디오+차트" 배경으로 떨어졌다. "저 군대 안 갑니다!" 같은 병역 논란
+    장면에 증권 브리핑룸이 나오는 원인이었다. 매칭되는 주제가 없을 때는
+    특정 산업 배경을 강요하지 않는 중립적인 폴백을 써야 한다."""
+    scenes = direct_scenes([{
+        "content": "이기혁 선수는 인터뷰에서 저 군대 안 갑니다 라고 외쳤습니다.",
+        "section": "intro",
+    }])
+
+    direction = scenes[0]["art_direction"]
+    assert direction["topic"] != "finance"
+    assert "finance" not in direction["setting"].lower()
+    assert not any("financial" in prop.lower() for prop in direction["props"])
+
 def test_regression_no_api_key(monkeypatch):
     """1. ANTHROPIC_API_KEY 미설정 환경에서 keyword_fallback 정상 동작 및 크래시 없음 증명."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

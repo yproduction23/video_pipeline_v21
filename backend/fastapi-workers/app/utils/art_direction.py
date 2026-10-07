@@ -464,7 +464,12 @@ def _topic(text: str) -> tuple[str, str, list[str]]:
     for name, keywords, setting, props in TOPICS:
         if any(keyword.lower() in text.lower() for keyword in keywords):
             return name, setting, props
-    return "finance", "premium Korean finance editorial studio", ["financial chart silhouette", "briefing screen", "document folder"]
+    # 2026-10-07 사용자 결정: 이 채널은 금융뿐 아니라 병역특례 논란 같은
+    # 사회·스포츠 이슈도 정상적으로 다룬다. TOPICS의 좁은 금융 섹터
+    # 키워드에 안 걸린다고 "금융 브리핑 스튜디오+차트"로 떨어지면, 전혀
+    # 관계없는 장면에 증권 그래프가 끼어든다(job 14 씬 0 재현). 특정
+    # 산업을 강요하지 않는 중립적인 편집 스튜디오로 폴백한다.
+    return "general", "neutral Korean editorial news studio", ["presentation screen", "document folder", "briefing materials"]
 
 
 def _mood(text: str) -> str:
