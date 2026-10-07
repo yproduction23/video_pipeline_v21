@@ -486,7 +486,28 @@ def _fact_surface_contract(
         f"{substitute_ban}{screenless_nonprimary_contract}{third_attempt_layout_ban}"
     )
     if visual_text_policy == "strict_textless":
-        return base + (
+        # 2026-10-07 사용자 재현(job 14, 씬 0): "계약으로만" 빈 표면을 요청하면
+        # Gemini가 그 표면 전체를 차트·게이지로 빽빽하게 채워, 나중에
+        # add_surface_caption이 글자를 얹을 깨끗한 빈 자리를 못 찾았다.
+        # 명시된 표면 계획이 있으면 그 표면의 종류(예: signboard)를 직접
+        # 지목해, 장면의 나머지 부분과 달리 그 표면 하나만은 장식 없이
+        # 비워 두도록 요구한다.
+        planned_surface_detail = ""
+        if has_explicit_surface_plan:
+            plan_item = next(
+                (item for item in (text_surface_plan or []) if isinstance(item, dict)), {}
+            )
+            surface_kind = str(plan_item.get("surface_kind") or "sign").strip() or "sign"
+            surface_description = str(plan_item.get("surface_description") or "").strip()
+            planned_surface_detail = (
+                f" In addition to the richly detailed surfaces above, include one separate, clearly bordered, physical {surface_kind}"
+                + (f" ({surface_description})" if surface_description else "")
+                + " reserved for a short caption to be composited afterward. "
+                "Unlike every other surface in this scene, that one object stays plain, evenly lit, and free of charts, gauges, "
+                "diagrams, arrows, or decoration — a genuinely blank physical object, not a dense analytical surface. "
+                "Do not substitute it with a chart, monitor, or dashboard."
+            )
+        return base + planned_surface_detail + (
             "Do not draw text, digits, symbols, chart labels, or factual values there. Instead render a fully finished, "
             "unlabelled physical material surface with dense non-numeric analytical detail: abstract grid lines, unlabeled rising or falling "
             "traces, pie-slice color shapes, arrows, world-map silhouettes, and decorative equation-like marks that are not readable characters. "

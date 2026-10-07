@@ -198,6 +198,35 @@ def test_strict_textless_contract_reserves_the_same_prop_without_text_conflict()
     assert "do not include any visible typographic mark" in prompt
 
 
+def test_strict_textless_with_explicit_surface_plan_demands_one_blank_signboard():
+    """2026-10-07 사용자 재현(job 14, 씬 0): "계약 문장"만으로 빈 표면을
+    요청했더니 Gemini가 표면 전체를 차트로 꽉 채워, 나중에
+    add_surface_caption이 글자를 얹을 빈 자리를 못 찾았다(실제 유료
+    테스트로 확인). 명시된 표면 계획이 있으면 그 종류(signboard 등)를
+    직접 지목해 그 표면 하나는 장식 없이 비워 두라고 요구해야 한다."""
+    selection = recommend_v5_archetype({
+        "scene_type": "metric",
+        "content": "인터뷰 발언을 설명합니다.",
+    })
+    spec = SceneSpec("metric-quote", selection.archetype, "explain", "reporter", "present")
+
+    prompt = build_prompt(
+        spec,
+        visual_text_policy="strict_textless",
+        scene_type_selection=selection,
+        text_surface_plan=[{
+            "text": "저 군대 안 갑니다!",
+            "surface": "context_sign_1",
+            "surface_kind": "signboard",
+        }],
+    ).lower()
+
+    assert "bordered, physical signboard" in prompt
+    assert "stays plain, evenly lit, and free of charts, gauges" in prompt
+    assert "do not substitute it with a chart, monitor, or dashboard" in prompt
+    assert "do not draw text, digits, symbols, chart labels, or factual values there" in prompt
+
+
 def test_general_scene_does_not_receive_a_number_or_fact_surface_instruction():
     selection = recommend_v5_archetype({
         "scene_type": "general",
