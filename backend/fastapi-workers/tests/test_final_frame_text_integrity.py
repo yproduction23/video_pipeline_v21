@@ -151,6 +151,33 @@ def test_deterministic_caption_uses_the_planned_surface_kind(monkeypatch, tmp_pa
     assert seen["kind"] == "prop_panel"
 
 
+def test_deterministic_caption_uses_the_planned_surface_kind_for_non_numeric_quotes(monkeypatch, tmp_path: Path):
+    """2026-10-07 사용자 재현(job 14, 씬 0): "저 군대 안 갑니다!"처럼 숫자가
+    전혀 없는 승인 인용문의 surface_plan 항목이, 숫자 포함 여부만 보던 필터
+    때문에 통째로 버려지고 범용 "board"로 폴백했다. 숫자 유무와 무관하게
+    승인 문구가 있는 계획 항목은 그대로 전달돼야 한다."""
+    image_path = tmp_path / "scene.png"
+    Image.new("RGB", (1280, 720), "#20354d").save(image_path)
+    scene = _caption_scene()
+    scene["v5_render_contract"]["surface_caption"]["surface_plan"] = [{
+        "text": "저 군대 안 갑니다!",
+        "surface": "context_sign_1",
+        "surface_id": "context_sign_1",
+        "surface_kind": "signboard",
+    }]
+    scene["v5_render_contract"]["surface_caption"]["korean"] = "저 군대 안 갑니다!"
+    seen = {}
+
+    def fake_detect(path, kind, **kwargs):
+        seen["kind"] = kind
+        return None
+
+    monkeypatch.setattr("app.services.overlay.surface_detector.detect_surface_for_plan", fake_detect)
+    with pytest.raises(DeterministicSurfaceMissingError):
+        ImagesWorker()._apply_deterministic_surface_caption(scene, str(image_path))
+    assert seen["kind"] == "signboard"
+
+
 def test_deterministic_caption_passes_semantic_plan_to_surface_detector(monkeypatch, tmp_path: Path):
     image_path = tmp_path / "scene.png"
     _save_blank_panel(image_path)

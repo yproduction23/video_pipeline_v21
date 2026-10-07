@@ -34,12 +34,16 @@ def test_runtime_contract_uses_gemini_for_general_and_information_scenes():
     assert general["tier"] == "body"
     assert metric["tier"] == graph["tier"] == "hero"
     assert general["visual_text_policy"] == "strict_textless"
-    assert metric["visual_text_policy"] == graph["visual_text_policy"] == "approved_generated_surface_text"
-    assert metric["source_visual_text_policy"] == graph["source_visual_text_policy"] == "script_captioned"
+    # 2026-10-07 사용자 재현(job 14, 씬 0/1): 승인된 정확 문구를 Gemini가 직접
+    # 그리게 하면(script_captioned) 한글이 반복적으로 깨졌다. 숫자와 동일하게
+    # 비수치 승인 문구도 Gemini는 빈 표면만 그리고 Pillow가 결정론적으로
+    # 합성한다 — approved_generated_surface_text 경로는 더 이상 쓰지 않는다.
+    assert metric["visual_text_policy"] == graph["visual_text_policy"] == "deterministic_surface_text"
+    assert metric["source_visual_text_policy"] == graph["source_visual_text_policy"] == "strict_textless"
     assert general["style_contract_version"] == "2026-08-25-r8-job52-range-scene-local-v1"
     assert metric["style_contract_version"] == general["style_contract_version"]
     assert general["verified_overlay_mode"] == "not_applicable"
-    assert metric["verified_overlay_mode"] == graph["verified_overlay_mode"] == "scene_local_approved_generated_text"
+    assert metric["verified_overlay_mode"] == graph["verified_overlay_mode"] == "deterministic_surface_caption_or_verified_fact"
     assert general["visual_mode_contract"]["overlay_policy"] == "ass_subtitle_only"
     assert metric["visual_mode_contract"]["numeric_visual_policy"] == "verified_facts_deterministic_only"
     # 2026-09-29: image_provider가 "gemini"로 하드코딩돼 있으면 V5 final-lane
@@ -102,17 +106,16 @@ def test_runtime_contract_preserves_primary_surface_and_does_not_invent_verified
     assert contract["verified_overlay_present"] is False
     assert "caption" in contract["semantic_visual_plan"]
     assert "prop_visuals" in contract["semantic_visual_plan"]
-    assert contract["visual_text_policy"] == "approved_generated_surface_text"
-    assert contract["source_visual_text_policy"] == "script_captioned"
+    # 2026-10-07: 비수치 승인 문구("코스피 하락폭")도 더는 Gemini가 직접 쓰지
+    # 않는다 — 빈 표면만 그리게 하고 Pillow가 결정론적으로 합성한다.
+    assert contract["visual_text_policy"] == "deterministic_surface_text"
+    assert contract["source_visual_text_policy"] == "strict_textless"
     assert contract["surface_caption"]["generated_texts"] == ["코스피 하락폭"]
     assert contract["surface_caption"]["deterministic_texts"] == []
+    assert contract["surface_caption"]["korean"] == "코스피 하락폭"
     assert contract["surface_caption"]["placement_mode"] == "contextual_supporting"
-    assert "approved exact text items are ['코스피 하락폭']" in contract["prompt_en"].lower()
-    assert "never create a new board" in contract["prompt_en"].lower()
-    assert "solid opaque scene-mounted monitor" in contract["prompt_en"].lower()
-    assert "detached translucent glass card" in contract["prompt_en"].lower()
-    assert "<semantic_surface>" not in contract["prompt_en"]
-    assert "do not include any visible typographic mark" not in contract["prompt_en"].lower()
+    assert "approved exact text items are ['코스피 하락폭']" not in contract["prompt_en"].lower()
+    assert "do not include any visible typographic mark" in contract["prompt_en"].lower()
 
 
 def test_semiconductor_earnings_diagram_routes_to_data_lab_not_professor_classroom():
@@ -149,7 +152,10 @@ def test_v5_prompt_preserves_scene_local_setting_and_required_props():
     assert "two chip modules are removed from a physical balance" in prompt
     assert "semiconductor wafer production line" in prompt
     assert "wafer conveyor" in prompt
-    assert "do not replace it with a generic rising or falling chart" in prompt
+    # 2026-10-07: 승인 문구("영업이익")가 결정론 Pillow 합성으로 옮겨가면서
+    # 이 장면은 이제 strict_textless 프롬프트를 받는다. 장면 고유 의미는
+    # <script_meaning_visuals> 태그로 여전히 보존된다(위 assert들로 확인).
+    assert "do not include any visible typographic mark" in prompt
 
 
 def test_runtime_contract_does_not_confuse_style_contract_numbers_with_verified_facts():
@@ -231,6 +237,27 @@ def test_runtime_contract_keeps_verified_overlay_input_unchanged_when_present():
     assert planned["v5_render_contract"]["verified_overlay_present"] is False
     assert planned["v5_render_contract"]["visual_text_policy"] == "deterministic_surface_text"
     assert "no readable or pseudo-readable words" in planned["v5_render_contract"]["prompt_en"].lower()
+
+
+def test_quoted_exact_narration_text_also_routes_to_deterministic_rendering():
+    """2026-10-07 사용자 재현(job 14, 씬 0): 승인 대본에서 그대로 뽑은 인용문
+    ("저 군대 안 갑니다!")을 Gemini에게 직접 그리게 했더니 반복적으로 깨진
+    한글이 나왔다. 숫자 전용이었던 결정론 합성 경로를 비수치 승인 문구까지
+    넓혀, Gemini는 빈 표면만 그리고 Pillow가 정확히 합성하게 한다.
+    """
+    source = _scene("character-hero-01", "general", "인터뷰에서 발언한 내용을 보여줍니다.")
+    source["screen_texts"] = ["저 군대 안 갑니다!"]
+    source["screen_text_plan"] = [
+        {"text": "저 군대 안 갑니다!", "surface": "context_sign_1", "surface_kind": "signboard"},
+    ]
+
+    contract = plan_v5_scene_contract(source, 0)
+
+    assert contract["visual_text_policy"] == "deterministic_surface_text"
+    assert contract["source_visual_text_policy"] == "strict_textless"
+    assert contract["surface_caption"]["korean"] == "저 군대 안 갑니다!"
+    assert "저 군대 안 갑니다" not in contract["prompt_en"]
+    assert "do not include any visible typographic mark" in contract["prompt_en"].lower()
 
 
 def test_information_scene_without_approved_screen_text_does_not_invent_caption():

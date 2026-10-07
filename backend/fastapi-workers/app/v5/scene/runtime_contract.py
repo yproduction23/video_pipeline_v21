@@ -386,22 +386,19 @@ def plan_v5_scene_contract(scene: dict[str, Any], index: int) -> dict[str, Any]:
     has_existing_verified_overlay = bool(scene.get("v5_verified_overlays"))
     visual_mode_contract = VISUAL_MODE_CONTRACTS[visual_mode]
     has_verified_surface_content = False
-    # 승인된 비수치 한국어·영어는 생성 모델이 물리 표면에 직접 쓸 수 있다.
-    # 금융 수치만 프로젝트 안전 규칙에 따라 결정론 렌더러에 남긴다.
-    # 장면 타입은 정확한 승인 문구를 화면에 쓸 수 있는지 여부를 결정하지 않는다.
-    # 일반형 장면도 대본에서 승인된 라벨·수치가 핵심이면 Job 52처럼 장면 안의
-    # 실제 모니터/표지판에 표시해야 한다. 과거 information_scene 조건 때문에
-    # 코스피·코스닥 수치가 검수에서 누락되어도 후처리 경로가 열리지 않았다.
-    source_policy = (
-        "script_captioned"
-        if approved_generated_texts
-        else "strict_textless"
-    )
+    # 2026-10-07 사용자 재현(job 14, 씬 0/1): 승인된 비수치 한국어 문구를
+    # Gemini가 물리 표면에 직접 쓰게 했더니("script_captioned") 같은 장면에서
+    # 반복적으로 깨진 한글이 나왔다. 실제 운영 테스트에서 확인된 결론을
+    # 반영해, 숫자 전용이던 결정론 Pillow 합성 경로를 비수치 승인 문구까지
+    # 넓힌다. Gemini는 (숫자든 문구든) 승인 텍스트가 있는 장면에서 항상 빈
+    # 물리 표면만 그리고, 정확한 글자는 generate_single_scene 이후
+    # add_surface_caption이 결정론적으로 합성한다. "approved_generated_surface_text"
+    # 경로(생성 모델이 직접 쓰게 하던 이전 전략)는 이 결론에 따라 더 이상
+    # 선택되지 않는다 — 장면 타입은 여전히 승인 문구 표시 여부를 결정하지 않는다.
+    source_policy = "strict_textless"
     policy = (
         "deterministic_surface_text"
-        if approved_deterministic_texts or has_existing_verified_overlay
-        else "approved_generated_surface_text"
-        if approved_generated_texts
+        if approved_deterministic_texts or approved_generated_texts or has_existing_verified_overlay
         else "strict_textless"
     )
     semantic_plan = script_visual_plan(scene)
@@ -494,10 +491,11 @@ def plan_v5_scene_contract(scene: dict[str, Any], index: int) -> dict[str, Any]:
         "primary_surface_region": primary_surface_region(selection.archetype),
         "surface_caption": {
             "english": semantic_caption,
-            # 숫자는 결정론 합성 대상으로, 비수치 문구는 생성 모델 직접
-            # 표기 대상으로 분리한다. 어느 쪽도 승인 문자열을 바꾸지 않는다.
-            "korean": "\n".join(approved_deterministic_texts),
-            "texts": approved_deterministic_texts,
+            # 2026-10-07: 숫자·비수치 승인 문구 모두 이제 같은 결정론 Pillow
+            # 합성 대상이다. korean/texts는 둘을 합쳐, 최종 프레임 OCR 대조
+            # (final_frame_text_integrity)가 비수치 문구도 빠짐없이 검증한다.
+            "korean": "\n".join([*approved_deterministic_texts, *approved_generated_texts]),
+            "texts": [*approved_deterministic_texts, *approved_generated_texts],
             "approved_texts": approved_surface_texts,
             "generated_texts": approved_generated_texts,
             "deterministic_texts": approved_deterministic_texts,
@@ -510,8 +508,6 @@ def plan_v5_scene_contract(scene: dict[str, Any], index: int) -> dict[str, Any]:
         "verified_overlay_mode": (
             "deterministic_surface_caption_or_verified_fact"
             if policy == "deterministic_surface_text"
-            else "scene_local_approved_generated_text"
-            if policy == "approved_generated_surface_text"
             else "not_applicable"
         ),
         "verified_overlay_present": has_verified_surface_content,

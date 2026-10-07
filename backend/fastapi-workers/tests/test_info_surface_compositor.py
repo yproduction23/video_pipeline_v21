@@ -191,11 +191,13 @@ def test_v5_verified_overlay_present_is_always_false():
         },
         index=1,
     )
+    # 2026-10-07: 비수치 승인 문구도 결정론 Pillow 합성으로 옮겨 Gemini가
+    # 직접 쓰지 않는다(job 14 씬 0/1 깨진 한글 재현 이후 결론).
     assert contract_info["verified_overlay_present"] is False
-    assert contract_info["visual_text_policy"] == "approved_generated_surface_text"
-    assert contract_info["source_visual_text_policy"] == "script_captioned"
+    assert contract_info["visual_text_policy"] == "deterministic_surface_text"
+    assert contract_info["source_visual_text_policy"] == "strict_textless"
     assert contract_info["surface_caption"]["generated_texts"] == ["PER", "주가수익비율"]
-    assert contract_info["verified_overlay_mode"] == "scene_local_approved_generated_text"
+    assert contract_info["verified_overlay_mode"] == "deterministic_surface_caption_or_verified_fact"
 
 
 def test_general_scene_routes_approved_financial_text_to_deterministic_surface():
@@ -210,11 +212,13 @@ def test_general_scene_routes_approved_financial_text_to_deterministic_surface()
         index=19,
     )
 
-    assert contract["source_visual_text_policy"] == "script_captioned"
+    # 2026-10-07: 수치("6597포인트")와 비수치("코스피") 승인 문구가 섞여도
+    # 이제 둘 다 Gemini가 아니라 결정론 Pillow 합성 대상이다.
+    assert contract["source_visual_text_policy"] == "strict_textless"
     assert contract["visual_text_policy"] == "deterministic_surface_text"
     assert contract["surface_caption"]["generated_texts"] == ["코스피"]
     assert contract["surface_caption"]["deterministic_texts"] == ["6597포인트"]
-    assert contract["surface_caption"]["korean"] == "6597포인트"
+    assert contract["surface_caption"]["korean"] == "6597포인트\n코스피"
 
 
 def test_general_numeric_scene_restores_raw_before_resume_overlay():

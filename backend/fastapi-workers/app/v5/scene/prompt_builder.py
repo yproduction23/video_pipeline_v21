@@ -699,9 +699,15 @@ def build_prompt(
         f"<background_information_density> {background_information_density} </background_information_density>",
         f"<script_meaning_visuals> {semantic_visual_brief or 'non-textual scene-native objects'} </script_meaning_visuals>",
         f"<scene_local_typography> {priority_prop_instruction} </scene_local_typography>" if priority_prop_instruction else "",
+        # 2026-10-07: 비수치 승인 문구도 결정론 Pillow 합성으로 옮기면서
+        # visual_text_policy가 더는 script_captioned가 아닌 장면에도
+        # semantic_caption(정확 승인 문구)이 그대로 채워져 들어올 수 있게
+        # 됐다. policy와 무관하게 이 태그를 넣으면 "쓰지 말라"는 strict_textless
+        # 지시와 문구 자체가 같은 프롬프트에 섞여 Gemini가 그 문구를 베껴
+        # 쓰려다 깨진 글자를 낼 위험이 있다 — script_captioned일 때만 넣는다.
         (
             f"<semantic_surface> {semantic_caption} follows the explicit scene text-surface plan with {semantic_direction} direction </semantic_surface>"
-            if semantic_caption and has_explicit_surface_plan else ""
+            if semantic_caption and has_explicit_surface_plan and visual_text_policy == "script_captioned" else ""
         ),
         f"<fact_surface_contract> {fact_surface_contract} </fact_surface_contract>" if fact_surface_contract else "",
         f"<reserve> {reserve} </reserve>",

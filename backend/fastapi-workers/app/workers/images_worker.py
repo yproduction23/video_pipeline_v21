@@ -4072,9 +4072,13 @@ Rules:
             raise ValueError("결정론 표면 문구 계약에 한글 문구가 없습니다.")
         if not isinstance(region, (list, tuple)) or len(region) != 4:
             raise ValueError("결정론 표면 문구 계약에 물리 표면 좌표가 없습니다.")
+        # 2026-10-07: 비수치 승인 문구("저 군대 안 갑니다!" 같은 인용문)도 이제
+        # 같은 결정론 합성 대상이므로, 숫자 포함 여부가 아니라 승인 문구가
+        # 실제로 있는지만 본다. 그렇지 않으면 signboard 같은 구체적 surface_kind
+        # 계획이 버려지고 범용 "board" 폴백으로 떨어진다.
         surface_plan = [
             item for item in (caption.get("surface_plan") or [])
-            if isinstance(item, dict) and any(char.isdigit() for char in str(item.get("text") or ""))
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
         ] if isinstance(caption, dict) else []
         planned_surface_kinds = {
             str(item.get("surface_kind") or "").strip() for item in surface_plan
