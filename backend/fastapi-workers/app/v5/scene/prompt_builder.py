@@ -457,7 +457,13 @@ def _fact_surface_contract(
             "scene_type archetype 추천과 SceneSpec archetype이 일치하지 않습니다: "
             f"{scene_type_selection.archetype} != {spec.archetype}"
         )
-    if scene_type_selection.scene_type == "general":
+    has_explicit_surface_plan = bool(text_surface_plan)
+    # 2026-10-07 사용자 재현(job 14, 씬 0): "general"은 원래 항상 건너뛰었지만,
+    # 그러면 "저 군대 안 갑니다!" 같은 명시적 표면 계획이 있는 일반 서사
+    # 장면은 이 함수의 더 구체적인("비워 둘 표면은 차트·게이지·다이어그램도
+    # 없이 완전히 비어 있어야 한다") 계약을 전혀 못 받는다. 계획 없는 general
+    # 장면(거대한 단일 보드 강제 금지 사유)만 계속 건너뛴다.
+    if scene_type_selection.scene_type == "general" and not has_explicit_surface_plan:
         return ""
     if not scene_type_selection.physical_surfaces or not scene_type_selection.primary_physical_surface:
         raise ValueError("정보형 씬에는 최소 한 개의 물리 정보 표면이 필요합니다.")
@@ -465,7 +471,6 @@ def _fact_surface_contract(
     # 비수치 문구만 있고 표면 계획이 없는 장면에 primary 표면 계약을 강제하면
     # 모델이 대본의 사물 관계 대신 거대한 단일 보드를 만들었다. 결정론 수치나
     # 명시된 표면 계획이 있을 때만 이 좌표/표면 계약을 활성화한다.
-    has_explicit_surface_plan = bool(text_surface_plan)
     if visual_text_policy == "script_captioned" and not has_explicit_surface_plan:
         return ""
 

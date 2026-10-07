@@ -256,6 +256,36 @@ def test_general_strict_textless_scene_does_not_request_chart_iconography():
     assert "reserved for a short caption to be composited afterward" in prompt
 
 
+def test_general_scene_with_explicit_plan_gets_the_stronger_blank_surface_contract():
+    """2026-10-07 사용자 재현(job 14, 씬 0): 차트 문구를 없앤 뒤에도 Gemini가
+    신호판 화면에 (차트는 아니지만) 다이어그램을 그려 결정론 합성이 빈
+    표면을 못 찾았다. fact_surface_contract는 "signboard 표면은 차트·게이지·
+    다이어그램·장식 없이 완전히 비어 있어야 한다"는 더 구체적인 계약을
+    이미 갖고 있었지만, scene_type이 "general"이면 명시된 표면 계획이
+    있어도 무조건 건너뛰었다. 계획이 있으면 general이어도 이 계약을
+    받아야 한다."""
+    selection = recommend_v5_archetype({
+        "scene_type": "general",
+        "content": "인터뷰 발언을 설명합니다.",
+    })
+    spec = SceneSpec("general-quote-plan", selection.archetype, "explain", "reporter", "present")
+
+    prompt = build_prompt(
+        spec,
+        visual_text_policy="strict_textless",
+        scene_type_selection=selection,
+        text_surface_plan=[{
+            "text": "저 군대 안 갑니다!",
+            "surface": "context_sign_1",
+            "surface_kind": "signboard",
+        }],
+    ).lower()
+
+    assert "in-scene fact-surface contract" in prompt
+    assert "bordered, physical signboard" in prompt
+    assert "free of charts, gauges, diagrams, arrows, or decoration" in prompt
+
+
 def test_general_scene_does_not_receive_a_number_or_fact_surface_instruction():
     selection = recommend_v5_archetype({
         "scene_type": "general",
