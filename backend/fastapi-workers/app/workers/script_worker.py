@@ -19,6 +19,7 @@ import re
 import json
 import math
 import logging
+import difflib
 from typing import Optional
 
 from app.workers.market_data_collector import MarketDataCollector
@@ -49,7 +50,11 @@ from app.utils.image_text_contract import contains_financial_number, prompt_text
 from app.workers.news_keyword_extractor import NewsKeywordExtractor
 from app.utils.keyword_aliases import normalise_terms
 from app.utils.script_delivery import annotate_sections, default_style_mix, pace_sections_for_runtime, validate_delivery
-from app.utils.narrative_planner import fallback_plan, plan_narrative
+from app.utils.narrative_planner import HIGHLIGHT_ROLE, fallback_plan, plan_narrative
+
+# 슬라이드형 하이라이트 구간의 목표 문장 수(프롬프트 지시). 검증은 ±1문장을 허용한다.
+HIGHLIGHT_MIN_SENTENCES = 3
+HIGHLIGHT_MAX_SENTENCES = 5
 from app.utils.flow_qa import review_flow, sentence_role
 from app.utils.scene_screen_text_planner import attach_scene_screen_texts
 from app.utils.elevenlabs_mapper import map_emotion_to_elevenlabs
@@ -1493,7 +1498,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                  voice_id: Optional[str] = None,
                  autonomy_mode: Optional[str] = None,
                  candidate_evidence: Optional[dict] = None,
-                 content_nature: Optional[str] = None) -> dict:
+                 content_nature: Optional[str] = None,
+                 visual_mode: Optional[str] = None) -> dict:
         self._current_autonomy_mode = autonomy_mode
         nature = _cn.normalize_nature(content_nature)
         category_label = _cn.category_label_for(nature, category, CATEGORY_LABELS)
@@ -1585,12 +1591,13 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                         **({"benchmark_points": benchmark_analysis} if benchmark_analysis else {}),
                     },
                     format_name=format_name,
+                    visual_mode=visual_mode,
                 ) if runtime_config.value("script_narrative_planning_enabled") else {
                     "plan_id": "planning_disabled", "planner": "disabled", "story_beats": []
                 }
             except Exception as exc:
                 logger.warning("내러티브 플랜 생성 실패: %s", exc)
-                narrative_plan = fallback_plan(selected_terms, verified_facts, format_name)
+                narrative_plan = fallback_plan(selected_terms, verified_facts, format_name, visual_mode)
 
             # 검증된 사실 기반 스크립트 생성
             full_script, sections, meta_title, meta_thumb, meta_desc, meta_shorts = self._generate_with_verified_facts(
@@ -1600,7 +1607,11 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 source_videos,
                 benchmark_analysis=benchmark_analysis,
                 content_nature=nature,
+                visual_mode=visual_mode,
             )
+            # 슬라이드형 하이라이트 경계는 이후 재작성 단계가 섹션 dict를 새로 만들어도
+            # 잃지 않도록 생성 직후 원문을 따로 보관한다.
+            highlight_lead_snapshot = [dict(s) for s in _highlight_lead_sections(sections)]
             if nature == _cn.STORY:
                 sections = _cn.ensure_story_disclosure(sections)
             pre_edit_spoken_chars = spoken_char_count(_narration_from_sections(sections))
@@ -1742,12 +1753,10 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             # 단위가 붙은 수치를 Claude 대본에 허용하면 Job 184가 재발한다.
             # 이미지·TTS 계보가 만들어지기 전에 SCRIPT 단계에서 즉시 차단한다.
             _ensure_no_unverified_financial_numbers(full_script, verified_facts)
-            # 대본 원문은 그대로 두고, 짧은 문장 조각만 5~6초 화면 체류 단위로
-            # 묶는다. 이후 이미지·TTS·ASS가 모두 이 동일한 장면 계보를 사용한다.
-            sections = pace_sections_for_runtime(
-                sections,
-                int(length_contract["target_seconds"]),
-                subtitle_max_chars=int(runtime_config.value("subtitle_max_chars")),
+            # 대본 원문은 그대로 두고, 짧은 문장 조각만 화면 체류 단위로 묶는다.
+            # 이후 이미지·TTS·ASS가 모두 이 동일한 장면 계보를 사용한다.
+            sections = _pace_sections_using_configured_scene_duration(
+                sections, int(length_contract["target_seconds"]),
             )
             # 무문자화를 강제하지 않는다. 승인 대본에 실제로 있는 회사명·지수명·
             # 핵심 용어와 수치만 장면 로컬 허용 목록으로 만든다. 수치는 이미지
@@ -1805,6 +1814,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             scene.setdefault("scene_id", f"script_scene_{index:03d}")
         full_script = _narration_from_sections(sections)
         narration_contract = build_script_contract(full_script, sections)
+        highlight_meta = _build_highlight_meta(highlight_lead_snapshot, full_script, visual_mode=visual_mode)
         for source, scene in zip(narration_contract["scene_sources"], sections):
             scene["narration_source"] = {
                 "scene_id": source["scene_id"],
@@ -1905,6 +1915,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             "llm_provider_log": self._llm_provider_log,
             "llm_call_count": self._llm_call_count,
             "narrative_plan": narrative_plan,
+            "highlight": highlight_meta,
             "flow_qa": flow_qa,
             "content_depth_quality": content_depth_quality,
             "requires_manual_review": requires_manual_review,
@@ -2008,7 +2019,8 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                                        narrative_plan: Optional[dict] = None,
                                        source_videos: Optional[list[dict]] = None,
                                        benchmark_analysis: Optional[dict] = None,
-                                       content_nature: Optional[str] = None):
+                                       content_nature: Optional[str] = None,
+                                       visual_mode: Optional[str] = None):
         facts_text = "\n".join(f"- {f['fact']} (상세 정보: {f.get('figure', 'N/A')}, 출처: {f.get('source_field', 'N/A')}, 신뢰도: {f.get('confidence', 0):.2f})" for f in verified_facts)
         market_summary = _build_market_summary_for_script(market_data)
         selected_terms = selected_terms or _selected_keyword_terms(keyword)
@@ -2032,10 +2044,35 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
         benchmark_rule = ""
         if benchmark_analysis:
             benchmark_block = f"<benchmark_points>{json.dumps(benchmark_analysis, ensure_ascii=False)}</benchmark_points>\n"
-            benchmark_rule = (
-                "- <benchmark_points>는 잘 되는 영상이 '왜 뜨는지'와 훅 유형을 참고하기 위한 자료입니다. "
-                "훅의 유형·구조·리듬은 참고할 수 있지만 다른 영상의 문장을 그대로 또는 거의 그대로 쓰지 마세요. "
-                "영상 제목·조회수는 사실 근거가 아닙니다.\n"
+            # 2026-10-15 사용자 결정: 벤치마크와 "결"을 맞추는 완화된 정책은
+            # 슬라이드형(visual_mode=SLIDE) Job에만 적용한다. 캐릭터형(기존)
+            # 경로는 이전의 보수적 "참고만" 정책을 그대로 유지한다.
+            if (visual_mode or "").upper() == "SLIDE":
+                benchmark_rule = (
+                    "- <benchmark_points>는 이번 영상이 '결'을 맞춰야 하는 벤치마크 영상의 분석입니다. "
+                    "내용의 톤·소재를 다루는 관점·정보 공개 순서와 전개 흐름을 이 벤치마크와 최대한 비슷하게 맞추세요 — "
+                    "길이(시간)까지 똑같이 맞출 필요는 없습니다. "
+                    "단, 저작권 때문에 다른 영상의 문장을 그대로 또는 거의 그대로 옮겨 쓰지는 마세요(표현은 새로 쓰되 결·구조·흐름은 맞춥니다). "
+                    "영상 제목·조회수는 사실 근거가 아닙니다.\n"
+                )
+            else:
+                benchmark_rule = (
+                    "- <benchmark_points>는 잘 되는 영상이 '왜 뜨는지'와 훅 유형을 참고하기 위한 자료입니다. "
+                    "훅의 유형·구조·리듬은 참고할 수 있지만 다른 영상의 문장을 그대로 또는 거의 그대로 쓰지 마세요. "
+                    "영상 제목·조회수는 사실 근거가 아닙니다.\n"
+                )
+
+        # 2026-10-16 운영자 결정(슬라이드형 한정): 레퍼런스 영상은 "하이라이트 → 고지 배너 →
+        # 기승전결 본론" 순서다. 고지 문구는 화면 배너로만 보이므로 대사에 쓰지 않고, 하이라이트가
+        # 끝나는 위치만 `## 하이라이트` 섹션 경계로 남긴다(배너가 그 직후에 붙는다).
+        slide_structure_rule = ""
+        if (visual_mode or "").upper() == "SLIDE":
+            slide_structure_rule = (
+                f"- [슬라이드형 구조] 대본은 \"하이라이트 → 기 → 승 → 전 → 결\" 순서다. 첫 번째 `##` 섹션의 제목은 반드시 "
+                f"`## {HIGHLIGHT_ROLE}`로 하고, 그 [대사]는 {HIGHLIGHT_MIN_SENTENCES}~{HIGHLIGHT_MAX_SENTENCES}문장으로 영상 전체의 핵심 결과·반전을 "
+                "검증 사실의 수치로 미리 압축해 말한다. 질문만 던지고 끝내지 말고 결론의 방향을 보여준다. 그 뒤 섹션은 기승전결로 "
+                "이어 가며, 하이라이트에서 쓴 사실은 근거·원인이라는 새 역할로 다시 설명한다. 투자 고지 문구는 화면 배너로 "
+                "따로 보여주므로 대사에 쓰지 않는다.\n"
             )
 
         user_prompt = f"""<selected_keywords>{json.dumps(selected_terms, ensure_ascii=False)}</selected_keywords>
@@ -2046,7 +2083,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 <youtube_topic_context>{json.dumps(source_videos, ensure_ascii=False)}</youtube_topic_context>
 <narrative_plan>{json.dumps(narrative_plan, ensure_ascii=False)}</narrative_plan>
 {_cn.nature_directive(content_nature)}{benchmark_block}작성 규칙:
-{benchmark_rule}- [대사], [비주얼 설명 (한국어)], [비주얼 프롬프트 (영어)], [감정] 포함
+{benchmark_rule}{slide_structure_rule}- [대사], [비주얼 설명 (한국어)], [비주얼 프롬프트 (영어)], [감정] 포함
 - [대사] 블록만 합산해 공백 제외 약 {draft_target_chars}자로 작성. 비주얼 설명·영문 프롬프트·메타데이터는 이 분량에 포함하지 않음. 후단에서 실제 5분 승인 범위 {int((length_contract or {}).get('min_chars', target_chars))}~{int((length_contract or {}).get('max_chars', target_chars))}자로 정밀 보정하므로 짧게 쓰지 마세요.
 - The selected keywords are mandatory subjects, not optional context. Every section must directly explain a selected keyword, its verified impact, or the relationship between the selected keyword and the category. Do not replace this with a generic market crash, geopolitical event, or index recap unless the supplied evidence explicitly connects it.
 - Mention every distinctive entity, concept, and time qualifier contained in the selected topic naturally at least once. The category is the analytical lens, not a substitute for the selected topic.
@@ -2167,6 +2204,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 if attempt == 2:
                     raise
 
+        sections = _dedupe_adjacent_sections(sections)
         narration_script = _dedupe_adjacent_paragraphs(_narration_from_sections(sections))
         return narration_script, sections, meta_title, meta_thumb, meta_desc, meta_shorts
 
@@ -2515,16 +2553,119 @@ def _narration_from_sections(sections: list[dict]) -> str:
     )
 
 
+def _normalized_text_key(text: str) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", text or "").lower()
+
+
+HIGHLIGHT_CONTRACT_VERSION = "slide-highlight-v1"
+
+
+def _highlight_lead_sections(sections: list[dict]) -> list[dict]:
+    """맨 앞에서 연속된 `## 하이라이트` 섹션들(슬라이드형 구조). 중간의 같은 제목은 무시한다."""
+    lead: list[dict] = []
+    for section in sections:
+        if not section.get("highlight"):
+            break
+        lead.append(section)
+    return lead
+
+
+def _squash_spaces(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _build_highlight_meta(
+    lead_sections: list[dict], final_narration: str, *, visual_mode: str | None,
+) -> dict:
+    """하이라이트 구간 계약 기록. 고지 배너 위치(하이라이트 직후)는 이 값으로 정한다.
+
+    `end_text`는 마지막 하이라이트 장면의 원문이다. 이미지 단계에서 문장을 다시 묶어도
+    같은 문장을 찾아 경계를 복원할 수 있다. 못 찾으면 `end_char`(공백 제외 누적 글자 수)로 대체한다.
+    """
+    slide = (visual_mode or "").upper() == "SLIDE"
+    if not slide:
+        return {"version": HIGHLIGHT_CONTRACT_VERSION, "applicable": False}
+    texts = [str(s.get("content") or s.get("text") or "").strip() for s in lead_sections]
+    texts = [t for t in texts if t]
+    sentence_count = sum(
+        len([p for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]) for t in texts
+    )
+    end_text = texts[-1] if texts else ""
+    squashed_narration = _squash_spaces(final_narration)
+    squashed_end = _squash_spaces(end_text)
+    located = bool(squashed_end) and squashed_end in squashed_narration
+    if located:
+        end_char = squashed_narration.index(squashed_end) + len(squashed_end)
+    else:
+        end_char = sum(len(_squash_spaces(t)) for t in texts) or None
+    reasons: list[str] = []
+    if not texts:
+        reasons.append("highlight_section_missing")
+    elif not HIGHLIGHT_MIN_SENTENCES - 1 <= sentence_count <= HIGHLIGHT_MAX_SENTENCES + 1:
+        reasons.append("highlight_sentence_count_out_of_range")
+    return {
+        "version": HIGHLIGHT_CONTRACT_VERSION,
+        "applicable": True,
+        "present": bool(texts),
+        "sentence_count": sentence_count,
+        "end_text": end_text,
+        "end_char": end_char,
+        "end_located_in_final_script": located,
+        "passed": not reasons,
+        "reasons": reasons,
+    }
+
+
+# 2026-10-15 실제 Job(id=19)에서 발견된 버그: 분량 재작성 루프 막바지에 Claude가
+# 같은 마무리 문장을 어미만 바꿔("~바랍니다" / "~바라죠") 두 장면으로 중복 생성했다.
+# 기존 dedup은 완전 일치만 걸러내 이런 "사실상 같은 문장"을 못 잡았다. 너무 짧은
+# 문장은 우연히 비슷해질 수 있어 제외한다(최소 길이 가드).
+_NEAR_DUPLICATE_RATIO = 0.85
+_NEAR_DUPLICATE_MIN_KEY_LEN = 12
+
+
+def _is_near_duplicate_key(current_key: str, previous_key: str) -> bool:
+    if not current_key or not previous_key:
+        return False
+    if current_key == previous_key:
+        return True
+    if min(len(current_key), len(previous_key)) < _NEAR_DUPLICATE_MIN_KEY_LEN:
+        return False
+    # 숫자가 다르면 같은 문장의 어미 변형이 아니라 다른 사실을 말하는 장면이다
+    # (예: "5퍼센트 하락" vs "7퍼센트 하락").
+    if re.findall(r"\d+", current_key) != re.findall(r"\d+", previous_key):
+        return False
+    return difflib.SequenceMatcher(None, current_key, previous_key).ratio() >= _NEAR_DUPLICATE_RATIO
+
+
 def _dedupe_adjacent_paragraphs(text: str) -> str:
     paragraphs: list[str] = []
     previous_key = ""
     for paragraph in re.split(r"\n{2,}", text or ""):
         cleaned = re.sub(r"\s+", " ", paragraph).strip()
-        key = re.sub(r"[^0-9A-Za-z가-힣]", "", cleaned).lower()
-        if cleaned and key and key != previous_key:
+        key = _normalized_text_key(cleaned)
+        if cleaned and key and not _is_near_duplicate_key(key, previous_key):
             paragraphs.append(cleaned)
             previous_key = key
     return "\n\n".join(paragraphs)
+
+
+def _dedupe_adjacent_sections(sections: list[dict]) -> list[dict]:
+    """인접한 장면의 대사가 어미·연결어만 다른 사실상 동일 문장이면 뒤 장면을 제거한다.
+    narration_script뿐 아니라 TTS·자막이 실제로 소비하는 sections 자체를 정리해야
+    한다 — _dedupe_adjacent_paragraphs는 별도로 파생한 문자열에만 적용돼 sections에는
+    영향이 없었다."""
+    result: list[dict] = []
+    previous_key = ""
+    for section in sections:
+        text = str(section.get("content") or section.get("text") or "")
+        key = _normalized_text_key(text)
+        if key and _is_near_duplicate_key(key, previous_key):
+            continue
+        result.append(section)
+        if key:
+            previous_key = key
+    return result
 
 
 def _validate_keyword_coverage(script: str, terms: list[str]) -> dict:
@@ -2771,18 +2912,37 @@ def _dialogue_char_count(script_body: str) -> int:
 
 
 def _calc_scene_count(target_minutes: int) -> int:
-    """목표 분량별 씬(이미지) 수 계산 — 5~6초/씬 기준
-    
-    1.3x 배속 TTS 기준:
-    - 1분(60초) / 5.5초 = 약 11씬
-    - 5분(300초) / 5.5초 = 약 55씬
-    - 10분(600초) / 5.5초 = 약 109씬
-    - 15분(900초) / 5.5초 = 약 164씬
-    - 20분(1200초) / 5.5초 = 약 218씬
+    """목표 분량별 씬(이미지) 수 계산 — SCENE_DURATION_SEC(초)/씬 기준.
+
+    1.3x 배속 TTS 기준 예시(SCENE_DURATION_SEC=4.0초일 때):
+    - 1분(60초) / 4.0초 = 약 15씬
+    - 5분(300초) / 4.0초 = 약 75씬
+    - 10분(600초) / 4.0초 = 약 150씬
     """
     secs_per_scene = SCENE_DURATION_SEC
     total_seconds = target_minutes * 60
     return max(1, round(total_seconds / secs_per_scene))
+
+
+def _pace_sections_using_configured_scene_duration(
+    sections: list[dict], target_seconds: int,
+) -> list[dict]:
+    """영상 체류 시간당 장면 길이를 runtime_config의 scene_duration_sec 하나로 결정한다.
+
+    2026-10-13 사용자 재현(job 14): _calc_scene_count()가 쓰는 초기 LLM 목표
+    씬수는 scene_duration_sec을 따르는데, 실제 장면 경계를 정하는
+    pace_sections_for_runtime()은 자신만의 고정 기본값(5.5초)을 따로 써서 두
+    값이 어긋나 있었다. 이 함수가 유일한 호출 경로가 되어 재발을 막는다.
+    """
+    target_seconds_per_scene = float(runtime_config.value("scene_duration_sec"))
+    return pace_sections_for_runtime(
+        sections,
+        target_seconds,
+        min_seconds=max(0.5, target_seconds_per_scene - 1.0),
+        target_seconds_per_scene=target_seconds_per_scene,
+        max_seconds=target_seconds_per_scene + 1.0,
+        subtitle_max_chars=int(runtime_config.value("subtitle_max_chars")),
+    )
 
 
 def get_character_pose_from_text(text: str) -> str:
@@ -3213,7 +3373,10 @@ def _parse_sections(full_text: str, evidence: dict | None = None) -> list:
             "scene_rejected": bool(s.get("scene_rejected")),
             "section": section_type,
             "char_count": len(s["content"]),
+            # 슬라이드형 구조: `## 하이라이트` 섹션 표시(고지 배너 위치 계산용).
         }
+        if HIGHLIGHT_ROLE in str(s["title"]):
+            section["highlight"] = True
         # 대본 문구는 TTS·ASS 자막의 단일 원본으로만 쓴다. 영상 위 요약칩과
         # 말풍선은 프레임 밖 UI처럼 보이고 자막과 중복되므로 계획하지 않는다.
         bubble = str(s.get("bubble_text") or "").strip()
@@ -3282,8 +3445,15 @@ def _scene_type_source_text(scene: dict) -> str:
     텍스트형 신호와 우연히 겹쳐 금융과 무관한 장면을 텍스트형으로 몰았다.
     대사 내용은 이미 content/text에 있으므로 prompt_ko 없이도 신호가
     충분하다.
+
+    2026-10-14 사용자 재현(job 15): "prompt_en"도 같은 이유로 제외한다.
+    모든 장면의 영어 시각 프롬프트에 공통 화풍 태그
+    "original 2D Korean editorial illustration"이 들어가는데, 그 안의
+    숫자 "2"(2D)가 숫자 판별 정규식에 걸려 수치·내용과 무관한 장면까지
+    "metric"으로 분류시켰다. prompt_en은 AI가 작성한 시각 프롬프트이지
+    실제 내러티브 신호가 아니다.
     """
-    fields = ("content", "text", "prompt_en", "visual_intent")
+    fields = ("content", "text", "visual_intent")
     return "\n".join(str(scene.get(field) or "") for field in fields).lower()
 
 
@@ -3294,7 +3464,6 @@ def _has_any_signal(text: str, signals: tuple[str, ...]) -> bool:
 def _classify_scene_type(scene: dict) -> tuple[str, str]:
     """한 장면의 표현 목적과 사람이 읽을 수 있는 선택 근거를 반환한다."""
     text = _scene_type_source_text(scene)
-    section = str(scene.get("section") or "").lower()
 
     # 이 페이로드는 수집기에서 확인된 시계열·비교 데이터만 담는다. 원고의
     # 표현 문구와 무관하게 렌더링될 실제 그래프가 있으므로 그래프형이 우선이다.
@@ -3304,7 +3473,16 @@ def _classify_scene_type(scene: dict) -> tuple[str, str]:
         return "graph", "대본 또는 기존 시각 의도에 차트·추이·시간축 표현이 있어 그래프형으로 분류"
     if _has_any_signal(text, _DIAGRAM_SIGNALS):
         return "diagram", "대본 또는 기존 시각 의도에 흐름·구조·단계 관계가 있어 다이어그램형으로 분류"
-    if re.search(r"\d", text) or _has_any_signal(text, _METRIC_SIGNALS) or section == "data":
+    # 2026-10-14 job 18 scene 5·7 재현: section=="data"만으로 metric을
+    # 단정하면, 비금융 주제(범죄 뉴스 등)에서 서사 구조상 "data" 단계에
+    # 배치된 장면(예: "전자발찌를 찬 상태에서 범행", "위치 추적의 한계")이
+    # 실제 수치가 전혀 없는데도 지표형으로 분류됐다. 그 결과 이미지
+    # 프롬프트 생성이 "금융 애니메이션 채널·경제 상황" 틀을 강제로 씌워
+    # 내용과 무관한 데이터랩/관제실(SF스러운) 배경이 나왔다. section은
+    # 서사 구조상의 위치일 뿐 내용을 보장하지 않으므로, 실제 수치·지표
+    # 신호(숫자 또는 _METRIC_SIGNALS)가 본문에 있을 때만 지표형으로
+    # 분류한다 — section=="data"는 더 이상 단독 근거가 아니다.
+    if re.search(r"\d", text) or _has_any_signal(text, _METRIC_SIGNALS):
         return "metric", "대본에 검증 대상 수치·등락·규모 표현이 있어 지표형으로 분류"
     if _has_any_signal(text, _TEXT_SIGNALS):
         return "text", "대본에 정의·핵심 문구 중심 설명이 있어 텍스트형으로 분류"

@@ -79,6 +79,11 @@ public class VideoJob {
     @Column(name = "content_nature", length = 20)
     private ContentNature contentNature;
 
+    /** 장면 이미지를 만드는 시각 모드. null이면 CHARACTER(기존 경로)로 취급한다. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "visual_mode", length = 20)
+    private VisualMode visualMode;
+
     /** null이면 channel profile의 기본 캐릭터를 상속한다. */
     @Column(name = "character_override", length = 100)
     private String characterOverride;

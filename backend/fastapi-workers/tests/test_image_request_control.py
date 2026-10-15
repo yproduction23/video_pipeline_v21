@@ -40,7 +40,11 @@ def test_unrecognized_scene_names_are_not_merged(key):
     assert canonical_scene(key) == key
 
 
-def test_resume_contract_and_model_changes_cannot_reset_total_limit(tmp_path):
+def test_resume_contract_and_model_changes_cannot_reset_total_limit(tmp_path, monkeypatch):
+    # 2026-10-14: gemini_scene_request_limit 기본값이 gemini_retry_max(4)와
+    # 보조를 맞추도록 바뀌어, 이 테스트가 가정하는 "3회로 소진" 전제와
+    # 어긋났다. 테스트 의도(정확히 3회 한도)를 명시적으로 고정한다.
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
     path = tmp_path / "cost.json"
     for i, key in enumerate(["image:21", "template_regen:21", "background:21"]):
         owner = audit(path, key, contract_fingerprint=f"contract-{i}")
@@ -75,6 +79,7 @@ def test_unresolved_reservation_is_not_expired_or_reissued(tmp_path):
 
 def test_post_completion_deadline_persists_with_injected_clock_and_rng(tmp_path, monkeypatch):
     monkeypatch.setitem(runtime_config._state, "gemini_pro_retry_base_seconds", 20.)
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
     now = [1000.]
     path = tmp_path / "control.sqlite3"
     for n, expected in enumerate([20, 40, 80]):
@@ -104,6 +109,7 @@ def _exhaust_scene_window(control, now):
 
 def test_needs_review_records_first_timestamp_and_never_reopens_automatically(tmp_path, monkeypatch):
     monkeypatch.setitem(runtime_config._state, "gemini_pro_retry_base_seconds", 20.)
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
     now = [1000.]
     control = ImageRequestControl(
         path=tmp_path / "control.sqlite3",
@@ -123,6 +129,7 @@ def test_needs_review_records_first_timestamp_and_never_reopens_automatically(tm
 
 def test_explicit_reopen_warns_before_24_hours_and_override_is_audited(tmp_path, monkeypatch):
     monkeypatch.setitem(runtime_config._state, "gemini_pro_retry_base_seconds", 20.)
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
     now = [1000.]
     control = ImageRequestControl(
         path=tmp_path / "control.sqlite3",
@@ -151,6 +158,7 @@ def test_explicit_reopen_warns_before_24_hours_and_override_is_audited(tmp_path,
 
 def test_explicit_reopen_after_24_hours_starts_new_three_attempt_window(tmp_path, monkeypatch):
     monkeypatch.setitem(runtime_config._state, "gemini_pro_retry_base_seconds", 20.)
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
     now = [1000.]
     control = ImageRequestControl(
         path=tmp_path / "control.sqlite3",
@@ -183,6 +191,64 @@ def test_explicit_reopen_after_24_hours_starts_new_three_attempt_window(tmp_path
     assert third["scene_attempt"] == 3
     assert third["review_cycle"] == 1
     assert third["first_needs_review_at"] == now[0]
+
+
+def test_operator_reopen_requires_explicit_override_before_24_hours(tmp_path, monkeypatch):
+    """2026-10-14 사용자 재현(job 18 scene 11): 콘텐츠 거부(의미 불일치)로
+    needs_review에 들어간 장면은, 기존 review_retry_of/review_reopen_of 경로가
+    budget.py의 단일 503 재시도 감사 체인에서만 호출돼 풀 방법이 전혀
+    없었다. operator_reopen은 그 콘텐츠 거부 케이스를 위한 별도의 운영자
+    승인 경로다 — 24시간 전에는 명시적 override 없이는 통과하지 않는다."""
+    monkeypatch.setitem(runtime_config._state, "gemini_pro_retry_base_seconds", 20.)
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
+    now = [1000.]
+    control = ImageRequestControl(
+        path=tmp_path / "control.sqlite3",
+        clock=lambda: now[0],
+        uniform=lambda low, high: high,
+    )
+    result = _exhaust_scene_window(control, now)
+    review_at = result["first_needs_review_at"]
+    now[0] = review_at + 3600
+
+    with pytest.raises(ImageRequestHeld, match="24시간 냉각"):
+        control.operator_reopen(scope="job", scene="image:7", approved_by="ops")
+
+    reopened = control.operator_reopen(
+        scope="job", scene="image:7", approved_by="ops", override_cooldown=True,
+    )
+    assert reopened["previous_status"] == "needs_review"
+    assert reopened["review_cycle"] == 1
+    assert reopened["override_cooldown_used"] is True
+
+    # 재도전 승인 후에는 특별한 reopen 파라미터 없이도 평범한 reserve()가
+    # 바로 새 예약을 받는다 (요청 상한 카운터가 열렸음을 증명).
+    fresh = control.reserve(scope="job", scene="image:7", token="post-reopen")
+    assert fresh["scene_attempt"] == 1
+
+
+def test_operator_reopen_after_24_hours_needs_no_override(tmp_path, monkeypatch):
+    monkeypatch.setitem(runtime_config._state, "gemini_pro_retry_base_seconds", 20.)
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
+    now = [1000.]
+    control = ImageRequestControl(
+        path=tmp_path / "control.sqlite3",
+        clock=lambda: now[0],
+        uniform=lambda low, high: high,
+    )
+    result = _exhaust_scene_window(control, now)
+    now[0] = result["first_needs_review_at"] + 86400
+
+    reopened = control.operator_reopen(scope="job", scene="image:7", approved_by="ops")
+    assert reopened["override_cooldown_used"] is False
+    assert reopened["review_cycle"] == 1
+
+
+def test_operator_reopen_refuses_a_scene_that_is_not_needs_review(tmp_path):
+    control = ImageRequestControl(path=tmp_path / "control.sqlite3")
+    control.reserve(scope="job", scene="image:7", token="first")
+    with pytest.raises(ImageRequestHeld, match="검수 대기 상태가 아니라"):
+        control.operator_reopen(scope="job", scene="image:7", approved_by="ops")
 
 
 def test_existing_request_database_is_migrated_without_resetting_counts(tmp_path):
@@ -295,7 +361,8 @@ def test_concurrent_processes_cannot_double_reserve(tmp_path):
     assert results.count("held") == 5
 
 
-def test_ledger_cross_thread_reservation_and_budget_remain_atomic(tmp_path):
+def test_ledger_cross_thread_reservation_and_budget_remain_atomic(tmp_path, monkeypatch):
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", 3)
     path = tmp_path / "ledger.json"
     def reserve(index):
         owner = audit(path, "image:21" if index % 2 else "template_regen:21")
@@ -413,11 +480,31 @@ def test_post_reservation_rechecks_shared_project_cooldown(tmp_path):
         control.assert_dispatchable("second")
 
 
-def test_invalid_runtime_limit_cannot_raise_cap_or_switch_state_database():
+def test_invalid_runtime_limit_cannot_raise_cap_or_switch_state_database(monkeypatch):
+    """2026-10-13 job 14 씬2 재현: 이 한도는 images_worker.py의 단일 요청 내부
+    재시도 상한(max_retries = max(3, min(gemini_retry_max, 8)))과 같은 천장(8)을
+    공유해야 한다 — 그보다 낮으면 정상 교정 과정이 재시도 기회를 다 쓰기 전에
+    "상한 도달"로 조기 차단된다. 8을 넘는 값만 거부한다."""
+    previous = runtime_config._state["gemini_scene_request_limit"]
+    monkeypatch.setitem(runtime_config._state, "gemini_scene_request_limit", previous)
     with pytest.raises(ValueError):
-        runtime_config.update(gemini_scene_request_limit=4)
+        runtime_config.update(gemini_scene_request_limit=9)
+    runtime_config.update(gemini_scene_request_limit=8)
+    assert runtime_config.value("gemini_scene_request_limit") == 8
     with pytest.raises(ValueError):
         runtime_config.update(gemini_request_state_path="different.sqlite3")
+
+
+def test_default_persistent_limit_matches_the_deployed_retry_ceiling():
+    """2026-10-13 job 14 씬2 재현: .env는 GEMINI_RETRY_MAX=4로 배포돼 있는데
+    gemini_scene_request_limit 기본값이 과거처럼 고정 상수 3이면, 정상 교정
+    과정(최대 4회 내부 재시도로 설계됨)이 3번째 시도에서 조기 차단된다. 기본값은
+    images_worker.py의 max_retries와 같은 공식(max(3, min(GEMINI_RETRY_MAX, 8)))
+    으로 계산돼야 한다."""
+    from app import config as _cfg
+
+    expected = max(3, min(_cfg.GEMINI_RETRY_MAX, 8))
+    assert runtime_config._DEFAULTS["gemini_scene_request_limit"] == expected
 
 
 def test_worker_shared_cooldown_skips_scenes_without_recovery_or_false_completion(tmp_path, monkeypatch):

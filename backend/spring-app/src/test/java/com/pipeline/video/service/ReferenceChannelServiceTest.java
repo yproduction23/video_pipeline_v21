@@ -286,6 +286,24 @@ class ReferenceChannelServiceTest {
         assertThat(service.listForOwner(" ")).containsExactly(shared);
     }
 
+    @Test
+    void requireActiveChannelReturnsActiveChannel() {
+        ReferenceChannel channel = entity(9L, "UCecKUJ_BDvc2iEtB-n3VZ8g", "알기쉬운 경제스쿨", true, 0);
+        when(repository.findById(9L)).thenReturn(Optional.of(channel));
+
+        assertThat(service.requireActiveChannel(9L)).isEqualTo(channel);
+    }
+
+    @Test
+    void requireActiveChannelRejectsDeactivatedChannel() {
+        ReferenceChannel channel = entity(9L, "UCecKUJ_BDvc2iEtB-n3VZ8g", "알기쉬운 경제스쿨", false, 0);
+        when(repository.findById(9L)).thenReturn(Optional.of(channel));
+
+        assertThatThrownBy(() -> service.requireActiveChannel(9L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("비활성화");
+    }
+
     private static ChannelCandidate candidate(String channelId, Long subscribers) {
         return new ChannelCandidate(
                 channelId,

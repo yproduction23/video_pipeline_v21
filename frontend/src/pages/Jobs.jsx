@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { BarChart3, ChevronRight, Plus, Search, Youtube } from 'lucide-react'
+import { AlertTriangle, BarChart3, ChevronRight, Plus, Search, Youtube } from 'lucide-react'
 import Layout from '../components/Layout'
 import Pagination from '../components/Pagination'
 import DailyKeywordResearch from '../components/dashboard/DailyKeywordResearch'
 import StatusBadge from '../components/StatusBadge'
 import { jobsApi } from '../api/jobs'
-import { formatAutonomy, formatCategory } from '../constants/jobStatus'
+import { formatAutonomy, formatCategory, isError } from '../constants/jobStatus'
 
 const CATEGORY_LABEL = {
   KOSPI: '코스피', KOSDAQ: '코스닥', US_STOCKS: '미국 주식', INDIVIDUAL_STOCK: '개별 종목',
@@ -23,15 +23,25 @@ export default function Jobs() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('ALL')
   const [mode, setMode] = useState('ALL')
+  const [attentionOnly, setAttentionOnly] = useState(false)
   const [page, setPage] = useState(1)
-  const { data: allJobs = [], isLoading, isError } = useQuery({ queryKey: ['jobs'], queryFn: jobsApi.list, refetchInterval: 15000 })
+  const { data: allJobs = [], isLoading, isError: isLoadError } = useQuery({ queryKey: ['jobs'], queryFn: jobsApi.list, refetchInterval: 15000 })
+  const attentionCount = allJobs.filter(job => !isShortsSourceJob(job) && isError(job.status)).length
   const jobs = allJobs.filter(job => !isShortsSourceJob(job)).filter(job => {
     const term = search.trim().toLowerCase()
     if (term && !`${job.title || ''} ${job.keyword || ''}`.toLowerCase().includes(term)) return false
     if (category !== 'ALL' && job.category !== category) return false
     if (mode !== 'ALL' && job.autonomy !== mode) return false
+    if (attentionOnly && !isError(job.status)) return false
     return true
-  }).sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+  }).sort((a, b) => {
+    // 주의 필요 Job(IMAGES_RETRY_REQUIRED 등)을 목록 최상단으로 올려 전체
+    // 스크롤 없이 바로 보이게 한다 — AUTO 모드에서 조용히 멈춘 Job을
+    // 운영자가 리스트에서 눈으로 찾아야 했던 문제의 직접적인 보완.
+    const attnDiff = Number(isError(b.status)) - Number(isError(a.status))
+    if (attnDiff !== 0) return attnDiff
+    return new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0)
+  })
   const totalPages = Math.max(1, Math.ceil(jobs.length / 10))
   const pageItems = jobs.slice((page - 1) * 10, page * 10)
   useEffect(() => { if (page > totalPages) setPage(totalPages) }, [page, totalPages])
@@ -56,8 +66,17 @@ export default function Jobs() {
         /></div>
 
         <section className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div className="p-5 border-b border-slate-200 flex flex-wrap gap-3 items-center justify-between"><div><h2 className="font-semibold text-slate-900">롱폼 작업 목록</h2><p className="text-xs text-slate-500 mt-1">작업을 열어 스크립트 검토, TTS, 이미지 수정, 재조립 또는 쇼츠 전환을 이어서 진행하세요.</p></div><div className="flex flex-wrap gap-2"><label className="relative"><Search size={15} className="absolute left-3 top-2.5 text-slate-500"/><input value={search} onChange={e => resetPage(setSearch)(e.target.value)} placeholder="제목·키워드 검색" className="bg-slate-100 border border-slate-300 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-900"/></label><select value={category} onChange={e => resetPage(setCategory)(e.target.value)} className="bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900"><option value="ALL">주제 전체</option>{Object.entries(CATEGORY_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={mode} onChange={e => resetPage(setMode)(e.target.value)} className="bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900"><option value="ALL">모드 전체</option><option value="AUTO">자동</option><option value="GUIDED">반자동</option></select></div></div>
-          {isError && <div className="px-5 py-4 text-sm text-accent-red">롱폼 목록을 불러오지 못했습니다. 백엔드 연결을 확인해 주세요.</div>}
+          <div className="p-5 border-b border-slate-200 flex flex-wrap gap-3 items-center justify-between"><div><h2 className="font-semibold text-slate-900">롱폼 작업 목록</h2><p className="text-xs text-slate-500 mt-1">작업을 열어 스크립트 검토, TTS, 이미지 수정, 재조립 또는 쇼츠 전환을 이어서 진행하세요.</p></div><div className="flex flex-wrap gap-2">
+            {attentionCount > 0 && (
+              <button
+                onClick={() => resetPage(setAttentionOnly)(!attentionOnly)}
+                className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold border transition ${attentionOnly ? 'bg-accent-amber text-navy-950 border-accent-amber' : 'bg-accent-amber/10 text-accent-amber border-accent-amber/30 hover:bg-accent-amber/20'}`}
+              >
+                <AlertTriangle size={14}/>주의 필요 {attentionCount}
+              </button>
+            )}
+            <label className="relative"><Search size={15} className="absolute left-3 top-2.5 text-slate-500"/><input value={search} onChange={e => resetPage(setSearch)(e.target.value)} placeholder="제목·키워드 검색" className="bg-slate-100 border border-slate-300 rounded-xl pl-8 pr-3 py-2 text-xs text-slate-900"/></label><select value={category} onChange={e => resetPage(setCategory)(e.target.value)} className="bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900"><option value="ALL">주제 전체</option>{Object.entries(CATEGORY_LABEL).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select value={mode} onChange={e => resetPage(setMode)(e.target.value)} className="bg-slate-100 border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900"><option value="ALL">모드 전체</option><option value="AUTO">자동</option><option value="GUIDED">반자동</option></select></div></div>
+          {isLoadError && <div className="px-5 py-4 text-sm text-accent-red">롱폼 목록을 불러오지 못했습니다. 백엔드 연결을 확인해 주세요.</div>}
           <div className="divide-y divide-slate-200">{isLoading && <div className="px-5 py-12 text-center text-slate-500">목록을 불러오는 중입니다.</div>}{!isLoading && jobs.length === 0 && <div className="px-5 py-12 text-center text-slate-500">조건에 맞는 롱폼 작업이 없습니다.</div>}{pageItems.map(job => <button key={job.id} onClick={() => navigate(`/longform/${job.id}`)} className="w-full px-5 py-4 flex items-center justify-between gap-4 hover:bg-slate-50 text-left transition"><div className="min-w-0"><div className="font-semibold text-slate-900 truncate">{job.title}</div><div className="text-xs text-slate-500 mt-1 truncate">{job.keyword || '키워드 미선택'} · {formatCategory(job.category)} · {job.longformTargetMinutes || 0}분 · {formatAutonomy(job.autonomy)}</div></div><div className="flex items-center gap-3 shrink-0"><span className="text-xs text-slate-500">₩{Math.round(Number(job.costAccumulated) || 0).toLocaleString('ko-KR')}</span><StatusBadge status={job.status} small/><ChevronRight size={16} className="text-slate-500"/></div></button>)}</div>
           <Pagination total={jobs.length} currentPage={page} onChange={setPage}/>
         </section>

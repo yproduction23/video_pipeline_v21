@@ -87,7 +87,11 @@ TTS_SPEED = float(os.getenv("TTS_SPEED", "0.9"))
 # Measured Korean long-form narration pace for the configured channel voice.
 # 1분(60초) TTS 음성 분량을 충족하기 위해 분당 650자 기준을 적용한다. (650자 / 60초 ≈ 11자/초)
 CHARS_PER_MINUTE = int(os.getenv("CHARS_PER_MINUTE", "650"))
-SCENE_DURATION_SEC = float(os.getenv("SCENE_DURATION_SEC", "5.5"))
+# 2026-10-13 사용자 재현(job 14): 5.5초/씬 기준은 한 장면에 대사가 많이
+# 몰려 체감 템포가 늘어진다는 피드백을 받아 4.0초로 낮췄다. 이 값은
+# pace_sections_for_runtime()의 실제 장면 경계 계산과 _calc_scene_count()의
+# 초기 LLM 목표 씬수 계산 둘 다에 쓰인다(두 곳이 따로 놀던 버그를 같이 고침).
+SCENE_DURATION_SEC = float(os.getenv("SCENE_DURATION_SEC", "4.0"))
 # 한국어 한 줄 자막은 의미 단위를 해치지 않는 15~20자 범위를 목표로 한다.
 SUBTITLE_MAX_CHARS = int(os.getenv("SUBTITLE_MAX_CHARS", "18"))
 # 최종 조립 영상은 30fps CFR로 인코딩한다. 자막 시작점을 이 프레임 격자에
@@ -186,7 +190,11 @@ TTS_PARAGRAPH_PAUSE_MS = int(os.getenv("TTS_PARAGRAPH_PAUSE_MS", "400"))
 # ElevenLabs의 원래 억양은 보존하되, 문장 경계가 자연스럽게 연결되도록 70ms 미세 호흡을 더한다.
 # 문장 그룹 간 미세 호흡 70ms → 110ms 상향. 자막 싱크는 강제 정렬로 유지.
 TTS_THOUGHT_GROUP_PAUSE_MS = int(os.getenv("TTS_THOUGHT_GROUP_PAUSE_MS", "110"))
-TTS_DURATION_TOLERANCE = float(os.getenv("TTS_DURATION_TOLERANCE", "0.25"))
+# 2026-10-14 job 15 재현: 2026-10-01에 사용자가 이미 25%→50%로 넓히기로
+# 결정했는데(목표 길이에 정확히 맞출 필요 없음), 코드 기본값은 25%로 남아
+# 있어 같은 사유(목표 60초, 실제 87.6초=+46%)로 다시 막혔다. 결정을 실제
+# 기본값에 반영한다.
+TTS_DURATION_TOLERANCE = float(os.getenv("TTS_DURATION_TOLERANCE", "0.50"))
 
 BGM_VOLUME = float(os.getenv("BGM_VOLUME", "0.12"))
 
@@ -201,6 +209,8 @@ INTRO_KLING_MAX_CLIPS = int(os.getenv("INTRO_KLING_MAX_CLIPS", "12"))  # legacy 
 INTRO_MOTION_CLIP_COUNT = int(os.getenv("INTRO_MOTION_CLIP_COUNT", "12"))
 INTRO_MOTION_CLIP_SECONDS = int(os.getenv("INTRO_MOTION_CLIP_SECONDS", "5"))
 INTRO_MOTION_ENABLED = os.getenv("INTRO_MOTION_ENABLED", "True").lower() == "true"
+# 슬라이드형: 스톡이 없는 장면을 Kling으로 만들지 여부(평가 중, 기본 꺼짐).
+SLIDE_KLING_ENABLED = os.getenv("SLIDE_KLING_ENABLED", "False").lower() == "true"
 INTRO_MOTION_TEST_MODE = os.getenv("INTRO_MOTION_TEST_MODE", "False").lower() == "true"
 MAX_IMAGE_HOLD_SECONDS = int(os.getenv("MAX_IMAGE_HOLD_SECONDS", "8"))
 

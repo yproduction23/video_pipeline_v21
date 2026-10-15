@@ -26,14 +26,16 @@ from app.workers.images_worker import (
     ImagesWorker,
     ImageProviderCreditRequiredError,
     ImageProviderTemporarilyUnavailableError,
+    accept_held_scene_as_is,
 )
+from app.workers.slides_worker import SlidesWorker
 from app.workers.longform_worker import LongformWorker
 from app.workers.sfx_worker import SfxWorker
 from app.workers.bgm_worker import BgmWorker
 from app.workers.pronunciation_manager import PronunciationManager
 from app.config import APP_MODE, BFL_API_KEY, CLAUDE_MODEL, V5_BFL_ENABLED
 from app import runtime_config
-from app.utils.budget import load_cost_ledger_summary
+from app.utils.budget import load_cost_ledger_summary, approve_scene_retry
 from app.utils.image_request_control import ImageRequestHeld
 from app.utils.art_direction import compile_editorial_prompt
 from app.models.article_evidence import EvidenceCaptureRequest, QuoteCardRequest, UserImageEvidenceRequest
@@ -73,6 +75,7 @@ keyword_worker = None
 script_worker = None
 tts_worker = None
 images_worker = None
+slides_worker = None
 longform_worker = None
 sfx_worker = None
 bgm_worker = None
@@ -108,6 +111,12 @@ def get_images_worker():
     if images_worker is None:
         images_worker = ImagesWorker()
     return images_worker
+
+def get_slides_worker():
+    global slides_worker
+    if slides_worker is None:
+        slides_worker = SlidesWorker()
+    return slides_worker
 
 def get_longform_worker():
     global longform_worker
@@ -162,6 +171,47 @@ def worker_cost_ledger(job_id: int):
     return load_cost_ledger_summary(job_id)
 
 
+@app.get("/workers/slides/progress/{job_id}")
+def slide_generation_progress(job_id: int):
+    """슬라이드형 씬별 생성의 진행 상황(장면 분할 개수·완료 장면)을 UI에 노출한다."""
+    from app.services.slide_progress import read_progress
+
+    if job_id <= 0:
+        raise HTTPException(status_code=422, detail="job_id는 양수여야 합니다.")
+    return read_progress(job_id, DATA_DIR) or {"job_id": job_id, "status": "none", "total": 0, "done": 0, "scenes": []}
+
+
+@app.get("/workers/slides/progress/{job_id}/scene/{index}")
+def slide_generation_scene_media(job_id: int, index: int):
+    """돋보기(확대 보기)용 — 완성된 장면의 영상(있으면) 또는 이미지를 원본 크기로 내려준다.
+    진행 파일에 기록된 경로만, 그리고 이 Job의 폴더 안의 파일만 허용한다."""
+    from app.services.slide_progress import progress_dir, read_progress
+
+    state = read_progress(job_id, DATA_DIR) if job_id > 0 else None
+    scene = next((s for s in (state or {}).get("scenes", []) if s.get("index") == index), None)
+    if not scene:
+        raise HTTPException(status_code=404, detail="장면 기록이 없습니다.")
+    root = progress_dir(job_id, DATA_DIR).resolve()
+    for key, media in (("video_path", "video/mp4"), ("image_path", "image/png")):
+        raw = scene.get(key)
+        if not raw:
+            continue
+        path = Path(raw).resolve()
+        if path.is_file() and root in path.parents:
+            return FileResponse(str(path), media_type=media)
+    raise HTTPException(status_code=404, detail="확대할 파일이 없습니다.")
+
+
+@app.get("/workers/slides/progress/{job_id}/thumb/{index}")
+def slide_generation_thumb(job_id: int, index: int):
+    from app.services.slide_progress import thumb_path
+
+    path = thumb_path(job_id, index, DATA_DIR)
+    if job_id <= 0 or index < 0 or not path.is_file():
+        raise HTTPException(status_code=404, detail="썸네일이 없습니다.")
+    return FileResponse(str(path), media_type="image/jpeg")
+
+
 # ============================
 # 신규 — 파이프라인 파라미터 실시간 조정 API
 #
@@ -212,6 +262,7 @@ class PipelineConfigUpdate(BaseModel):
     tts_sentence_pause_ms: Optional[int] = None
     tts_paragraph_pause_ms: Optional[int] = None
     bgm_volume: Optional[float] = None
+    slide_kling_enabled: Optional[bool] = None  # 슬라이드형 스톡 미스 장면의 Kling 사용(평가용)
     intro_motion_seconds_short: Optional[float] = None
     intro_motion_seconds_long: Optional[float] = None
     intro_motion_short_threshold: Optional[float] = None
@@ -857,6 +908,9 @@ class ScriptGenerateRequest(BaseModel):
     candidate_evidence: Optional[dict] = None  # 선택 후보의 뉴스·YouTube 근거
     autonomy_mode: Optional[str] = None
     content_nature: Optional[str] = None  # FACTUAL | EXPLAINER | STORY (없으면 FACTUAL)
+    # 2026-10-15 사용자 결정: 벤치마크와 "결"을 맞추는 완화된 정책은 슬라이드형
+    # (SLIDE) Job에만 적용한다. CHARACTER/None이면 기존 보수적 정책을 유지한다.
+    visual_mode: Optional[str] = None
 
     # 숫자 카드·차트는 명시적으로 켠 레거시 작업에서만 사용한다.
     data_visuals_enabled: bool = False
@@ -896,6 +950,7 @@ def script_generate(request: ScriptGenerateRequest):
             autonomy_mode=request.autonomy_mode,
             candidate_evidence=request.candidate_evidence,
             content_nature=request.content_nature,
+            visual_mode=request.visual_mode,
         )
     except ScriptResearchRequiredError as exc:
         return JSONResponse(status_code=422, content={
@@ -1145,6 +1200,9 @@ class ImagesGenerateRequest(BaseModel):
     # 2026-10-02 사용자 요청: 검토 필요 목록에서 재시도할 씬을 직접 고를 수
     # 있어야 한다. 비워두면(None) 기존처럼 전체 씬을 처리한다.
     scene_indices: Optional[list[int]] = None
+    # 2026-10-15 사용자 결정: content_nature와 같은 패턴 — null/blank면 기존
+    # 캐릭터 경로(images_worker), "SLIDE"면 slides_worker로 분기한다.
+    visual_mode: Optional[str] = None
 
 
 @app.post("/workers/images/generate")
@@ -1152,6 +1210,14 @@ def images_generate(request: ImagesGenerateRequest):
     if request.scene_indices is not None and not request.scene_indices:
         raise HTTPException(400, "scene_indices가 빈 목록입니다; 재시도할 씬을 하나 이상 선택하세요.")
     try:
+        if str(request.visual_mode or "").upper() == "SLIDE":
+            return get_slides_worker().generate(
+                tts_meta_json=request.tts_meta,
+                script_meta_json=request.script_meta,
+                job_id=request.job_id or 0,
+                budget_limit_krw=request.budget_limit_krw,
+                scene_indices=request.scene_indices,
+            )
         return get_images_worker().generate(
             tts_meta_json=request.tts_meta,
             script_meta_json=request.script_meta,
@@ -1191,6 +1257,65 @@ def images_generate(request: ImagesGenerateRequest):
     except Exception as e:
         logger.exception("이미지 생성 실패")
         raise HTTPException(500, f"이미지 생성 실패: {str(e)}")
+class AcceptHeldSceneRequest(BaseModel):
+    job_id: int
+    # 2026-10-13 job 14 씬5 재현: 승격된 최종 이미지만 저장하고 내레이션
+    # 원문을 안 넘기면, Spring이 저장하는 SCENE_IMAGE 자산의 text가 비어
+    # longform 조립 직전 "대본 원문과 장면 내레이션 불일치"로 전체가 막힌다.
+    # 호출자(Spring)가 승인 SCRIPT 자산에서 직접 가져와 반드시 함께 보낸다.
+    text: str = Field(min_length=1)
+    accepted_by: Optional[str] = None
+    section: Optional[str] = None
+
+
+@app.post("/workers/images/{job_id}/scenes/{index}/accept")
+def images_accept_held_scene(job_id: int, index: int, request: AcceptHeldSceneRequest):
+    """2026-10-13 사용자 요청: 자동 게이트가 보류시킨 장면이라도 사용자가 실물
+    후보 이미지를 직접 보고 괜찮다고 판단하면, 재생성 없이 그 후보를 최종
+    이미지로 승격한다. 재시도 전용 게이트(장면 누적 요청 상한)와 무관하다."""
+    try:
+        return accept_held_scene_as_is(
+            job_id, index, accepted_by=request.accepted_by,
+            text=request.text, section=request.section,
+        )
+    except ImageRequestHeld as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        logger.exception("보류 장면 수동 승인 실패")
+        raise HTTPException(500, f"보류 장면 수동 승인 실패: {str(e)}")
+
+
+class ApproveSceneRetryRequest(BaseModel):
+    job_id: int
+    approved_by: str = Field(min_length=1)
+    # 2026-10-14 사용자 재현(job 18 scene 11): needs_review 상태는 콘텐츠
+    # 거부가 반복돼 재시도 상한을 소진하면 자동으로 걸리고, 지금까지는 이
+    # 상태를 푸는 API 경로가 전혀 없었다(기존 review_retry_of/review_reopen_of
+    # 감사 체인은 budget.py의 단일 503 재시도 시나리오에서만 호출됨). 이
+    # 엔드포인트는 사람이 명시적으로 "재도전 승인"을 누른 경우에만 요청 상한
+    # 카운터를 초기화한다. 24시간 냉각이 아직이면 override_cooldown=True가
+    # 있어야만 통과한다 — 기본값 False로 두어, 호출자가 실수로 냉각을
+    # 건너뛰지 않게 한다.
+    override_cooldown: bool = False
+
+
+@app.post("/workers/images/{job_id}/scenes/{index}/approve-retry")
+def images_approve_scene_retry(job_id: int, index: int, request: ApproveSceneRetryRequest):
+    """사람이 명시적으로 승인한 경우에만 needs_review 상태의 씬 재시도
+    상한을 초기화한다. 비용 예약/원장 매칭 로직은 건드리지 않고, 다음
+    일반 재생성 요청이 정상적으로 새 예약을 받도록 카운터만 연다."""
+    try:
+        result = approve_scene_retry(
+            job_id, index, approved_by=request.approved_by, override_cooldown=request.override_cooldown,
+        )
+        return {"status": "ok", **result}
+    except ImageRequestHeld as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        logger.exception("씬 재도전 승인 실패")
+        raise HTTPException(500, f"씬 재도전 승인 실패: {str(e)}")
+
+
 class ImagesBatchStatusRequest(BaseModel):
     job_id: int
 
@@ -1551,6 +1676,12 @@ def bgm_generate(req: BgmRequest):
 class YoutubeMetadataRequest(BaseModel):
     script_text: str
     is_shorts: bool = False
+    # 2026-10-15 사용자 결정: 벤치마크 영상 기반 Job은 썸네일·태그·제목까지
+    # 벤치마크와 "결"이 같아야 한다 — 벤치마크의 실제 공개 지표(제목/태그/설명)를
+    # 스타일 참고 자료로 넘긴다. None이면 기존처럼 스크립트만으로 생성한다.
+    benchmark_title: Optional[str] = None
+    benchmark_tags: Optional[list[str]] = None
+    benchmark_description: Optional[str] = None
 
 
 @app.post("/workers/youtube/metadata")
@@ -1574,15 +1705,35 @@ async def generate_youtube_metadata(request: YoutubeMetadataRequest):
         from app.utils.anthropic_cache import cached_system, log_cache_usage
         client = Anthropic(api_key=api_key)
 
-        system_prompt = """You are a YouTube SEO and financial content editor.
+        has_benchmark = bool(request.benchmark_title or request.benchmark_tags)
+        benchmark_rule = ""
+        benchmark_block = ""
+        if has_benchmark:
+            benchmark_rule = (
+                " A <benchmark> block is supplied with the real title/tags/description of "
+                "a video this channel is benchmarking. Match its style closely: title phrasing "
+                "pattern and hook, tag selection, and description structure should feel like the "
+                "same editorial family ('결'이 같아야 한다) — but do not reuse its title or tags "
+                "verbatim or near-verbatim; rewrite in your own words to stay clear of copyright "
+                "infringement. The benchmark is a style reference only, never a source of facts."
+            )
+            benchmark_block = (
+                "\n<benchmark>\n"
+                f"title: {request.benchmark_title or ''}\n"
+                f"tags: {json.dumps(request.benchmark_tags or [], ensure_ascii=False)}\n"
+                f"description: {(request.benchmark_description or '')[:500]}\n"
+                "</benchmark>\n"
+            )
+
+        system_prompt = f"""You are a YouTube SEO and financial content editor.
 Create accurate Korean metadata from the supplied script only. Do not invent
 market facts, prices, percentages, dates, companies, or guarantees. Produce
 three distinct but faithful title candidates, one useful description with a
 brief summary and hashtags, and 5-8 search tags. Avoid misleading investment
-advice, guaranteed returns, or claims not present in the script. Return only
+advice, guaranteed returns, or claims not present in the script.{benchmark_rule} Return only
 valid JSON with exactly these keys: titles (array of 3 strings), description
 (string), tags (array of strings)."""
-        prompt = f"<script>\n{request.script_text}\n</script>"
+        prompt = f"<script>\n{request.script_text}\n</script>{benchmark_block}"
 
         response = client.messages.create(
             model=CLAUDE_MODEL,
@@ -1599,8 +1750,7 @@ valid JSON with exactly these keys: titles (array of 3 strings), description
         if content_text.endswith("```"):
             content_text = content_text[:-3]
         content_text = content_text.strip()
-        
-        import json
+
         metadata = json.loads(content_text)
         return metadata
     except Exception as e:

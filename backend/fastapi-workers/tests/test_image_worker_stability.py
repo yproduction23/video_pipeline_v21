@@ -1466,5 +1466,254 @@ class HeldSceneStillExposesACandidateWhenForcedFullRegenerationDiscardsItTests(u
             self.assertEqual(Path(held["image_path"]).name, "scene_000_last_candidate.png")
 
 
+class DeterministicSurfaceMissingStillRunsContentVisualQaTests(unittest.TestCase):
+    """2026-10-08 job 14 scene 0 재현: 캡션용 빈 표면을 못 찾으면
+    _apply_image_overlays가 DeterministicSurfaceMissingError를 던지고,
+    그 지점이 _inspect_generated_visual_image(차트 게이트 포함 전체 비전
+    계약 검수)보다 앞서 실행돼 그 뒤로는 호출되지 않았다. 그 결과 차트·
+    불꽃놀이가 그려진 후보도 "표면을 못 찾음"으로만 기록되고, 콘텐츠
+    자체의 문제(unexpected_chart_or_data_visualization)는 다음 시도
+    프롬프트에 전혀 반영되지 않은 채 3회 모두 같은 차트로 소진됐다."""
+
+    def test_surface_missing_failure_also_runs_content_visual_qa_and_merges_categories(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import (
+            DeterministicSurfaceMissingError,
+            GeneratedImageVisualContractError,
+            ImagesWorker,
+        )
+        from PIL import Image
+
+        class Provider:
+            def generate_image(self, **kwargs):
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        def fake_overlays(self, ctx, path):
+            raise DeterministicSurfaceMissingError(
+                "캐릭터·기존 글자와 겹치지 않는 테두리 있는 빈 물리 표면을 찾지 못했습니다.",
+                {
+                    "failure_categories": ["deterministic_surface_missing"],
+                    "reason": "안전한 빈 모니터/보드가 없어 정적 좌표 폴백을 금지하고 전체 장면을 다시 생성합니다.",
+                },
+            )
+
+        content_qa_calls: list[str] = []
+
+        def fake_content_qa(ctx, _img_path):
+            content_qa_calls.append(ctx.get("section"))
+            raise GeneratedImageVisualContractError(
+                "장면 비전 계약 위반: unexpected_chart_or_data_visualization",
+                {
+                    "failure_categories": ["unexpected_chart_or_data_visualization"],
+                    "reason": "일반 설명형 장면에 금융 차트·불꽃놀이가 그려짐",
+                },
+            )
+
+        scenes = [
+            {
+                "title": "장면 1",
+                "section": "scene_0",
+                "narration": "승인 내레이션 0",
+                "prompt_en": "editorial finance scene 0",
+                "scene_type": "general",
+                "visual_mode": "general",
+                "art_direction": {"character_required": True},
+                "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+            }
+        ]
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 2,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+            "visual_qa_enabled": False,
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            job_dir = Path(temp_dir)
+            with patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+                 patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+                 patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+                 patch.object(budget, "_job_path", lambda job, name: job_dir / name), \
+                 patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+                 patch.object(ImagesWorker, "_apply_image_overlays", fake_overlays), \
+                 patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+                 patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_content_qa), \
+                 patch("app.workers.images_worker._audit_scene_quality", lambda *a, **k: None):
+                worker = ImagesWorker()
+                worker.tts_subtitle_sync = {}
+                worker.evidence_audit = {}
+                worker.visual_mix_plan = {}
+                response = worker._generate_parallel_scenes(
+                    scenes_meta=scenes,
+                    directed_specs={},
+                    market_snapshot={},
+                    character_reference_paths=[],
+                    character_style_prompt="none",
+                    lora_model_id=None,
+                    lora_trigger_word=None,
+                    lora_scale=None,
+                    ai_provider=Provider(),
+                    job_dir=job_dir,
+                    job_id=9012,
+                )
+
+            # 핵심 회귀 검증: 표면 탐지가 실패해도 콘텐츠 비전 QA가 적어도
+            # 한 번은 실행돼야 한다(지금까지는 완전히 건너뛰어졌다).
+            self.assertTrue(content_qa_calls, "표면 탐지 실패 경로에서 콘텐츠 비전 QA가 한 번도 실행되지 않음")
+
+            held = response["held_scenes"][0]
+            self.assertEqual(held["index"], 0)
+            # 차트 범주가 보류 사유에 합쳐져, 운영자와 다음 시도 프롬프트
+            # 모두 "표면을 못 찾음"이 아니라 진짜 원인(차트)을 알아야 한다.
+            self.assertIn("unexpected_chart_or_data_visualization", held["reason"])
+
+
+class ArchetypeSwapOnRepeatedSemanticMismatchTests(unittest.TestCase):
+    """2026-10-14 job 18 scene 11 재현: "불특정 다수를 겨냥한 흉기 난동"처럼
+    archetype이 잘못 배정된 장면은, 매 재시도가 "차트를 빼라" 지시문을
+    덧붙여도 기반 prompt_en 자체가 잘못된 archetype(data_lab)의 설정으로
+    고정돼 있어 같은 의미 불일치를 반복했다(실제로 재시도 상한까지 소진함).
+    같은 의미 불일치 계열 사유가 두 번째로 반복되면, 남은 예산을 더 쓰기
+    전에 archetype을 교체하고 시각 프롬프트만 다시 만들어야 한다 —
+    내레이션(자막·TTS 원문)은 손대지 않는다."""
+
+    def test_second_consecutive_semantic_mismatch_swaps_archetype_and_rebuilds_prompt(self):
+        from app import runtime_config
+        from app.utils import budget
+        from app.workers import images_worker
+        from app.workers.images_worker import GeneratedImageVisualContractError, ImagesWorker
+        from PIL import Image
+
+        class Provider:
+            def __init__(self):
+                self.prompts = []
+
+            def generate_image(self, **kwargs):
+                self.prompts.append(kwargs["prompt"])
+                Image.effect_noise((640, 360), 60).convert("RGB").save(kwargs["output_path"], "PNG")
+
+        class SequentialPressure:
+            def acquire(self):
+                return None
+
+            def outcome(self, _error=None):
+                return None
+
+            def recommended_concurrency(self, _configured):
+                return 1
+
+        mismatch_review = {
+            "failure_categories": ["scene_semantic_mismatch"],
+            "reason": "비금융 범죄 서사에 금융 차트 배경이 나옴",
+        }
+        qa_calls = {"n": 0}
+
+        def fake_visual_qa(ctx, _img_path):
+            qa_calls["n"] += 1
+            if qa_calls["n"] <= 2:
+                raise GeneratedImageVisualContractError(
+                    "장면 비전 계약 위반: scene_semantic_mismatch", dict(mismatch_review),
+                )
+            return {}
+
+        narration = "불특정 다수를 겨냥한 흉기 난동, 이번이 처음이 아닌 겁니다."
+        scenes = [{
+            "title": "장면 1",
+            "section": "scene_0",
+            "text": narration,
+            "archetype": "data_lab",
+            "prompt_en": "holographic data lab, financial dashboards, dark navy tone",
+            "scene_type": "general",
+            "visual_mode": "general",
+            "art_direction": {"character_required": True, "archetype": "data_lab"},
+            "image_profile": {"tier": "pro", "model": "gemini-3-pro-image", "image_size": "2K"},
+        }]
+        provider = Provider()
+        original_value = runtime_config.value
+        values = {
+            "gemini_retry_max": 3,
+            "gemini_pro_retry_base_seconds": 0.5,
+            "gemini_max_concurrency": 1,
+            "image_same_error_break_count": 10,
+            "image_provider": "gemini",
+            "gemini_service_tier": "standard",
+        }
+
+        def configured_value(key):
+            return values[key] if key in values else original_value(key)
+
+        with tempfile.TemporaryDirectory() as temp_dir, \
+             patch("app.workers.images_worker.gemini_pressure", SequentialPressure()), \
+             patch("app.workers.images_worker.runtime_config.value", side_effect=configured_value), \
+             patch("app.workers.images_worker.is_job_stopped", lambda job_id: False), \
+             patch.object(budget, "_job_path", lambda job, name: Path(temp_dir) / name), \
+             patch.object(ImagesWorker, "_normalize_canvas", lambda self, path: None), \
+             patch.object(ImagesWorker, "_apply_image_overlays", lambda self, ctx, path: None), \
+             patch("app.workers.images_worker._inspect_generated_textless_image", lambda ctx, path, **kw: {}), \
+             patch("app.workers.images_worker._inspect_generated_visual_image", side_effect=fake_visual_qa), \
+             patch(
+                 "app.workers.images_worker.assess_local_edit_preservation",
+                 return_value={"passed": True, "status": "completed", "decision": "accept", "preservation_score": 95},
+             ), \
+             patch("app.workers.images_worker.keyword_fallback", return_value="risk_control_room") as fallback, \
+             patch.object(
+                 ImagesWorker, "_build_prompt_from_narration",
+                 return_value="risk control room, public safety incident monitoring, dark navy tone",
+             ) as rebuild:
+            worker = ImagesWorker()
+            worker.tts_subtitle_sync = {}
+            worker.evidence_audit = {}
+            worker.visual_mix_plan = {}
+            response = worker._generate_parallel_scenes(
+                scenes_meta=scenes,
+                directed_specs={},
+                market_snapshot={},
+                character_reference_paths=[],
+                character_style_prompt="none",
+                lora_model_id=None,
+                lora_trigger_word=None,
+                lora_scale=None,
+                ai_provider=provider,
+                job_dir=Path(temp_dir),
+                job_id=9020,
+            )
+
+            # 핵심 회귀 검증: 같은 사유가 두 번째 반복되기 전까지는 archetype을
+            # 바꾸지 않는다(1회차 실패만으로 성급하게 교체하지 않음).
+            fallback.assert_called_once_with(narration, recent_prev="data_lab")
+            rebuild.assert_called_once()
+            _, rebuild_kwargs = rebuild.call_args
+            self.assertEqual(rebuild_kwargs["scene_type"], "risk_control_room")
+            self.assertEqual(rebuild_kwargs["narration"], narration)
+
+            # 3번째 시도는 교체된 프롬프트로 실제 호출됐어야 한다.
+            self.assertEqual(len(provider.prompts), 3)
+            self.assertIn("risk control room", provider.prompts[-1])
+            self.assertNotIn("holographic data lab", provider.prompts[-1])
+
+            # 보류되지 않고 완료돼야 한다.
+            self.assertEqual([s["index"] for s in response["scenes"]], [0])
+            self.assertFalse(response["held_scenes"])
+
+
 if __name__ == "__main__":
     unittest.main()

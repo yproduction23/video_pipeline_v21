@@ -3,6 +3,7 @@ package com.pipeline.video.controller;
 import com.pipeline.video.dto.ImagesConfirmRequest;
 import com.pipeline.video.dto.ImagesGenerateRequest;
 import com.pipeline.video.dto.ImagesGenerateResponse;
+import com.pipeline.video.service.FastApiClient;
 import com.pipeline.video.service.ImagesService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -24,6 +25,7 @@ import java.util.Map;
 public class ImagesController {
 
     private final ImagesService imagesService;
+    private final FastApiClient fastApiClient;
 
     @PostMapping("/generate")
     public ResponseEntity<ImagesGenerateResponse> generate(
@@ -32,6 +34,35 @@ public class ImagesController {
             @AuthenticationPrincipal String username) {
         List<Integer> sceneIndices = request == null ? null : request.getSceneIndices();
         return ResponseEntity.ok(imagesService.generate(jobId, username, sceneIndices));
+    }
+
+    /** 슬라이드형 씬별 생성 진행 상황: 장면 분할 개수와 지금까지 만들어진 장면. */
+    @GetMapping("/progress")
+    public ResponseEntity<Map<String, Object>> progress(@PathVariable Long jobId) {
+        return ResponseEntity.ok(fastApiClient.getSlideProgress(jobId));
+    }
+
+    @GetMapping("/progress/scene/{index}")
+    public ResponseEntity<byte[]> progressSceneMedia(@PathVariable Long jobId, @PathVariable int index) {
+        ResponseEntity<byte[]> response = fastApiClient.getSlideSceneMedia(jobId, index);
+        if (response.getBody() == null) {
+            return ResponseEntity.notFound().build();
+        }
+        org.springframework.http.MediaType type = response.getHeaders().getContentType() != null
+                ? response.getHeaders().getContentType()
+                : org.springframework.http.MediaType.APPLICATION_OCTET_STREAM;
+        return ResponseEntity.ok().contentType(type).body(response.getBody());
+    }
+
+    @GetMapping("/progress/thumb/{index}")
+    public ResponseEntity<byte[]> progressThumb(@PathVariable Long jobId, @PathVariable int index) {
+        ResponseEntity<byte[]> response = fastApiClient.getSlideProgressThumb(jobId, index);
+        if (response.getBody() == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.IMAGE_JPEG)
+                .body(response.getBody());
     }
 
     @PostMapping("/confirm")
@@ -77,5 +108,34 @@ public class ImagesController {
             @AuthenticationPrincipal String username) {
         imagesService.setSceneKling(jobId, index, Boolean.TRUE.equals(body.get("enabled")));
         return ResponseEntity.ok(Map.of("status", "OK"));
+    }
+
+    /**
+     * 2026-10-13 사용자 요청: 자동 게이트가 보류시킨 장면도 사용자가 실물 후보
+     * 이미지를 직접 보고 괜찮다고 판단하면 재생성 없이 그대로 승인한다.
+     */
+    @PostMapping("/scenes/{index}/accept")
+    public ResponseEntity<ImagesGenerateResponse> acceptHeldScene(
+            @PathVariable Long jobId,
+            @PathVariable int index,
+            @AuthenticationPrincipal String username) {
+        return ResponseEntity.ok(imagesService.acceptHeldScene(jobId, index, username));
+    }
+
+    /**
+     * 2026-10-14 사용자 재현(job 18 scene 11): 콘텐츠 거부 반복으로
+     * needs_review에 들어간 씬은 재시도 상한을 올려도 풀리지 않는다. 사람이
+     * 명시적으로 승인해야만 요청 상한 카운터가 열린다. overrideCooldown이
+     * false인데 24시간이 안 지났으면 409로 실패한다 — 그때 다시
+     * overrideCooldown=true로 호출해야 즉시 재도전이 승인된다.
+     */
+    @PostMapping("/scenes/{index}/approve-retry")
+    public ResponseEntity<Map<String, Object>> approveSceneRetry(
+            @PathVariable Long jobId,
+            @PathVariable int index,
+            @RequestBody(required = false) Map<String, Boolean> body,
+            @AuthenticationPrincipal String username) {
+        boolean overrideCooldown = body != null && Boolean.TRUE.equals(body.get("overrideCooldown"));
+        return ResponseEntity.ok(imagesService.approveSceneRetry(jobId, index, username, overrideCooldown));
     }
 }

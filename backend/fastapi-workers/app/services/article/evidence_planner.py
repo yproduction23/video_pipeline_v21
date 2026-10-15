@@ -15,7 +15,6 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +37,7 @@ from app.services.evidence_capture import (
 )
 from app.services.scene_frames.emphasis_policy import BodyEmphasis, EmphasisPlan
 from app.services.verbatim_guard import validate as validate_verbatim
+from app.utils.statistic_chart_card import extract_numeric_series
 
 logger = logging.getLogger(__name__)
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
@@ -86,9 +86,19 @@ def _numbers(value: object) -> set[str]:
 
 
 def _tokens(value: object) -> list[str]:
+    # 2026-10-14 job 18 재현: "49분경"처럼 숫자+한글 단위가 붙은 표현에서
+    # _TOKEN 정규식은 숫자로 시작하는 부분을 못 잡고 뒤쪽 한글만("분경")
+    # 토큰으로 뽑아낸다. "분경"은 실제 단어가 아니어서 검색어에 섞이면
+    # 네이버 뉴스 검색이 0건을 반환했다(검증된 사실조차 증거를 못 찾고
+    # EVIDENCE_SENTENCE_UNVERIFIED로 건너뛰는 근본 원인이었다). 원문에서
+    # 숫자에 바로 붙어 시작하는 매치는 독립 단어가 아니라 그 숫자 표현의
+    # 꼬리 조각이므로 토큰에서 제외한다.
+    text = str(value or "")
     values = []
-    for token in _TOKEN.findall(str(value or "")):
-        lowered = token.lower().strip("._-")
+    for match in _TOKEN.finditer(text):
+        if match.start() > 0 and text[match.start() - 1].isdigit():
+            continue
+        lowered = match.group(0).lower().strip("._-")
         if lowered not in _STOPWORDS and len(lowered) >= 2 and lowered not in values:
             values.append(lowered)
     return values
@@ -101,30 +111,72 @@ def _direction(value: str) -> int:
     return 0
 
 
-def _similarity(left: str, right: str) -> float:
-    normal_left, normal_right = _normalise(left), _normalise(right)
-    if normal_left and normal_right and (
-        normal_left in normal_right or normal_right in normal_left
-    ):
-        return 1.0
-    try:
-        from rapidfuzz import fuzz
+_CONFIRMATION_SYSTEM_PROMPT = (
+    "너는 한국 뉴스 유튜브의 팩트체크 담당자다. 대본에 이미 검증된 사실 한 "
+    "문장과, 실제 기사에서 그대로 추출한 문장 후보 목록을 받는다. 각 후보가 "
+    "그 사실을 실제로 '확인'해주는지 판단해 가장 명확히 확인해주는 후보의 "
+    "번호를 고른다.\n\n"
+    "엄격 기준:\n"
+    "1. 어순이나 표현이 달라도(예: '벌어졌다' vs '발생했다') 같은 사건·같은 "
+    "수치를 가리키면 확인으로 인정한다. 문자 그대로 똑같을 필요는 없다.\n"
+    "2. 단, 다른 사건이거나 다른 수치(예: 다른 날짜, 다른 피해자 수)를 "
+    "말하고 있으면 고르지 않는다.\n"
+    "3. 이 문장은 화면에 실제 기사 스크린샷으로 캡처되어 인용으로 쓰인다 — "
+    "확신이 서지 않으면 null을 선택한다. 틀린 인용보다 캡처 없이 넘어가는 "
+    "게 항상 낫다.\n"
+    '4. {"index": 숫자 또는 null} 형태의 JSON만 반환한다.'
+)
 
-        return max(
-            fuzz.ratio(left, right),
-            fuzz.token_set_ratio(left, right),
-            fuzz.partial_ratio(left, right),
-        ) / 100.0
-    except ImportError:
-        # A source sentence often adds an attribution prefix. Compare both the
-        # whole sentence and the best equal-length window so local/dev behavior
-        # matches RapidFuzz's partial ratio used in the worker image.
-        shorter, longer = sorted((normal_left, normal_right), key=len)
-        windows = (
-            SequenceMatcher(None, shorter, longer[start:start + len(shorter)]).ratio()
-            for start in range(max(1, len(longer) - len(shorter) + 1))
-        )
-        return max(SequenceMatcher(None, normal_left, normal_right).ratio(), max(windows, default=0.0))
+
+def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
+    if callable(llm_call):
+        return llm_call(system, [{"role": "user", "content": prompt}], 300)
+    from app.config import CLAUDE_MODEL
+
+    api_key = os.environ["ANTHROPIC_API_KEY"]
+    from anthropic import Anthropic
+
+    response = Anthropic(api_key=api_key).messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=300,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return "".join(block.text for block in response.content if hasattr(block, "text"))
+
+
+def _select_confirming_sentence(fact_text: str, candidates: list[str], *, llm_call=None) -> int | None:
+    """실제 기사에서 추출한 문장 중, 검증된 사실을 의미상 확인해주는 문장의
+    색인을 Claude에게 판단시킨다. 2026-10-14 job 18 재현 참고: 문자열 유사도
+    0.85 기준으로는 "이날 흉기 난동은 오후 1시49분쯤 ... 벌어졌다"가 같은
+    사건을 정확히 확인해주는데도(유사도 0.484) 전부 탈락했다. LLM은 문장을
+    새로 쓰지 않고 candidates 중 하나를 고르기만 하므로, 선택된 문장은
+    여전히 원문 그대로 DOM 캡처에 쓰인다."""
+    if not candidates:
+        return None
+    lines = [f"{i}: {sentence}" for i, sentence in enumerate(candidates)]
+    prompt = (
+        f'검증된 사실: "{fact_text}"\n\n'
+        "기사에서 추출한 문장 후보:\n" + "\n".join(lines) + "\n\n"
+        '가장 명확히 확인해주는 후보의 번호만 고르거나, 없으면 null을 '
+        '반환해라. {"index": 숫자 또는 null} 형태의 JSON만 반환해라.'
+    )
+    try:
+        raw = _call_llm(_CONFIRMATION_SYSTEM_PROMPT, prompt, llm_call=llm_call)
+        cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        data = json.loads(match.group(0) if match else cleaned)
+        index = data.get("index")
+        if index is None:
+            return None
+        index = int(index)
+        if 0 <= index < len(candidates):
+            return index
+        logger.warning("증거 문장 선택 응답이 범위를 벗어남: %r (후보 %d개)", index, len(candidates))
+        return None
+    except Exception as exc:
+        logger.warning("증거 문장 선택 실패, 후보 없음으로 처리: %s", exc)
+        return None
 
 
 def _fact_text(fact: dict[str, Any]) -> str:
@@ -168,19 +220,28 @@ def _scene_fact_score(scene: dict[str, Any], fact: dict[str, Any], index: int) -
 
 
 def _query_for(scene: dict[str, Any], fact: dict[str, Any]) -> tuple[str, list[str]]:
+    # 2026-10-14 job 18 재현: verified_facts의 figure는 흔히 "2026-10-13 13:49 /
+    # 인천시 남동구 홈플러스 구월점" 같은 "일시 / 장소" 복합 문자열이다. 과거
+    # 코드는 이 raw 문자열을 토큰화 없이 그대로 검색어에 붙여, 슬래시·콜론·
+    # ISO 날짜가 뒤섞인 검색어(예: "... 2026-10-13 13:49 / 인천시 ...")가
+    # 만들어졌다 — 실제 기사 어디에도 이 표기가 그대로 나타나지 않아 네이버
+    # 뉴스 검색이 0건을 반환했다(그 결과 evidence_planner가 모든 사실을
+    # EVIDENCE_SENTENCE_UNVERIFIED로 건너뜀). figure는 이미 _fact_text()를
+    # 통해 fact_text에 포함되어 _tokens(fact_text)로 토큰화되므로(날짜 숫자는
+    # _TOKEN 정규식이 애초에 매칭하지 않음), figure를 다시 raw로 덧붙일
+    # 필요가 없다 — 중복이자 검색어 오염의 원인이었다.
     fact_text = _fact_text(fact)
     terms = _tokens(fact_text)
-    figure = str(fact.get("figure") or "").strip()
     entity = str(fact.get("entity") or "").strip()
     selected = [entity] if entity else []
     for term in terms:
         if entity and _normalise(entity) in _normalise(term):
             continue
+        if term in selected:
+            continue
         selected.append(term)
         if len(selected) >= 5:
             break
-    if figure:
-        selected.append(figure)
     if len(selected) < 2:
         selected.extend(_tokens(scene.get("title") or narration_text(scene))[:3])
     return " ".join(dict.fromkeys(selected))[:100], selected
@@ -217,17 +278,31 @@ class ArticleBodyResolver:
     """Read only reviewed public article containers and return source sentences."""
 
     def sentences(self, candidate: ArticleCandidate) -> list[str]:
+        # 2026-10-14 job 18 재현: follow_redirects=False 때문에 매일경제
+        # 기사가 "https://www.mk.co.kr/article/..." -> "https://www.mk.co.kr/
+        # news/society/..."로 URL 구조만 바뀐 정상적인 같은 매체 리다이렉트
+        # 에서도 그냥 예외를 던지며 통째로 버려졌다 — 실제로는 의자로 가해자를
+        # 제압한 시민을 다룬 정확한 기사였다. 리다이렉트를 따라가되, 승인
+        # 매체 밖으로 벗어난 경우(예: mbn.mk.co.kr -> mbn.co.kr, 허용 목록에
+        # 없음)는 그대로 거부한다 — 보안 경계(미검증 도메인 신뢰 금지)는
+        # 그대로 유지한다.
         url = validate_public_http_url(candidate.url)
         rule = publisher_for_url(url)
-        if bool(runtime_config.value("article_allowed_publishers_only")) and rule is None:
+        enforce_allowlist = bool(runtime_config.value("article_allowed_publishers_only"))
+        if enforce_allowlist and rule is None:
             return []
         response = httpx.get(
             url,
             timeout=12,
-            follow_redirects=False,
+            follow_redirects=True,
             headers={"User-Agent": "VideoPipelineEvidence/3.0 (public-source-resolver)"},
         )
         response.raise_for_status()
+        final_rule = publisher_for_url(str(response.url))
+        if enforce_allowlist and final_rule is None:
+            logger.info("article candidate redirected outside the approved publisher allowlist: %s -> %s", url, response.url)
+            return []
+        rule = final_rule or rule
         soup = BeautifulSoup(response.text, "html.parser")
         for selector in (rule.excludes if rule else ("header", "nav", "aside", "footer")):
             for node in soup.select(selector):
@@ -252,12 +327,14 @@ class ArticleEvidencePlanner:
         capture: EvidenceCaptureService | None = None,
         sentence_resolver: ArticleBodyResolver | None = None,
         audit_dir: Path | None = None,
+        llm_call=None,
     ):
         self._discovery_injected = discovery is not None
         self.discovery = discovery or ArticleDiscoveryService()
         self.capture = capture or EvidenceCaptureService()
         self.sentence_resolver = sentence_resolver or ArticleBodyResolver()
         self.audit_dir = audit_dir or DATA_DIR
+        self.llm_call = llm_call
 
     def attach(
         self,
@@ -311,10 +388,12 @@ class ArticleEvidencePlanner:
                     "reason": "EVIDENCE_SENTENCE_UNVERIFIED",
                 })
                 continue
-            capture, plan, selected_audit = result
+            capture, plan, selected_audit, numeric_series = result
             scene["visual_kind"] = "article_scene"
             scene["visual_type"] = "article_evidence"
             scene["article_capture"] = capture.model_dump(mode="json")
+            if numeric_series:
+                scene["article_capture"]["numeric_series"] = numeric_series
             scene["emphasis_plan"] = plan.model_dump(mode="json")
             scene["key_phrase"] = capture.key_phrase or ""
             scene["source_credit"] = f"출처: {capture.publisher} · {capture.published_at or ''}".rstrip(" ·")
@@ -415,19 +494,44 @@ class ArticleEvidencePlanner:
                 "downgraded": downgraded,
                 "narration_sha256": narration_hash(scene),
             }
-            return capture, plan, selected_audit
+            # 2026-10-14 사용자 결정: 확인 문장과 같은 기사 안에 실제 연도별·
+            # 항목별 숫자 계열(예: "△2023년 46건 △2024년 42건 △2025년
+            # 39건")이 있으면 함께 넘긴다 — 텍스트 인용보다 그래프가 더
+            # 명확한 레퍼런스 채널 편집 관행에 맞춘다. 숫자는 기사 문장에서
+            # 정규식으로 그대로 추출하며, 반드시 "확인된" 기사에서만
+            # 가져온다(검색만 되고 검증 안 된 기사의 숫자는 쓰지 않음).
+            numeric_series = None
+            for sentence in sentences:
+                numeric_series = extract_numeric_series(sentence)
+                if numeric_series:
+                    break
+            return capture, plan, selected_audit, numeric_series
         return None
 
-    @staticmethod
-    def _best_sentence(scene_text: str, fact: dict[str, Any], sentences: list[str]) -> tuple[float, str] | None:
+    def _best_sentence(self, scene_text: str, fact: dict[str, Any], sentences: list[str]) -> tuple[float, str] | None:
+        # 2026-10-14 job 18 재현: 기존에는 문자열 유사도(rapidfuzz ratio)가
+        # 0.85 이상이어야 문장을 채택했다. 실제 기사 "이날 흉기 난동은 오후
+        # 1시49분쯤 홈플러스 인천구월점이 입점한 대형 복합상가에서 벌어졌다"는
+        # 같은 사건을 정확히 확인해주는데도 어순·표현이 달라 유사도 0.484로
+        # 전부 탈락했다 — cross_verified=true인 사실조차 증거를 못 찾고
+        # EVIDENCE_SENTENCE_UNVERIFIED로 건너뛰는 근본 원인이었다. 채널
+        # 운영자 결정(2026-10-14): 문자열 유사도 대신 Claude가 "이 문장이 이
+        # 사실을 실제로 확인해주는가"를 의미 기반으로 판단한다(오늘 Pixabay
+        # 배경영상 매칭을 고칠 때와 동일한 방식). LLM은 문장을 새로 쓰지
+        # 않고 이미 라이브 페이지에서 추출된 문장 중 하나를 고르기만 하므로,
+        # 선택된 문장은 여전히 원문 그대로 DOM에서 검색·캡처된다.
         fact_text = _fact_text(fact)
         required_numbers = _numbers(fact_text)
         fact_direction = _direction(fact_text)
         fact_terms = set(_tokens(fact_text)[:8])
-        threshold = float(runtime_config.value("evidence_min_sentence_similarity"))
-        ranked: list[tuple[float, str]] = []
+        candidates: list[str] = []
         for sentence in sentences:
-            if required_numbers and not required_numbers <= _numbers(sentence):
+            # 날짜·시각처럼 서로 다른 단위의 숫자가 fact_text에 여럿 섞여
+            # 있으면(연/월/일/시/분) 자연스러운 한 문장이 전부를 동시에
+            # 포함하는 경우가 거의 없다 — 하나라도 겹치면 통과시키고, 완전히
+            # 다른 숫자(예: 다른 통계치)가 아닌지는 아래 validate_verbatim이
+            # 별도로 막는다.
+            if required_numbers and not (required_numbers & _numbers(sentence)):
                 continue
             if fact_direction and _direction(sentence) not in {0, fact_direction}:
                 continue
@@ -436,10 +540,15 @@ class ArticleEvidencePlanner:
             numeric_gate = validate_verbatim(sentence, {"verified_facts": [fact]})
             if required_numbers and not numeric_gate.passed:
                 continue
-            similarity = max(_similarity(fact_text, sentence), _similarity(scene_text, sentence))
-            if similarity >= threshold:
-                ranked.append((similarity, sentence))
-        return max(ranked, default=None, key=lambda item: item[0])
+            candidates.append(sentence)
+            if len(candidates) >= 8:
+                break
+        if not candidates:
+            return None
+        index = _select_confirming_sentence(fact_text, candidates, llm_call=self.llm_call)
+        if index is None:
+            return None
+        return 1.0, candidates[index]
 
     @staticmethod
     def _body_policy(quote: str) -> BodyEmphasis:

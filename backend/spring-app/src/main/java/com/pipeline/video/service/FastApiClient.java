@@ -210,11 +210,26 @@ public class FastApiClient {
                                                   String category, String marketSnapshotJson, boolean dataVisualsEnabled,
                                                   String voiceId, String autonomyMode,
                                                   Map<String, Object> candidateEvidence, String contentNature) {
+        return generateScript(jobId, keyword, targetMinutes, category, marketSnapshotJson, dataVisualsEnabled,
+                voiceId, autonomyMode, candidateEvidence, contentNature, null);
+    }
+
+    // 2026-10-15 사용자 결정: 벤치마크와 "결"을 맞추는 완화된 정책은 슬라이드형
+    // (visual_mode=SLIDE) Job에만 적용한다 — 기존 캐릭터형 경로의 대본·메타데이터
+    // 생성 방식은 그대로 유지한다(visualMode=null/CHARACTER면 기존 보수적 정책).
+    public ScriptGenerateResponse generateScript(Long jobId, String keyword, int targetMinutes,
+                                                  String category, String marketSnapshotJson, boolean dataVisualsEnabled,
+                                                  String voiceId, String autonomyMode,
+                                                  Map<String, Object> candidateEvidence, String contentNature,
+                                                  String visualMode) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("job_id", jobId);
             if (contentNature != null && !contentNature.isBlank()) {
                 bodyMap.put("content_nature", contentNature);
+            }
+            if (visualMode != null && !visualMode.isBlank()) {
+                bodyMap.put("visual_mode", visualMode);
             }
             bodyMap.put("keyword", keyword);
             bodyMap.put("target_minutes", targetMinutes);
@@ -379,6 +394,49 @@ public class FastApiClient {
                 characterStylePrompt, characterPosesDir, null, null, null, null, null, null, null);
     }
 
+    /**
+     * 2026-10-13 사용자 요청: 자동 게이트가 보류시킨 장면도 사용자가 실물 후보
+     * 이미지를 직접 보고 괜찮다고 판단하면 재생성 없이 승인할 수 있어야 한다.
+     */
+    public ImagesGenerateResponse acceptHeldScene(Long jobId, int index, String acceptedBy, String text, String section) {
+        try {
+            Map<String, Object> bodyMap = new HashMap<>();
+            bodyMap.put("job_id", jobId);
+            bodyMap.put("text", text);
+            if (acceptedBy != null && !acceptedBy.isBlank()) {
+                bodyMap.put("accepted_by", acceptedBy);
+            }
+            if (section != null && !section.isBlank()) {
+                bodyMap.put("section", section);
+            }
+            return objectMapper.readValue(
+                    postJson(fastApiUrl + "/workers/images/" + jobId + "/scenes/" + index + "/accept", bodyMap),
+                    ImagesGenerateResponse.class);
+        } catch (Exception e) {
+            throw new RuntimeException("보류 장면 수동 승인 오류: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 2026-10-14 사용자 재현(job 18 scene 11): 콘텐츠 거부 반복으로
+     * needs_review에 들어간 씬은 기존 재도전 승인 경로(단일 503 전용)로는
+     * 풀 수 없었다. 이 호출은 사람이 명시적으로 누른 "재도전 승인"만
+     * 전달한다 — 비용 예약 로직은 FastAPI 쪽에서 전혀 건드리지 않는다.
+     */
+    public Map<String, Object> approveSceneRetry(Long jobId, int index, String approvedBy, boolean overrideCooldown) {
+        try {
+            Map<String, Object> bodyMap = new HashMap<>();
+            bodyMap.put("job_id", jobId);
+            bodyMap.put("approved_by", approvedBy);
+            bodyMap.put("override_cooldown", overrideCooldown);
+            return objectMapper.readValue(
+                    postJson(fastApiUrl + "/workers/images/" + jobId + "/scenes/" + index + "/approve-retry", bodyMap),
+                    Map.class);
+        } catch (Exception e) {
+            throw new RuntimeException("씬 재도전 승인 오류: " + e.getMessage(), e);
+        }
+    }
+
     public ImagesGenerateResponse getImageBatchStatus(Long jobId) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
@@ -404,6 +462,23 @@ public class FastApiClient {
                                                   Float loraScale, String autonomyMode,
                                                   java.math.BigDecimal budgetLimitKrw, String budgetPolicyVersion,
                                                   List<Integer> sceneIndices) {
+        return generateImages(jobId, ttsMetaJson, scriptMetaJson, characterImagePath, characterStylePrompt,
+                characterPosesDir, loraModelId, loraTriggerWord, loraScale, autonomyMode,
+                budgetLimitKrw, budgetPolicyVersion, sceneIndices, null);
+    }
+
+    /**
+     * 2026-10-15 사용자 결정: content_nature와 동일한 패턴으로 visual_mode를
+     * 전달한다 — null/blank면 FastAPI 쪽에서 기존 캐릭터 경로(images_worker)로
+     * 취급한다. "SLIDE"면 slides_worker로 분기한다.
+     */
+    public ImagesGenerateResponse generateImages(Long jobId, String ttsMetaJson, String scriptMetaJson,
+                                                  String characterImagePath, String characterStylePrompt,
+                                                  String characterPosesDir,
+                                                  String loraModelId, String loraTriggerWord,
+                                                  Float loraScale, String autonomyMode,
+                                                  java.math.BigDecimal budgetLimitKrw, String budgetPolicyVersion,
+                                                  List<Integer> sceneIndices, String visualMode) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("job_id", jobId);
@@ -411,6 +486,9 @@ public class FastApiClient {
             bodyMap.put("script_meta", scriptMetaJson);
             bodyMap.put("character_image_path", characterImagePath);
             bodyMap.put("character_style_prompt", characterStylePrompt);
+            if (visualMode != null && !visualMode.isBlank()) {
+                bodyMap.put("visual_mode", visualMode);
+            }
             // [S2-4] 캐릭터 포즈 라이브러리 디렉토리
             if (characterPosesDir != null && !characterPosesDir.isBlank()) {
                 bodyMap.put("character_poses_dir", characterPosesDir);
@@ -684,12 +762,26 @@ public class FastApiClient {
         }
     }
 
-    @SuppressWarnings("unchecked")
     public Map<String, Object> generateYoutubeMetadata(String scriptText, boolean isShorts) {
+        return generateYoutubeMetadata(scriptText, isShorts, null);
+    }
+
+    // 2026-10-15 사용자 결정: 벤치마크 영상 기반 Job은 썸네일·태그·제목까지 벤치마크와
+    // "결"이 같아야 한다 — 벤치마크의 실제 공개 제목/태그/설명을 스타일 참고로 넘긴다.
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> generateYoutubeMetadata(String scriptText, boolean isShorts, Map<String, Object> benchmarkVideo) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("script_text", scriptText);
             bodyMap.put("is_shorts", isShorts);
+            if (benchmarkVideo != null) {
+                Object title = benchmarkVideo.get("title");
+                Object tags = benchmarkVideo.get("tags");
+                Object description = benchmarkVideo.get("description");
+                if (title instanceof String s && !s.isBlank()) bodyMap.put("benchmark_title", s);
+                if (tags instanceof List<?> && !((List<?>) tags).isEmpty()) bodyMap.put("benchmark_tags", tags);
+                if (description instanceof String s && !s.isBlank()) bodyMap.put("benchmark_description", s);
+            }
             String responseBody = postJson(fastApiUrl + "/workers/youtube/metadata", bodyMap);
             return objectMapper.readValue(responseBody, Map.class);
         } catch (Exception e) {
@@ -954,6 +1046,40 @@ public class FastApiClient {
     public Map<String, Object> generateCharacterLibrary(
             String channelId, String characterDescription, boolean regenerate) {
         return generateCharacterLibrary(channelId, characterDescription, regenerate, false);
+    }
+
+    /** 슬라이드형 씬별 생성 진행 상황(전체 장면 수·완료 장면). 조회 실패는 빈 값으로 둔다. */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getSlideProgress(Long jobId) {
+        try {
+            Map<String, Object> response = restTemplate.getForObject(
+                    fastApiUrl + "/workers/slides/progress/" + jobId, Map.class);
+            return response == null ? Map.of() : response;
+        } catch (Exception e) {
+            log.warn("씬별 생성 진행 상황 조회 실패: jobId={}, error={}", jobId, e.getMessage());
+            return Map.of();
+        }
+    }
+
+    /** 돋보기(확대 보기)용 — 완성된 장면의 영상(있으면) 또는 이미지 원본. */
+    public ResponseEntity<byte[]> getSlideSceneMedia(Long jobId, int index) {
+        try {
+            return restTemplate.exchange(
+                    fastApiUrl + "/workers/slides/progress/" + jobId + "/scene/" + index,
+                    HttpMethod.GET, null, byte[].class);
+        } catch (Exception e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    public ResponseEntity<byte[]> getSlideProgressThumb(Long jobId, int index) {
+        try {
+            return restTemplate.exchange(
+                    fastApiUrl + "/workers/slides/progress/" + jobId + "/thumb/" + index,
+                    HttpMethod.GET, null, byte[].class);
+        } catch (Exception e) {
+            return ResponseEntity.notFound().build();
+        }
     }
 
     @SuppressWarnings("unchecked")

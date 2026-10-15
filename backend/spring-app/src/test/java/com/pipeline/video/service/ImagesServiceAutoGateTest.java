@@ -7,6 +7,7 @@ import com.pipeline.video.domain.GateName;
 import com.pipeline.video.domain.JobStatus;
 import com.pipeline.video.domain.VideoJob;
 import com.pipeline.video.dto.ImagesGenerateResponse;
+import com.pipeline.video.dto.SceneImageDto;
 import com.pipeline.video.repository.AssetRepository;
 import com.pipeline.video.repository.VideoJobRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,7 +16,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +43,7 @@ class ImagesServiceAutoGateTest {
     @Mock CharacterAssetResolver characterAssetResolver;
     @Mock FastApiClient fastApiClient;
     @Mock CostService costService;
+    @Mock OperatorAlertService operatorAlertService;
 
     private ImagesService imagesService;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -50,7 +54,8 @@ class ImagesServiceAutoGateTest {
                 jobRepository, assetRepository,
                 null,
                 characterAssetResolver, fastApiClient,
-                gateService, autonomyService, costService
+                gateService, autonomyService, costService,
+                operatorAlertService
         ));
     }
 
@@ -142,7 +147,7 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
         when(autonomyService.isAuto(job)).thenReturn(true);
 
         imagesService.generate(1L, "AUTO");
@@ -174,7 +179,7 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())).thenReturn(result);
         when(autonomyService.isAuto(job)).thenReturn(true);
         doNothing().when(imagesService).confirm(eq(1L), eq("AUTO"));
 
@@ -203,7 +208,7 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT))
                 .thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("이미지 생성 오류: Image generation is already running for job 1"));
 
         ImagesGenerateResponse result = imagesService.generate(1L, "AUTO");
@@ -236,12 +241,245 @@ class ImagesServiceAutoGateTest {
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
         when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
         when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
-        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3))))
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3)), any()))
                 .thenReturn(result);
         when(autonomyService.isAuto(job)).thenReturn(false);
 
         imagesService.generate(1L, "SONG", List.of(1, 3));
 
-        verify(fastApiClient).generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3)));
+        verify(fastApiClient).generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3)), any());
+    }
+
+    /**
+     * 2026-10-12 job 14 재현: costService.getTotal()은 Spring 원장(TTS/Claude)
+     * + Worker 원장(Gemini 누적, FastApiClient.getWorkerCostLedger)을 합산한
+     * "전체 누적 비용"이다. remainingBudget 계산에 이 값을 그대로 쓰면,
+     * FastAPI의 budget.py::before_attempt()가 같은 Worker 누적 비용을 자기
+     * 장부에서 다시 더해 비교하므로 동일 금액이 양쪽에서 이중으로 차감된다.
+     * Worker 누적 비용이 전체 예산의 절반을 넘는 순간부터는 재시도가 몇 번을
+     * 더 해도 구조적으로 통과할 수 없는 상태가 된다. remainingBudget은
+     * Spring 쪽에서만 추적하는 비용(TTS/Claude)만 빼야 한다.
+     */
+    @Test
+    void generate_remainingBudget_doesNotDoubleSubtractWorkerLedgerTotal() throws Exception {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+        job.setBudgetCap(new BigDecimal("70000"));
+        job.setGeminiImageBudgetCap(new BigDecimal("70000"));
+
+        Asset ttsAsset = new Asset();
+        ttsAsset.setMetaJson("{}");
+        Asset scriptAsset = new Asset();
+        scriptAsset.setMetaJson("{}");
+
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setRequiresManualReview(false);
+
+        CharacterAssetResolver.ResolvedCharacter mockChar = new CharacterAssetResolver.ResolvedCharacter(
+                "profile-1", "/path/to/img", "style", "/path/to/poses", null, null, null, 1.0f, "0123456789abcdef"
+        );
+
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.TTS_AUDIO)).thenReturn(Optional.of(ttsAsset));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT)).thenReturn(Optional.of(scriptAsset));
+        when(characterAssetResolver.resolve(job)).thenReturn(mockChar);
+        // Spring 쪽(TTS/Claude)만 1,500원 썼다고 가정한다. FastAPI Worker 장부는
+        // costService 내부에서 이미 34,704원을 합산했다고 가정해도(=getTotal이
+        // 36,204원을 반환해도), remainingBudget은 Worker 누적을 다시 빼면 안 된다.
+        when(costService.getSpringOnlyTotal(1L)).thenReturn(new BigDecimal("1500"));
+        when(fastApiClient.generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(result);
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        imagesService.generate(1L, "SONG");
+
+        verify(fastApiClient).generateImages(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                eq(new BigDecimal("68500")), any(), any(), any());
+        verify(costService, never()).getTotal(1L);
+    }
+
+    /**
+     * 2026-10-13 사용자 요청(job 14): 자동 게이트가 보류시킨 장면도 사용자가
+     * 실물 후보 이미지를 직접 보고 괜찮다고 판단하면 재생성 없이 승인할 수
+     * 있어야 한다. generate()와 같은 SCENE_IMAGE/IMAGE_QC_REPORT 영속 경로를
+     * 공유하는지 검증한다.
+     */
+    @Test
+    void acceptHeldScene_savesSceneImageAssetAndReplacesQcReport() throws Exception {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+
+        SceneImageDto scene = new SceneImageDto();
+        scene.setIndex(2);
+        scene.setImagePath("/app/data/jobs/1/images/scene_002.png");
+
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(scene));
+        result.setHeldScenes(List.of());
+        result.setRequiresManualReview(false);
+
+        Asset scriptAsset = new Asset();
+        scriptAsset.setMetaJson(objectMapper.writeValueAsString(Map.of(
+                "sections", List.of(
+                        Map.of("text_for_tts", "씬0 내레이션"),
+                        Map.of("text_for_tts", "씬1 내레이션"),
+                        Map.of("text_for_tts", "씬2 내레이션", "section", "intro")))));
+
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT))
+                .thenReturn(Optional.of(scriptAsset));
+        when(fastApiClient.acceptHeldScene(1L, 2, "SONG", "씬2 내레이션", "intro")).thenReturn(result);
+        when(assetRepository.findByJobIdAndAssetType(1L, AssetType.SCENE_IMAGE)).thenReturn(List.of());
+        when(assetRepository.findByJobIdAndAssetType(1L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        ImagesGenerateResponse response = imagesService.acceptHeldScene(1L, 2, "SONG");
+
+        assertThat(response.getScenes()).hasSize(1);
+        verify(assetRepository).save(argThat(asset ->
+                asset.getAssetType() == AssetType.SCENE_IMAGE
+                        && "/app/data/jobs/1/images/scene_002.png".equals(asset.getLocalPath())));
+        verify(assetRepository).save(argThat(asset -> asset.getAssetType() == AssetType.IMAGE_QC_REPORT));
+    }
+
+    @Test
+    void acceptHeldScene_autoMode_confirmsOnceNoHeldScenesRemain() throws Exception {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+
+        SceneImageDto scene = new SceneImageDto();
+        scene.setIndex(2);
+        scene.setImagePath("/app/data/jobs/1/images/scene_002.png");
+
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(scene));
+        result.setHeldScenes(List.of());
+        result.setRequiresManualReview(false);
+
+        Asset scriptAsset = new Asset();
+        scriptAsset.setMetaJson(objectMapper.writeValueAsString(Map.of(
+                "sections", List.of(
+                        Map.of("text_for_tts", "씬0 내레이션"),
+                        Map.of("text_for_tts", "씬1 내레이션"),
+                        Map.of("text_for_tts", "씬2 내레이션")))));
+
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT))
+                .thenReturn(Optional.of(scriptAsset));
+        when(fastApiClient.acceptHeldScene(1L, 2, "AUTO", "씬2 내레이션", null)).thenReturn(result);
+        when(assetRepository.findByJobIdAndAssetType(1L, AssetType.SCENE_IMAGE)).thenReturn(List.of());
+        when(assetRepository.findByJobIdAndAssetType(1L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(true);
+        doNothing().when(imagesService).confirm(eq(1L), eq("AUTO"));
+
+        imagesService.acceptHeldScene(1L, 2, "AUTO");
+
+        verify(imagesService).confirm(eq(1L), eq("AUTO"));
+    }
+
+    @Test
+    void acceptHeldScene_autoMode_doesNotConfirmWhileOtherScenesStillHeld() throws Exception {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+
+        SceneImageDto scene = new SceneImageDto();
+        scene.setIndex(2);
+        scene.setImagePath("/app/data/jobs/1/images/scene_002.png");
+
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(scene));
+        result.setHeldScenes(List.of(Map.of("index", 6, "reason", "장면 누적 요청 상한 도달")));
+        result.setRequiresManualReview(true);
+
+        Asset scriptAsset = new Asset();
+        scriptAsset.setMetaJson(objectMapper.writeValueAsString(Map.of(
+                "sections", List.of(
+                        Map.of("text_for_tts", "씬0 내레이션"),
+                        Map.of("text_for_tts", "씬1 내레이션"),
+                        Map.of("text_for_tts", "씬2 내레이션")))));
+
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT))
+                .thenReturn(Optional.of(scriptAsset));
+        when(fastApiClient.acceptHeldScene(1L, 2, "AUTO", "씬2 내레이션", null)).thenReturn(result);
+        when(assetRepository.findByJobIdAndAssetType(1L, AssetType.SCENE_IMAGE)).thenReturn(List.of());
+        when(assetRepository.findByJobIdAndAssetType(1L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(true);
+
+        imagesService.acceptHeldScene(1L, 2, "AUTO");
+
+        assertThat(job.getStatus()).isEqualTo(JobStatus.IMAGES_RETRY_REQUIRED);
+        verify(imagesService, never()).confirm(eq(1L), any());
+    }
+
+    /**
+     * 2026-10-13 job 14 씬5 재현: 내레이션 원문 없이 승인 이미지만 보내면
+     * SCENE_IMAGE 자산의 text가 비어 longform 조립 직전에 전체가 막혔다.
+     * 승인 SCRIPT 자산에 해당 인덱스 내레이션이 없으면 FastAPI 호출 전에
+     * 바로 막아야 한다.
+     */
+    @Test
+    void acceptHeldScene_throwsWhenScriptHasNoSectionForThatIndex() throws Exception {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+
+        Asset scriptAsset = new Asset();
+        scriptAsset.setMetaJson(objectMapper.writeValueAsString(Map.of(
+                "sections", List.of(Map.of("text_for_tts", "씬0 내레이션")))));
+
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+        when(assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(1L, AssetType.SCRIPT))
+                .thenReturn(Optional.of(scriptAsset));
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> imagesService.acceptHeldScene(1L, 5, "SONG"));
+
+        verify(fastApiClient, never()).acceptHeldScene(any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
+    void approveSceneRetry_delegatesToFastApiClientAndReturnsItsResult() {
+        Map<String, Object> fastApiResult = Map.of(
+                "status", "ok", "scene", "scene:11", "previous_status", "needs_review",
+                "review_cycle", 1, "override_cooldown_used", true
+        );
+        when(fastApiClient.approveSceneRetry(18L, 11, "jam", true)).thenReturn(fastApiResult);
+
+        Map<String, Object> result = imagesService.approveSceneRetry(18L, 11, "jam", true);
+
+        assertThat(result).isEqualTo(fastApiResult);
+        verify(fastApiClient).approveSceneRetry(18L, 11, "jam", true);
+    }
+
+    /**
+     * 2026-10-15 실제 Job(id=19)에서 발견: 슬라이드형은 한 장면 생성이 실패하면
+     * image_path 없이 오류만 담아 돌려준다. persistGenerateResult가 이를 NPE로
+     * 받아 나머지 63개 장면 결과가 통째로 저장되지 못했다.
+     */
+    @Test
+    void persistGenerateResult_sceneWithoutImagePath_doesNotBreakTheBatch() {
+        VideoJob job = new VideoJob();
+        job.setId(19L);
+        SceneImageDto ok = new SceneImageDto();
+        ok.setImagePath("/app/data/jobs/19/slides/scene_000_bg.png");
+        SceneImageDto failed = new SceneImageDto();
+        failed.setImagePath(null);
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(ok, failed));
+        result.setRequiresManualReview(true);
+        when(assetRepository.findByJobIdAndAssetType(19L, AssetType.SCENE_IMAGE)).thenReturn(List.of());
+        when(assetRepository.findByJobIdAndAssetType(19L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                imagesService, "persistGenerateResult", 19L, job, result);
+
+        verify(assetRepository, times(2)).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE));
     }
 }

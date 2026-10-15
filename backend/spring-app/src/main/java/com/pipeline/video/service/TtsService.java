@@ -54,12 +54,17 @@ public class TtsService {
         }
 
         // 채널 프로필 로드 (커스텀 ElevenLabs 목소리가 설정되어 있는지 확인)
+        // 2026-10-14 사용자 재현: 사용자가 드롭다운에서 방금 고른 목소리(voiceId
+        // 파라미터)가 있어도, 채널에 기본 목소리가 설정돼 있으면 무조건 그걸로
+        // 덮어써서 선택이 조용히 무시됐다. "default_ko"(선택 안 함)일 때만 채널
+        // 기본값을 적용한다 — 실제 사용자 선택은 채널 기본값보다 항상 우선한다.
         String finalVoiceId = voiceId;
+        boolean userSelectedVoice = voiceId != null && !voiceId.isBlank() && !"default_ko".equals(voiceId);
         Double ttsSpeed = null;
         if (job.getChannelId() != null) {
             ChannelProfile profile = channelProfileRepository.findById(job.getChannelId()).orElse(null);
             if (profile != null) {
-                if (profile.getVoiceId() != null && !profile.getVoiceId().isBlank()) {
+                if (!userSelectedVoice && profile.getVoiceId() != null && !profile.getVoiceId().isBlank()) {
                     finalVoiceId = profile.getVoiceId();
                     log.info("채널 목소리 로드 완료: channelId={}, voiceId={}", job.getChannelId(), finalVoiceId);
                 }

@@ -87,7 +87,7 @@ class ScriptGenerationDuplicateGuardTest {
         response.setRequiresManualReview(true); // GUIDED라 자동 확정으로 더 진행하지 않음
         when(fastApiClient.generateScript(
                 anyLong(), anyString(), anyInt(), anyString(), any(),
-                anyBoolean(), any(), any(), any(), any())).thenReturn(response);
+                anyBoolean(), any(), any(), any(), any(), any())).thenReturn(response);
 
         scriptService.generate(1L, "admin");
 
@@ -98,7 +98,7 @@ class ScriptGenerationDuplicateGuardTest {
     void lockIsReleasedAfterFailureSoARetryCanProceed() {
         when(fastApiClient.generateScript(
                 anyLong(), anyString(), anyInt(), anyString(), any(),
-                anyBoolean(), any(), any(), any(), any()))
+                anyBoolean(), any(), any(), any(), any(), any()))
                 .thenThrow(new RuntimeException("FastAPI 오류"));
 
         assertThatThrownBy(() -> scriptService.generate(1L, "admin"));

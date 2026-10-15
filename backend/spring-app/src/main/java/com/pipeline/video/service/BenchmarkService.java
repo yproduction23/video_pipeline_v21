@@ -39,10 +39,16 @@ public class BenchmarkService {
     private final TransactionTemplate transactionTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public Map<String, Object> recentUploads(String ownerChannelId, int days) {
-        List<String> channelIds = referenceChannelService.listForOwner(ownerChannelId).stream()
-                .map(ReferenceChannel::getChannelId)
-                .toList();
+    public Map<String, Object> recentUploads(String ownerChannelId, Long referenceChannelId, int days) {
+        // 2026-10-15 사용자 결정: 벤치마크 채널 하나를 "클릭"해서 그 채널의
+        // 영상만 모아보는 화면을 추가한다 — referenceChannelId가 오면
+        // 제작 채널(ownerChannelId) 기준 전체 합산 대신 그 채널 하나로만
+        // 좁힌다. 비활성 채널은 조회하지 못한다(requireActiveChannel).
+        List<String> channelIds = referenceChannelId != null
+                ? List.of(referenceChannelService.requireActiveChannel(referenceChannelId).getChannelId())
+                : referenceChannelService.listForOwner(ownerChannelId).stream()
+                        .map(ReferenceChannel::getChannelId)
+                        .toList();
         if (channelIds.isEmpty()) {
             Map<String, Object> empty = new LinkedHashMap<>();
             empty.put("videos", List.of());

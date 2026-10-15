@@ -74,6 +74,7 @@ public class JobService {
                 .policyJson(request.getPolicyJson())
                 .channelId(request.getChannelId())
                 .contentNature(resolveContentNature(request))
+                .visualMode(request.getVisualMode() != null ? request.getVisualMode() : VisualMode.CHARACTER)
                 .characterOverride(request.getCharacterOverride())
                 .dataVisualsEnabled(request.isDataVisualsEnabled())
                 .createdBy(username)
@@ -279,16 +280,22 @@ public class JobService {
             scriptText = scriptAssetOpt.get().getMetaJson();
         }
         
+        // 2026-10-15 사용자 결정: 벤치마크와 "결"을 맞추는 정책은 슬라이드형
+        // (visual_mode=SLIDE) Job에만 적용한다 — 기존 캐릭터형 경로는 그대로
+        // 유지한다. 벤치마크의 실제 공개 제목/태그/설명을 스타일 참고로 넘긴다.
+        Map<String, Object> benchmarkVideo = job.getVisualMode() == VisualMode.SLIDE
+                ? loadBenchmarkVideo(jobId) : null;
+
         Map<String, Object> longformMeta = null;
         Map<String, Object> shortsMeta = null;
         try {
-            longformMeta = fastApiClient.generateYoutubeMetadata(scriptText, false);
+            longformMeta = fastApiClient.generateYoutubeMetadata(scriptText, false, benchmarkVideo);
         } catch (Exception e) {
             log.error("롱폼 유튜브 메타데이터 생성 실패: {}", e.getMessage());
             saveYoutubePackageFailure(jobId, "LONGFORM_METADATA", e);
             longformMeta = fallbackYoutubeMetadata(job, false);
         }
-        
+
         if (job.isMakeShorts()) {
             String shortsScriptText = scriptText;
             Optional<Asset> shortsScenarioOpt = assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(jobId, AssetType.SHORTS_SCENARIO);
@@ -296,7 +303,7 @@ public class JobService {
                 shortsScriptText = shortsScenarioOpt.get().getMetaJson();
             }
             try {
-                shortsMeta = fastApiClient.generateYoutubeMetadata(shortsScriptText, true);
+                shortsMeta = fastApiClient.generateYoutubeMetadata(shortsScriptText, true, benchmarkVideo);
             } catch (Exception e) {
                 log.error("쇼츠 유튜브 메타데이터 생성 실패: {}", e.getMessage());
             saveYoutubePackageFailure(jobId, "SHORTS_METADATA", e);
@@ -419,6 +426,39 @@ public class JobService {
                 ? java.util.List.of() : java.util.List.of(job.getKeyword()));
         fallback.put("generation_status", "fallback_metadata");
         return fallback;
+    }
+
+    /**
+     * 벤치마크 기반 Job이면 KEYWORD 에셋에 저장된 벤치마크 영상의 실제 공개
+     * 제목·태그·설명을 반환한다(BenchmarkService.persist()가 저장). 벤치마크
+     * 기반이 아니면 null — 유튜브 메타데이터 생성은 기존처럼 스크립트만 사용한다.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> loadBenchmarkVideo(Long jobId) {
+        try {
+            // KeywordService.confirm()이 항상 "candidates" 없는 선택-감사 KEYWORD
+            // 에셋을 뒤이어 저장하므로(selection_path=MANUAL/EVIDENCE_TOP_RANKED),
+            // "가장 최근" 에셋만 보면 안 된다 — ScriptService.generate()와 동일하게
+            // 모든 KEYWORD 에셋 중 candidates를 담은 것을 찾는다.
+            List<Asset> keywordAssets = assetRepository.findByJobIdAndAssetType(jobId, AssetType.KEYWORD);
+            for (Asset asset : keywordAssets) {
+                if (asset.getMetaJson() == null || asset.getMetaJson().isBlank()) continue;
+                Map<String, Object> meta = objectMapper.readValue(asset.getMetaJson(), Map.class);
+                if (!"BENCHMARK".equals(meta.get("selection_path"))) continue;
+                Object candidates = meta.get("candidates");
+                if (!(candidates instanceof List<?> list) || list.isEmpty()) continue;
+                Object first = list.get(0);
+                if (!(first instanceof Map<?, ?> candidate)) continue;
+                Object sourceVideos = candidate.get("source_videos");
+                if (!(sourceVideos instanceof List<?> videos) || videos.isEmpty()) continue;
+                Object video = videos.get(0);
+                if (video instanceof Map<?, ?> map) return (Map<String, Object>) map;
+            }
+            return null;
+        } catch (Exception exception) {
+            log.warn("벤치마크 영상 정보 복원 실패: jobId={}, {}", jobId, exception.getMessage());
+            return null;
+        }
     }
 
     @SuppressWarnings("unchecked")

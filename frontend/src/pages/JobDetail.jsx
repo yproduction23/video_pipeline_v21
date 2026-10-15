@@ -8,6 +8,7 @@ import {
   Clock, Edit, Save, Printer, Scissors, Copy, ExternalLink, Youtube, Info
 } from 'lucide-react'
 import Layout from '../components/Layout'
+import SlideProgressPanel from '../components/SlideProgressPanel'
 import { jobsApi } from '../api/jobs'
 import { authStore } from '../store/auth'
 import apiClient from '../api/client'
@@ -26,6 +27,15 @@ const PIPELINE_STEPS = [
   { key: 'longform', label: '영상 조립', pendingStatus: 'ASSEMBLING', gate: 'PREVIEW',
     runFn: (id) => jobsApi.generateLongform(id) },
 ]
+
+// 2026-10-15 사용자 결정: 슬라이드형은 장면마다 기사 카드·스톡 영상·Kling·AI
+// 배경이 섞여 들어가므로 "이미지 생성"이 아니라 "씬별 생성"이 맞는 이름이다.
+const stepLabelFor = (step, visualMode) =>
+  step.key === 'images' && visualMode === 'SLIDE' ? '씬별 생성' : step.label
+
+// 슬라이드형은 마스코트 없이 장면마다 기사 카드·스톡 영상·Kling·AI 배경이 섞이므로
+// 캐릭터형과 다른 안내 문구를 쓴다 (실제 동작: slides_worker.py의 폴백 순서).
+const SLIDE_IMAGES_DESC = '모든 씬에 내레이션에 맞는 스톡 영상(없으면 Gemini 이미지)을 먼저 깔고, 그 위에 기사 카드·수치 비교 인포그래픽을 오버레이로 얹습니다. 인포그래픽 수치는 승인 내레이션·기사 원문에 있는 값만 사용하며, 캐릭터는 사용하지 않습니다.'
 
 const STEP_PROGRESS_INFO = {
   keyword: {
@@ -172,6 +182,7 @@ export default function JobDetail() {
   const [showCostDetails, setShowCostDetails] = useState(false)
   const [lightboxImage, setLightboxImage] = useState(null)
   const [selectedHeldIndices, setSelectedHeldIndices] = useState(() => new Set())
+  const [selectedPassedIndices, setSelectedPassedIndices] = useState(() => new Set())
 
   const [selectedVoiceId, setSelectedVoiceId] = useState('default_ko')
   const [previewText, setPreviewText] = useState('오늘 코스피가 올랐다고요? 숫자만 보고 뛰어들면, 시장은 늘 한 발 먼저 웃습니다.')
@@ -195,7 +206,11 @@ export default function JobDetail() {
   })
   // 자동 모드에서는 상태뿐 아니라 방금 생성된 산출물도 함께 다시 읽어야
   // 다음 단계와 이전 단계 결과가 새로고침 없이 동시에 보인다.
-  const autoRefreshInterval = job?.autonomy === 'AUTO' && !['READY', 'PUBLISHED', 'FAILED', 'IMAGES_RETRY_REQUIRED'].includes(job?.status)
+  // IMAGES_RETRY_REQUIRED는 "멈춤"이 아니라 "사람 검토 대기" 상태라 여기서도
+  // 계속 갱신해야 운영자가 검토 후 조치한 변화(이미지 재승인 등)를 새로고침
+  // 없이 바로 본다. 이 상태를 제외하면 화면이 멈춘 것처럼 보여 AUTO 운영
+  // 중 아무도 알아차리지 못하는 원인이 된다.
+  const autoRefreshInterval = job?.autonomy === 'AUTO' && !['READY', 'PUBLISHED', 'FAILED'].includes(job?.status)
     ? 3000
     : false
 
@@ -487,6 +502,50 @@ export default function JobDetail() {
     onError: (err) => alert('재시도 실패: ' + (err.response?.data?.message || err.message)),
   })
 
+  const bulkRegenPassedScenesMut = useMutation({
+    mutationFn: (sceneIndices) => jobsApi.generateImages(id, sceneIndices),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['approvals', id])
+      qc.invalidateQueries(['assets', id])
+      setSelectedPassedIndices(new Set())
+      setImageSalt(prev => prev + 1)
+    },
+    onError: (err) => alert('일괄 재생성 실패: ' + (err.response?.data?.message || err.message)),
+  })
+
+  const acceptHeldSceneMut = useMutation({
+    mutationFn: (index) => jobsApi.acceptHeldScene(id, index),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['approvals', id])
+      qc.invalidateQueries(['assets', id])
+    },
+    onError: (err) => alert('검토 이미지 승인 실패: ' + (err.response?.data?.message || err.message)),
+  })
+
+  // 2026-10-14 사용자 재현(job 18 scene 11): 콘텐츠 거부 반복으로 재시도
+  // 상한을 다 쓴 씬은 "재시도" 버튼을 아무리 눌러도 풀리지 않는다. 사람이
+  // 명시적으로 재도전을 승인해야 하고, 24시간이 안 지났으면 강제 승인
+  // 여부를 다시 물어본다.
+  const approveSceneRetryMut = useMutation({
+    mutationFn: ({ index, overrideCooldown }) => jobsApi.approveSceneRetry(id, index, overrideCooldown),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries(['job', id])
+      alert(`씬 ${variables.index}번 재도전이 승인되었습니다. 이제 다시 재시도를 눌러주세요.`)
+    },
+    onError: (err, variables) => {
+      const detail = err.response?.data?.message || err.message || ''
+      if (!variables.overrideCooldown && detail.includes('24시간')) {
+        if (window.confirm(`씬 ${variables.index}번은 아직 24시간 냉각이 지나지 않았습니다.\n지금 바로 강제로 재도전을 승인하시겠습니까?`)) {
+          approveSceneRetryMut.mutate({ index: variables.index, overrideCooldown: true })
+        }
+        return
+      }
+      alert('씬 재도전 승인 실패: ' + detail)
+    },
+  })
+
   const splitSceneMut = useMutation({
     mutationFn: ({ index, part1, part2 }) => jobsApi.splitScene(id, index, part1, part2),
     onSuccess: () => {
@@ -519,6 +578,17 @@ export default function JobDetail() {
     },
     onError: (err) => {
       alert('동영상 재조립 실패: ' + (err.response?.data?.message || err.message))
+    }
+  })
+
+  const confirmLongformMut = useMutation({
+    mutationFn: () => jobsApi.confirmLongform(id),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['approvals', id])
+    },
+    onError: (err) => {
+      alert('완료 확정 실패: ' + (err.response?.data?.message || err.message))
     }
   })
 
@@ -767,7 +837,7 @@ export default function JobDetail() {
               {imageList.length > 0
                 ? '기존 대본·TTS·이미지가 정상 보존되어 있습니다. 동영상 조립 단계부터 즉시 재개할 수 있습니다.'
                 : ttsAssets.length > 0
-                ? '기존 승인 대본과 TTS 음성이 보존되어 있습니다. 이미지 생성 단계부터 즉시 재개할 수 있습니다.'
+                ? `기존 승인 대본과 TTS 음성이 보존되어 있습니다. ${job?.visualMode === 'SLIDE' ? '씬별 생성' : '이미지 생성'} 단계부터 즉시 재개할 수 있습니다.`
                 : scriptData
                 ? '기존 승인 대본이 보존되어 있습니다. 음성(TTS) 합성 단계부터 즉시 재개할 수 있습니다.'
                 : '선택한 키워드가 유지되어 있습니다. 대본 생성 단계부터 즉시 재개할 수 있습니다.'}
@@ -785,7 +855,7 @@ export default function JobDetail() {
             {imageList.length > 0
               ? '동영상 조립 재시도'
               : ttsAssets.length > 0
-              ? '이미지 생성 재시도'
+              ? (job?.visualMode === 'SLIDE' ? '씬별 생성 재시도' : '이미지 생성 재시도')
               : scriptData
               ? 'TTS 생성 재시도'
               : '대본 생성 재시도'}
@@ -806,6 +876,20 @@ export default function JobDetail() {
               </div>
             </div>
             <div className="flex gap-2">
+              {job.status === 'PREVIEW_PENDING' && (
+                <button
+                  onClick={() => {
+                    if (window.confirm('이 미리보기를 최종 완료로 확정할까요?')) {
+                      confirmLongformMut.mutate()
+                    }
+                  }}
+                  disabled={confirmLongformMut.isPending}
+                  className="flex items-center gap-1.5 bg-accent-green text-navy-950 font-semibold text-sm px-4 py-2 rounded-xl hover:opacity-90 disabled:opacity-50 transition"
+                >
+                  {confirmLongformMut.isPending ? <Loader size={14} className="animate-spin"/> : <CheckCircle size={14}/>}
+                  완료 확정
+                </button>
+              )}
               {['PREVIEW_PENDING', 'READY'].includes(job.status) && (
                 <button
                   onClick={() => rebuildLongformMut.mutate()}
@@ -1200,13 +1284,13 @@ export default function JobDetail() {
                   <div className="flex items-center gap-3">
                     <StepIcon status={ss} idx={idx+1}/>
                     <div>
-                      <div className="font-semibold text-base">{step.label}</div>
+                      <div className="font-semibold text-base">{stepLabelFor(step, job?.visualMode)}</div>
                       {approval && <div className="text-sm text-navy-400 mt-0.5">{approval.result === 'AUTO_APPROVED' ? '⚡ 자동 승인' : `✓ ${approval.approvedBy}`}</div>}
                       {ss === 'active' && isAuto && job.status !== 'IMAGES_RETRY_REQUIRED' && (
                         <div className="text-sm text-accent-cyan mt-0.5 flex items-center gap-1"><Loader size={12} className="animate-spin"/>자동 진행 중</div>
                       )}
                       {ss === 'active' && (job.status === 'IMAGES_RETRY_REQUIRED' || !isAuto) && (
-                        <div className="text-sm text-amber-500 font-semibold mt-0.5">⚠️ {step.label} 검수 및 승인 대기 중</div>
+                        <div className="text-sm text-amber-500 font-semibold mt-0.5">⚠️ {stepLabelFor(step, job?.visualMode)} 검수 및 승인 대기 중</div>
                       )}
                     </div>
                   </div>
@@ -1319,7 +1403,7 @@ export default function JobDetail() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (confirm(`${step.label}을(를) 다시 생성할까요? 이후 단계(${step.key === 'script' ? 'TTS·이미지·영상' : '이미지·영상'})는 이 변경을 반영하려면 함께 다시 생성해야 합니다.`)) {
+                          if (confirm(`${stepLabelFor(step, job?.visualMode)}을(를) 다시 생성할까요? 이후 단계(${step.key === 'script' ? 'TTS·이미지·영상' : '이미지·영상'})는 이 변경을 반영하려면 함께 다시 생성해야 합니다.`)) {
                             handleRun(step)
                           }
                         }}
@@ -1362,8 +1446,11 @@ export default function JobDetail() {
                       </div>
                     )}
                     <div className="text-navy-400 leading-relaxed text-sm">
-                      {STEP_PROGRESS_INFO[step.key]?.desc}
+                      {step.key === 'images' && job?.visualMode === 'SLIDE' ? SLIDE_IMAGES_DESC : STEP_PROGRESS_INFO[step.key]?.desc}
                     </div>
+                    {step.key === 'images' && job?.visualMode === 'SLIDE' && (
+                      <SlideProgressPanel jobId={id} running={runningStep === 'images'} />
+                    )}
                     {isAuto && (
                       <div className="pt-2.5 border-t border-slate-200/40 flex items-center gap-2 text-accent-cyan text-sm">
                         <Loader size={12} className="animate-spin"/>
@@ -1797,7 +1884,13 @@ export default function JobDetail() {
                           <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 bg-slate-100/30 rounded-xl p-4 border border-slate-200/50">
                             {sortedImageList.map((img, idx) => (
                               <div key={img.index || idx} className="flex gap-4 border-b border-navy-800 pb-3 last:border-0 last:pb-0">
-                                <div className="w-28 aspect-video bg-navy-700 rounded overflow-hidden border border-slate-300 flex-shrink-0">
+                                <div
+                                  className="w-28 aspect-video bg-navy-700 rounded overflow-hidden border border-slate-300 flex-shrink-0 cursor-zoom-in"
+                                  onClick={() => setLightboxImage({
+                                    src: `/api/files/download?path=${encodeURIComponent(img.image_path)}&token=${token}&salt=${imageSalt}`,
+                                    caption: `씬 #${img.index}`,
+                                  })}
+                                >
                                   <img
                                     src={`/api/files/download?path=${encodeURIComponent(img.image_path)}&token=${token}&salt=${imageSalt}`}
                                     alt={`씬 ${img.index}`}
@@ -1912,6 +2005,7 @@ export default function JobDetail() {
                         <ImageIcon size={15} className="text-accent-cyan"/>
                         <span className="text-sm text-navy-400">
                           {sortedImageList.length}개 씬 이미지 (AI 일러스트 기반)
+                          {selectedPassedIndices.size > 0 && ` · ${selectedPassedIndices.size}개 선택됨`}
                         </span>
                       </div>
                       {['IMAGES_PENDING', 'PREVIEW_PENDING', 'READY'].includes(job.status) && (
@@ -1920,6 +2014,35 @@ export default function JobDetail() {
                         </span>
                       )}
                     </div>
+
+                    {['IMAGES_PENDING', 'PREVIEW_PENDING', 'READY'].includes(job.status) && (
+                      <div className="flex items-center gap-2 mb-3">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPassedIndices(
+                            selectedPassedIndices.size === displayList.length
+                              ? new Set()
+                              : new Set(displayList.map(img => img.index))
+                          )}
+                          className="text-xs text-navy-400 hover:text-navy-200 border border-slate-300 px-2.5 py-1 rounded-lg transition"
+                        >
+                          {selectedPassedIndices.size === displayList.length ? '전체 해제' : '전체 선택'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`선택한 ${selectedPassedIndices.size}개 씬을 최신 로직으로 다시 생성할까요? 기존 이미지는 대체됩니다.`)) {
+                              bulkRegenPassedScenesMut.mutate(Array.from(selectedPassedIndices))
+                            }
+                          }}
+                          disabled={bulkRegenPassedScenesMut.isPending || selectedPassedIndices.size === 0}
+                          className="flex items-center gap-1.5 bg-accent-cyan text-navy-950 font-semibold text-xs px-3 py-1.5 rounded-lg hover:opacity-90 disabled:opacity-50 transition"
+                        >
+                          {bulkRegenPassedScenesMut.isPending ? <Loader size={13} className="animate-spin"/> : <Zap size={13}/>}
+                          선택 일괄 재생성 ({selectedPassedIndices.size})
+                        </button>
+                      </div>
+                    )}
 
                     <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 bg-slate-100/30 rounded-xl p-3 border border-slate-200/50">
                       {displayList.map((img, i) => {
@@ -1939,7 +2062,26 @@ export default function JobDetail() {
 
                         return (
                           <div key={img.index || i} className="flex gap-4 bg-white/40 border border-slate-200/60 rounded-xl p-3.5 hover:border-slate-300 transition">
-                            <div className="w-40 aspect-video bg-navy-700 rounded overflow-hidden border border-slate-300 flex-shrink-0 relative">
+                            {['IMAGES_PENDING', 'PREVIEW_PENDING', 'READY'].includes(job.status) && (
+                              <input
+                                type="checkbox"
+                                checked={selectedPassedIndices.has(img.index)}
+                                onChange={() => setSelectedPassedIndices(prev => {
+                                  const next = new Set(prev)
+                                  if (next.has(img.index)) next.delete(img.index)
+                                  else next.add(img.index)
+                                  return next
+                                })}
+                                className="mt-1 w-4 h-4 flex-shrink-0 accent-accent-cyan cursor-pointer"
+                              />
+                            )}
+                            <div
+                              className="w-40 aspect-video bg-navy-700 rounded overflow-hidden border border-slate-300 flex-shrink-0 relative cursor-zoom-in"
+                              onClick={() => setLightboxImage({
+                                src: `/api/files/download?path=${encodeURIComponent(img.image_path)}&token=${token}&salt=${imageSalt}`,
+                                caption: `씬 #${img.index}`,
+                              })}
+                            >
                               <img
                                 src={`/api/files/download?path=${encodeURIComponent(img.image_path)}&token=${token}&salt=${imageSalt}`}
                                 alt={`씬 ${img.index}`}
@@ -2225,7 +2367,42 @@ export default function JobDetail() {
                                 <span className="text-xs text-navy-400">(아직 후보 이미지 없음)</span>
                               )}
                             </div>
+                            {(() => {
+                              const narration = scriptData?.sections?.[held.index]?.content
+                                || scriptData?.sections?.[held.index]?.text_for_tts
+                              return narration ? (
+                                <p className="text-xs text-navy-600 bg-navy-50 border border-navy-100 rounded px-2 py-1 mb-1.5 whitespace-pre-wrap break-words">
+                                  <span className="font-semibold text-navy-400">대본 </span>{narration}
+                                </p>
+                              ) : null
+                            })()}
                             <p className="text-xs text-slate-700 whitespace-pre-wrap break-words">{held.reason}</p>
+                            {held.image_path && (
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`씬 #${held.index}의 검토 이미지를 재생성 없이 그대로 승인할까요? 위 썸네일을 직접 확인한 뒤에만 눌러주세요.`)) {
+                                    acceptHeldSceneMut.mutate(held.index)
+                                  }
+                                }}
+                                disabled={acceptHeldSceneMut.isPending}
+                                className="mt-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 disabled:opacity-50 rounded px-2.5 py-1"
+                              >
+                                이 이미지 그대로 사용
+                              </button>
+                            )}
+                            {held.status === 'needs_review' && (
+                              <button
+                                onClick={() => {
+                                  if (window.confirm(`씬 #${held.index}의 재도전을 승인할까요? 승인 후 다시 "재시도"를 눌러야 실제로 재생성됩니다.`)) {
+                                    approveSceneRetryMut.mutate({ index: held.index, overrideCooldown: false })
+                                  }
+                                }}
+                                disabled={approveSceneRetryMut.isPending}
+                                className="mt-2 ml-2 text-xs font-semibold text-accent-cyan bg-cyan-50 border border-cyan-300 hover:bg-cyan-100 disabled:opacity-50 rounded px-2.5 py-1"
+                              >
+                                재도전 승인
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -2339,7 +2516,7 @@ export default function JobDetail() {
       </div>
 
       {gateModal && (
-        <GateModal gate={gateModal.gate} step={gateModal.step}
+        <GateModal gate={gateModal.gate} step={gateModal.step} visualMode={job?.visualMode}
           onApprove={c => approveMut.mutate({gate:gateModal.gate,comment:c})}
           onReject={c => rejectMut.mutate({gate:gateModal.gate,comment:c})}
           onClose={() => setGateModal(null)}
@@ -2377,12 +2554,12 @@ function InfoRow({label,value}) {
   return <div className="flex items-center justify-between gap-2"><span className="text-navy-400 flex-shrink-0">{label}</span><span className="font-medium text-right">{value}</span></div>
 }
 
-function GateModal({gate,step,onApprove,onReject,onClose,loading}) {
+function GateModal({gate,step,visualMode,onApprove,onReject,onClose,loading}) {
   const [comment,setComment]=useState('')
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl p-6 w-full max-w-sm border border-slate-200 shadow-2xl">
-        <h3 className="font-bold text-base mb-2">{step.label} 검토</h3>
+        <h3 className="font-bold text-base mb-2">{stepLabelFor(step, visualMode)} 검토</h3>
         <p className="text-sm text-navy-400 mb-4">결과를 확인하고 승인 또는 거부하세요.</p>
         <textarea value={comment} onChange={e=>setComment(e.target.value)} placeholder="코멘트 (선택사항)" rows={3}
           className="w-full bg-navy-700 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm text-slate-900 mb-4 focus:outline-none focus:ring-1 focus:ring-accent-cyan resize-none"/>

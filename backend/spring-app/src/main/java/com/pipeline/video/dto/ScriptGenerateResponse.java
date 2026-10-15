@@ -88,6 +88,10 @@ public class ScriptGenerateResponse {
     @JsonProperty("narrative_plan")
     private Map<String, Object> narrativePlan;
 
+    /** 슬라이드형 하이라이트 구간 계약(end_text, end_char, passed). 이미지 단계의 고지 배너 위치 기준. */
+    @JsonProperty("highlight")
+    private Map<String, Object> highlight;
+
     @JsonProperty("flow_qa")
     private Map<String, Object> flowQa;
 

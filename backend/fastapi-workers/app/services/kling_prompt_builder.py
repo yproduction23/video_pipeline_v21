@@ -11,6 +11,12 @@ KLING_MOTION_TEMPLATES = {
         "Camera is locked: no pan, zoom, dolly, roll, shake, reframing, or crop change. "
         "Animate ONLY the mascot character body (a walking step, head nod, or single arm gesture) "
         "OR one non-text physical prop (a lamp flicker, flag sway, steam drift, or coin sparkle). "
+        # 2026-10-13 job 14 씬2 재현: 좌우 분할·군중이 있는 구도에서 "마스코트만
+        # 움직여라"는 긍정 지시만으로는 Kling이 다른 인물(군중, 발표자, 기자단)
+        # 까지 같이 움직여, 화면 대부분이 변하는 global_motion_coverage 판정을
+        # 유발했다. 다른 인물을 명시적으로 고정해야 한다.
+        "Every other person, official, reporter, crowd member, or background human in the frame "
+        "must remain completely frozen — no gestures, no head turns, no shifting, no breathing motion. "
         "STRICTLY FORBIDDEN — DO NOT animate, vibrate, wave, distort, morph, or alter: "
         "any number, any digit, any percentage sign, any price figure, any index value, "
         "any chart line, any Korean or English text, any data board, any information panel, "
@@ -24,7 +30,8 @@ KLING_MOTION_TEMPLATES = {
         "no color shift, no extra characters, no warped hands, no jitter, "
         "no camera movement, no background redesign, no new screen, no new panel, "
         "no text distortion, no number distortion, no chart redraw, no changing labels, "
-        "no changing factual overlay"
+        "no changing factual overlay, no crowd motion, no secondary character movement, "
+        "no bystander animation, no reporter or official gestures"
     ),
     "chart_shock": (  # 급락/급등 리액션
         "0–1s: the mascot sharply leans back and raises one open hand in a single surprised reaction. "
@@ -84,11 +91,45 @@ def build_kling_motion_prompt(scene_or_motion_type) -> dict:
         "explain": "pointing_explain",
         "surprise": "chart_shock",
     }
+    mapped = None
     if scene and not scene.get("motion_type"):
         emotion_value = str(scene.get("emotion_tag") or scene.get("emotion") or "").strip().lower()
         mapped = _EMOTION_TO_MOTION.get(emotion_value)
         if mapped:
             motion_type = mapped
+
+    # 2026-10-13 사용자 재현(job 14): motion_type도 비어 있고 emotion_tag도
+    # 매핑표에 없는(흔한 경우 "neutral") 장면은 상황과 무관한 범용
+    # walking_intro("두 걸음 걷고 손 흔들기")로 떨어져, 단상에서 발언하는
+    # 장면 같은 곳에서도 어색한 모션이 나왔다. archetype/구도 family 이름에서
+    # 상황에 맞는 동작을 한 번 더 유추한다 — 정확한 매핑이 아니라 최선의
+    # 추정이므로, 명시적 motion_type/emotion_tag가 있으면 항상 그게 우선한다.
+    _ARCHETYPE_KEYWORD_TO_MOTION: tuple[tuple[str, str], ...] = (
+        ("podium", "pointing_explain"),
+        ("briefing", "pointing_explain"),
+        ("classroom", "pointing_explain"),
+        ("data_lab", "pointing_explain"),
+        ("weather_map", "pointing_explain"),
+        ("desk", "thinking_desk"),
+        ("calculator", "thinking_desk"),
+        ("office", "thinking_desk"),
+        ("shock", "chart_shock"),
+        ("emergency", "chart_shock"),
+        ("risk_control", "chart_shock"),
+        ("celebration", "celebration"),
+        ("job_market_hall", "celebration"),
+    )
+    if scene and not scene.get("motion_type") and not mapped:
+        archetype_value = str(
+            scene.get("archetype")
+            or (scene.get("art_direction") or {}).get("family")
+            or ""
+        ).strip().lower()
+        if archetype_value:
+            for keyword, template in _ARCHETYPE_KEYWORD_TO_MOTION:
+                if keyword in archetype_value:
+                    motion_type = template
+                    break
 
     # 핵심 수치 데이터(core_figures/market_chart)가 있는 씬은
     # ambient_context(최소 정적 모션)로 강제 — 숫자 왜곡 방지

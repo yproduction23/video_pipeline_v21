@@ -1,6 +1,11 @@
 import os
 import pytest
-from app.utils.art_direction import direct_scenes, select_archetype_for_scene, keyword_fallback
+from app.utils.art_direction import (
+    direct_scenes,
+    select_archetype_for_scene,
+    keyword_fallback,
+    _batch_archetype_proposals,
+)
 
 
 def test_non_finance_topic_does_not_fall_back_to_a_financial_chart_studio():
@@ -18,6 +23,97 @@ def test_non_finance_topic_does_not_fall_back_to_a_financial_chart_studio():
     assert direction["topic"] != "finance"
     assert "finance" not in direction["setting"].lower()
     assert not any("financial" in prop.lower() for prop in direction["props"])
+
+def test_archetype_prompt_does_not_force_every_scene_into_a_stock_market_frame(monkeypatch):
+    """2026-10-14 사용자 재현(job 15): archetype 선택 시스템 프롬프트가
+    "채널 콘텐츠는 KOSPI, KOSDAQ, 미국 주식 시장을 다루며"라고 무조건
+    못박아 놓아서, 흉기 난동 같은 비금융 범죄 뉴스 대본에서도 모델이 억지로
+    금융 은유를 찾으려다 briefing_podium/data_lab 두 개만 기계적으로
+    번갈아 골랐다(씬2 "신고 접수 시각은 오후 1시 49분" 같은 담담한 사실
+    전달에 마이크·기자단·관계없는 흐름도가 나온 원인). 이 테스트는 시스템
+    프롬프트가 더 이상 모든 장면을 주식 시장으로 단정하지 않고, 비금융
+    내용에서는 억지로 끼워맞추지 말라는 지시를 담고 있는지 확인한다."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy_key")
+    captured = {}
+
+    def capture_system_prompt(system, messages, max_tokens):
+        captured["system"] = system
+        return '{"archetype": "briefing_podium", "reason": "테스트", "specific_props": "props"}'
+
+    select_archetype_for_scene(
+        "양손에 흉기를 묶고 대낮 마트에 나타났습니다.",
+        llm_call=capture_system_prompt,
+    )
+
+    system_prompt = captured["system"]
+    assert "채널 콘텐츠는 KOSPI, KOSDAQ, 미국 주식 시장을 다루며" not in system_prompt
+    assert "비금융" in system_prompt
+    assert "억지로" in system_prompt
+
+
+def test_batch_archetype_prompt_does_not_force_a_pure_finance_identity_and_forbids_refusal(monkeypatch):
+    """2026-10-14 사용자 재현(job 17, "홈플러스 인천 구월점 칼부림 사건"): 실제
+    운영 경로인 direct_scenes()는 항상 allow_remote=False로 호출해 이 배치
+    프롬프트(_batch_archetype_proposals)의 결과에만 의존하며,
+    select_archetype_for_scene 내부 LLM 분기는 타지 않는다. 이 배치 프롬프트가
+    "너는 한국 금융 영상의 수석 아트 디렉터다"로만 못박혀 있어서, 흉기 난동
+    비금융 뉴스 대사를 Claude가 "금융 영상 제작 도구와 안 맞고 피해자에
+    대한 모욕"이라며 배치 전체를 텍스트로 거부했다(컨테이너 내 실제
+    Anthropic API 호출로 재현 확인). 그 거부 응답은 JSON이 아니라 파싱이
+    실패하고, 모든 씬이 한 번에 keyword_fallback의 기계적 briefing_podium/
+    data_lab 번갈아 배정으로 떨어졌다. 이 테스트는 시스템 프롬프트가 더 이상
+    순수 금융 정체성만 말하지 않고, 비금융 뉴스도 같은 마스코트로 다룬다는
+    점과 내용이 불편해도 거부하지 말라는 지시를 담고 있는지 확인한다."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy_key")
+    captured = {}
+
+    def capture_system_prompt(system, messages, max_tokens):
+        captured["system"] = system
+        captured["prompt"] = messages[0]["content"]
+        return '[{"index": 0, "archetype": "briefing_podium", "reason": "테스트", "specific_props": "props"}]'
+
+    _batch_archetype_proposals(
+        [{"content": "양손에 흉기를 묶고 대낮 마트에 나타났습니다."}],
+        llm_call=capture_system_prompt,
+    )
+
+    system_prompt = captured["system"]
+    assert "너는 한국 금융 영상의 수석 아트 디렉터다" not in system_prompt
+    assert "비금융" in system_prompt
+    assert "거부하지 말고" in system_prompt
+
+
+def test_batch_archetype_proposals_falls_back_cleanly_when_llm_refuses_in_prose(monkeypatch):
+    """배치 호출이 거부 설명문(비-JSON 한국어 텍스트)을 반환해도 예외 없이
+    빈 결과를 돌려주고, direct_scenes()가 씬별 keyword_fallback으로 안전하게
+    이어받는지 확인한다(완전한 크래시 방지 자체는 기존에도 보장돼 있었음)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "dummy_key")
+
+    def refusing_llm(system, messages, max_tokens):
+        return "이 내용은 금융 영상과 맞지 않아 작업을 수행하지 않겠습니다."
+
+    result = _batch_archetype_proposals(
+        [{"content": "양손에 흉기를 묶고 대낮 마트에 나타났습니다."}],
+        llm_call=refusing_llm,
+    )
+    assert result == {}
+
+
+def test_keyword_fallback_maps_crime_narration_to_risk_control_room_not_blind_alternation():
+    """2026-10-14 job 18 scene 11 재현: "불특정 다수를 겨냥한 흉기 난동,
+    이번이 처음이 아닌 겁니다"는 금융 키워드가 전혀 없어 keyword_fallback의
+    candidates가 비어 있었고, 마지막 줄의 기계적 briefing_podium/data_lab
+    번갈아 배정으로 떨어졌다(실제 재현: Claude 배치 호출이 폭력 사건 연출을
+    거부해 LLM 경로를 못 타는 상황에서 이 최후 폴백만 남았다). data_lab이
+    선택되자 비전 검수가 "금융 차트 오인"으로 거듭 거부해 씬의 재시도 상한을
+    소진시켰다. risk_control_room(위험 관제)이 금융 전용 무대보다 덜
+    엉뚱하므로 이쪽으로 가야 한다."""
+    archetype = keyword_fallback(
+        "불특정 다수를 겨냥한 흉기 난동, 이번이 처음이 아닌 겁니다.",
+        recent_prev="",
+    )
+    assert archetype == "risk_control_room"
+
 
 def test_regression_no_api_key(monkeypatch):
     """1. ANTHROPIC_API_KEY 미설정 환경에서 keyword_fallback 정상 동작 및 크래시 없음 증명."""

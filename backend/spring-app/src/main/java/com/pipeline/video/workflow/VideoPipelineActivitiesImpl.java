@@ -6,6 +6,7 @@ import com.pipeline.video.repository.VideoJobRepository;
 import com.pipeline.video.service.ImagesService;
 import com.pipeline.video.service.JobService;
 import com.pipeline.video.service.LongformService;
+import com.pipeline.video.service.OperatorAlertService;
 import com.pipeline.video.service.ScriptService;
 import com.pipeline.video.service.TtsService;
 import io.temporal.spring.boot.ActivityImpl;
@@ -36,6 +37,7 @@ public class VideoPipelineActivitiesImpl implements VideoPipelineActivities {
     private final LongformService longformService;
     private final JobService jobService;
     private final VideoJobRepository jobRepository;
+    private final OperatorAlertService operatorAlertService;
 
     @Override
     public void generateScript(Long jobId) {
@@ -99,6 +101,7 @@ public class VideoPipelineActivitiesImpl implements VideoPipelineActivities {
             }
             job.setStatus(JobStatus.FAILED);
             jobRepository.save(job);
+            operatorAlertService.notifyJobNeedsAttention(jobId, job.getTitle(), "AUTO 파이프라인 실패: " + reason);
         }
     }
 }

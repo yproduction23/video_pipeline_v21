@@ -76,7 +76,7 @@ class ScriptEvidencePreservationTest {
         when(assetRepository.findByJobIdAndAssetType(1L, AssetType.KEYWORD)).thenReturn(List.of());
         when(fastApiClient.generateScript(
                 eq(1L), eq("삼성전자 실적"), eq(5), eq("INDIVIDUAL_STOCK"),
-                isNull(), eq(false), isNull(), eq("GUIDED"), isNull(), isNull()
+                isNull(), eq(false), isNull(), eq("GUIDED"), isNull(), isNull(), isNull()
         )).thenReturn(response);
         when(autonomyService.isAuto(job)).thenReturn(false);
 
@@ -175,7 +175,20 @@ class ScriptEvidencePreservationTest {
                         "fact_check_summary",
                         "flow_qa",
                         "requires_manual_review",
-                        "narration_contract");
+                        "narration_contract",
+                        "highlight");
+    }
+
+    @Test
+    void confirmedScriptMetadata_preservesHighlightBoundary() {
+        Map<String, Object> highlight = Map.of("end_text", "하이라이트 마지막 문장입니다.", "end_char", 120);
+        Map<String, Object> confirmed = scriptService.buildConfirmedScriptMetadata(
+                "확정 대본", List.of(), List.of(), Map.of("passed", true), Map.of("highlight", highlight));
+        Map<String, Object> rebuilt = LongformService.buildReassembledScriptMetadata(
+                "재조립 대본", List.of(), confirmed);
+
+        assertThat(confirmed.get("highlight")).isEqualTo(highlight);
+        assertThat(rebuilt.get("highlight")).isEqualTo(highlight);
     }
 
     @Test

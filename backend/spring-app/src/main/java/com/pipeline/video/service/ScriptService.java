@@ -40,6 +40,8 @@ public class ScriptService {
             "quality_report",
             "narrative_plan",
             "narration_contract",
+            // 슬라이드형: 하이라이트 구간 경계(고지 배너 위치 계산용). 캐릭터형은 applicable=false.
+            "highlight",
             "synopsis",
             "market_snapshot",
             "market_snapshot_used",
@@ -130,7 +132,8 @@ public class ScriptService {
                 jobId, job.getKeyword(), llmTargetMinutes, categoryName, marketSnapshotJson,
                 job.isDataVisualsEnabled(), job.getTtsVoiceId(), job.getAutonomy().name(),
                 candidateEvidence,
-                job.getContentNature() != null ? job.getContentNature().name() : null);
+                job.getContentNature() != null ? job.getContentNature().name() : null,
+                job.getVisualMode() != null ? job.getVisualMode().name() : null);
 
         // 실제 Claude 호출 수를 워커가 반환한다. 팩트체크뿐 아니라 내러티브 플랜과
         // 흐름 QA도 비용에 반영해야 영상별 예산 상한을 우회하지 않는다.

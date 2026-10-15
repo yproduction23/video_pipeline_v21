@@ -45,6 +45,25 @@ const AUTONOMY_OPTIONS = [
   },
 ]
 
+// 2026-10-15 사용자 결정: 캐릭터 파이프라인이 비금융(특히 범죄) 콘텐츠에서
+// 반복적으로 의미 불일치를 일으켜, 캐릭터 없는 "슬라이드형"(레퍼런스:
+// 알기쉬운 경제스쿨) 시각 모드를 추가했다. Spring→FastAPI→slides_worker
+// 실제 생성 경로까지 연결 완료 — 선택하면 그 모드로 실제 생성된다.
+const VISUAL_MODE_OPTIONS = [
+  {
+    value: 'CHARACTER', label: '캐릭터형 (기존)', icon: Users,
+    tag: '운영 중', tagColor: 'bg-emerald-100 text-emerald-800 border border-emerald-300',
+    desc: 'V5 캐릭터·아키타입 기반 장면 이미지로 제작합니다.',
+    warning: null,
+  },
+  {
+    value: 'SLIDE', label: '슬라이드형 (신규)', icon: Tv,
+    tag: '신규', tagColor: 'bg-cyan-100 text-cyan-800 border border-cyan-300',
+    desc: '캐릭터 없이 실사 배경·기사 증거 카드·통계 그래프로 빠른 컷 전환하는 스타일입니다 (레퍼런스: 알기쉬운 경제스쿨).',
+    warning: '아직 라이브 Job 1건으로만 검증됐습니다 — 결과물을 꼭 직접 확인해 주세요.',
+  },
+]
+
 const DURATION_OPTIONS = [
   { value: 1, label: '1분 테스트', hint: '정책 상한 ₩40,000. 빠른 배포 검증용' },
   { value: 5, label: '5분 리포트', hint: '정책 상한 ₩40,000. 핵심 인트로 + 브리핑' },
@@ -109,6 +128,7 @@ export default function JobNew() {
     shortsCount: 3,
     dataVisualsEnabled: false,
     contentNature: '',
+    visualMode: location.state?.visualMode || 'CHARACTER',
   })
   const [useCharacterOverride, setUseCharacterOverride] = useState(false)
 
@@ -589,6 +609,68 @@ export default function JobNew() {
               </div>
 
               <div>
+                <label className="block text-sm font-bold text-slate-900 mb-3">시각 모드 선택</label>
+                <div className="grid grid-cols-2 gap-4 items-start">
+                  {VISUAL_MODE_OPTIONS.map(opt => {
+                    const Icon = opt.icon
+                    const selected = form.visualMode === opt.value
+                    return (
+                      <div key={opt.value} className="space-y-2">
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form, visualMode: opt.value })}
+                          className={`w-full text-left p-5 rounded-xl border-2 transition-all flex flex-col justify-between ${
+                            selected
+                              ? 'border-cyan-600 bg-cyan-50/80 shadow-md'
+                              : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className={`p-2.5 rounded-xl shadow-xs ${selected ? 'bg-cyan-600 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                                <Icon size={20} />
+                              </div>
+                              <span className={`text-[10px] px-2.5 py-1 rounded-lg font-bold ${opt.tagColor}`}>
+                                {opt.tag}
+                              </span>
+                            </div>
+                            <h3 className={`text-sm font-bold ${selected ? 'text-cyan-900' : 'text-slate-900'}`}>{opt.label}</h3>
+                            <p className="text-xs font-semibold text-slate-600 mt-2 leading-relaxed">{opt.desc}</p>
+                            {opt.warning && (
+                              <p className="text-[11px] font-bold text-amber-700 mt-2 leading-relaxed">⚠️ {opt.warning}</p>
+                            )}
+                          </div>
+                        </button>
+                        {/* 2026-10-15 사용자 결정: 슬라이드형엔 캐릭터가 필요 없다 —
+                            캐릭터형/슬라이드형이 뒤섞이지 않도록, 시각 모드를 고른
+                            뒤에만, 그 모드에 맞는 말로 채널을 고르게 한다. 벤치마크로
+                            시작한 작업은 STEP 01(채널 선택)을 건너뛰기 때문에 필요하다. */}
+                        {benchmark && selected && (
+                          <div className="rounded-xl border border-cyan-200 bg-cyan-50/60 p-3">
+                            <label className="block text-[11px] font-bold text-cyan-900 mb-1.5">
+                              {opt.value === 'CHARACTER' ? '어떤 캐릭터로 할까요?' : '업로드할 채널'} <span className="text-cyan-600">*</span>
+                            </label>
+                            <select
+                              value={form.channelId}
+                              onChange={e => setForm(f => ({ ...f, channelId: e.target.value }))}
+                              className="w-full rounded-lg border border-cyan-300 bg-white px-2.5 py-1.5 text-xs font-bold text-slate-800"
+                            >
+                              {channels.map(ch => (
+                                <option key={ch.channelId} value={ch.channelId}>{ch.channelName.split('·')[0].trim()}</option>
+                              ))}
+                            </select>
+                            {channels.length === 0 && (
+                              <p className="text-[11px] font-semibold text-amber-700 mt-1">등록된 채널이 없습니다.</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div>
                 <label className="block text-sm font-bold text-slate-900 mb-3">목표 비디오 길이 설정</label>
                 <div className="grid grid-cols-3 gap-3">
                   {DURATION_OPTIONS.map(opt => {
@@ -646,6 +728,7 @@ export default function JobNew() {
                 <Row label="콘텐츠 성격" value={NATURE_OPTIONS.find(o => o.value === effectiveNature)?.label} />
                 <Row label="선택 카테고리" value={CATEGORY_OPTIONS.find(o => o.value === form.category)?.label} />
                 <Row label="자율성 모드" value={AUTONOMY_OPTIONS.find(o => o.value === form.autonomy)?.label} />
+                <Row label="시각 모드" value={VISUAL_MODE_OPTIONS.find(o => o.value === form.visualMode)?.label} />
                 <Row label="목표 영상 길이" value={`${form.longformTargetMinutes}분`} />
                 <Row label="설정된 예산 상한" value={`₩${(form.budgetCap || (form.longformTargetMinutes >= 20 ? 80000 : 40000)).toLocaleString()}`} highlight />
               </div>

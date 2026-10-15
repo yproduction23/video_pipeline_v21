@@ -48,7 +48,12 @@ _state = {
     # 저장 경로/프로젝트는 배포 계약이다. API로 바꿔 누적 한도를 초기화하지 않는다.
     "gemini_request_state_path": _cfg.GEMINI_REQUEST_STATE_PATH,
     "gemini_project_scope": _cfg.GEMINI_PROJECT_SCOPE,
-    "gemini_scene_request_limit": 3,
+    # 2026-10-13 job 14 씬2 재현: 이 영속 상한이 images_worker.py의 단일 요청 내부
+    # 재시도 횟수(max_retries = max(3, min(gemini_retry_max, 8)))보다 낮으면, 정상
+    # 교정 과정(3회 이상 필요)이 설계된 재시도 기회를 다 쓰기도 전에 "상한 도달"로
+    # 조기 차단된다. 두 값이 같은 GEMINI_RETRY_MAX 천장(최대 8)을 공유하도록 기본값을
+    # 고정 상수(3) 대신 여기서 같은 공식으로 계산한다.
+    "gemini_scene_request_limit": max(3, min(_cfg.GEMINI_RETRY_MAX, 8)),
     "image_same_error_break_count": _cfg.IMAGE_SAME_ERROR_BREAK_COUNT,
     "gemini_rpm_soft_cap": _cfg.GEMINI_RPM_SOFT_CAP,
     "gemini_adaptive_backoff_enabled": _cfg.GEMINI_ADAPTIVE_BACKOFF_ENABLED,
@@ -107,6 +112,7 @@ _state = {
     "intro_motion_clip_count": _cfg.INTRO_MOTION_CLIP_COUNT,
     "intro_motion_clip_seconds": _cfg.INTRO_MOTION_CLIP_SECONDS,
     "intro_motion_enabled": _cfg.INTRO_MOTION_ENABLED,
+    "slide_kling_enabled": _cfg.SLIDE_KLING_ENABLED,
     "intro_motion_test_mode": _cfg.INTRO_MOTION_TEST_MODE,
     "max_image_hold_seconds": _cfg.MAX_IMAGE_HOLD_SECONDS,
     "img_cost_flash_1k_usd": _cfg.IMG_COST_FLASH_1K_USD,
@@ -162,8 +168,10 @@ def update(**kwargs) -> dict:
             normalized = expected(v)
             if k in {"gemini_request_state_path", "gemini_project_scope"} and normalized != _state[k]:
                 raise ValueError("요청 상태 저장소/프로젝트 변경은 런타임에 허용되지 않습니다.")
-            if k == "gemini_scene_request_limit" and not 1 <= normalized <= 3:
-                raise ValueError("이미지 요청 한도는 최초 포함 1~3회입니다.")
+            # gemini_retry_max의 절대 상한(8)과 동일하게 맞춘다 — 이 값이 단일 요청
+            # 내부 재시도 횟수보다 낮아지면 정상 교정 과정이 조기 차단된다.
+            if k == "gemini_scene_request_limit" and not 1 <= normalized <= 8:
+                raise ValueError("이미지 요청 한도는 최초 포함 1~8회입니다.")
             if k == "max_budget_per_video_krw":
                 normalized = min(normalized, _cfg.MAX_BUDGET_PER_VIDEO_KRW)
             if k == "image_quality_tier" and normalized != "pro":

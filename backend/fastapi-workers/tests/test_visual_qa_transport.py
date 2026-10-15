@@ -40,6 +40,17 @@ def test_policy17_rechecks_policy14_detached_card_verdict():
     })
 
 
+def test_policy20_rechecks_policy19_review_from_before_the_finance_specificity_fix():
+    """2026-10-13 사용자 재현(job 14, 씬 2): finance_specificity를 종합 점수에서
+    빼도록 고친 뒤에도 정책 버전을 올리지 않으면 같은 이미지 해시의 예전
+    (버그 있는) 판정이 그대로 캐시 재사용돼 수정이 반영되지 않는다."""
+    assert not _cached_review_policy_compatible({
+        "policy_version": 19,
+        "failure_categories": ["visual_quality_floor"],
+        "raw": {"finance_specificity": 10},
+    })
+
+
 def _visual_response(verdict: dict) -> Mock:
     response = Mock(status_code=200)
     response.json.return_value = {
@@ -214,6 +225,159 @@ def test_visual_qa_rejects_unexpected_chart_in_a_general_narrative_scene(tmp_pat
         report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
 
     assert "unexpected_chart_or_data_visualization" in report["reviewed"][0]["failure_categories"]
+
+
+def test_general_scene_excludes_finance_specificity_from_composite_score(tmp_path: Path):
+    """2026-10-13 사용자 재현(job 14, 씬 2): 전역모 논란처럼 금융과 무관한
+    일반형 장면은 애초에 '경제적 배경'이 없는 게 정상인데, 종합 점수가
+    finance_specificity를 무조건 포함시켜 평균을 끌어내리는 바람에
+    다른 항목을 전부 통과한 장면이 visual_quality_floor로 떨어졌다.
+    일반형 장면에서는 finance_specificity를 종합 점수에서 빼야 한다."""
+    image = tmp_path / "general-scene-no-finance.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    verdict = _accepted_verdict()
+    verdict.update({
+        # scene_match/composition/style_adherence/text_integrity/character_identity는
+        # 전부 90대지만 finance_specificity만 금융 배경이 없다는 이유로 낮게 나온 상황을 재현
+        "finance_specificity": 10,
+        "decision": "accept",
+        "reason": "분할 화면 구성을 통해 전역모 착용과 비판 상황의 인과 관계를 적절히 표현함",
+    })
+    scene = {
+        "index": 2,
+        "image_path": str(image),
+        "scene_type": "general",
+        "text": "전역모는 군 복무를 마친 뒤 쓰는 모자입니다. 병역 혜택을 기념하는 데 전역모를 썼다는 비판이 곧바로 터졌죠.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    reviewed = report["reviewed"][0]
+    assert reviewed["score"] >= 78
+    assert "visual_quality_floor" not in reviewed["failure_categories"]
+    assert reviewed["retry_recommended"] is False
+
+
+def test_accept_decision_overrides_a_uniformly_mediocre_score_average(tmp_path: Path):
+    """2026-10-13 사용자 재현(job 14, 씬 2): 하드 실패가 하나도 없고 모델이
+    스스로 "accept"라고 판단했는데, 5개 세부 점수가 고르게 70점대라는 이유만으로
+    평균(71)이 78 문턱을 못 넘겨 버려졌다. assess_local_edit_preservation에 이미
+    적용한 것과 같은 원칙 — 하드 실패가 없으면 모델의 종합 판정을 숫자 평균보다
+    우선한다."""
+    image = tmp_path / "uniformly-mediocre.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    verdict = _accepted_verdict()
+    verdict.update({
+        "scene_match": 70,
+        "composition": 68,
+        "style_adherence": 72,
+        "text_integrity": 75,
+        "character_identity": 70,
+        "decision": "accept",
+        "reason": "전역모 착용과 비판 상황을 2분할 컷으로 적절히 연출했으며 캐릭터 및 작화 스타일 규격을 만족합니다.",
+    })
+    scene = {
+        "index": 2,
+        "image_path": str(image),
+        "scene_type": "general",
+        "text": "전역모는 군 복무를 마친 뒤 쓰는 모자입니다. 병역 혜택을 기념하는 데 전역모를 썼다는 비판이 곧바로 터졌죠.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    reviewed = report["reviewed"][0]
+    assert reviewed["score"] < 78
+    assert reviewed["retry_recommended"] is False
+    assert "visual_quality_floor" not in reviewed["failure_categories"]
+
+
+def test_review_decision_still_forces_retry_despite_no_named_hard_failure(tmp_path: Path):
+    """회귀 방지: decision이 "review"(모호)면 하드 실패가 없어도 여전히 재시도를
+    강제해야 한다 — accept만 특별 취급한다."""
+    image = tmp_path / "ambiguous-decision.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    verdict = _accepted_verdict()
+    verdict.update({
+        "scene_match": 70,
+        "composition": 68,
+        "style_adherence": 72,
+        "text_integrity": 75,
+        "character_identity": 70,
+        "decision": "review",
+        "reason": "확신이 서지 않음",
+    })
+    scene = {
+        "index": 2,
+        "image_path": str(image),
+        "scene_type": "general",
+        "text": "전역모는 군 복무를 마친 뒤 쓰는 모자입니다.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    reviewed = report["reviewed"][0]
+    assert reviewed["retry_recommended"] is True
+    assert "visual_quality_floor" in reviewed["failure_categories"]
+
+
+def test_policy21_rechecks_policy20_review_from_before_the_accept_decision_fix():
+    """2026-10-13: decision=accept를 숫자 평균보다 우선하도록 고친 뒤에도 정책
+    버전을 올리지 않으면, 같은 이미지 해시의 예전(버그 있는) 판정이 캐시로
+    재사용돼 수정이 반영되지 않는다."""
+    assert not _cached_review_policy_compatible({
+        "policy_version": 20,
+        "failure_categories": ["visual_quality_floor"],
+        "raw": {"decision": "accept", "scene_match": 70},
+    })
+
+
+def test_metric_scene_still_includes_finance_specificity_in_composite_score(tmp_path: Path):
+    """금융/수치 장면(scene_type != general)은 경제적 배경이 실제로 기대되므로
+    finance_specificity를 종합 점수에서 빼면 안 된다 — 회귀 방지."""
+    image = tmp_path / "metric-scene-low-finance.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    verdict = _accepted_verdict()
+    verdict.update({
+        "scene_match": 90,
+        "composition": 90,
+        "style_adherence": 90,
+        "text_integrity": 90,
+        "character_identity": 90,
+        "finance_specificity": 10,
+        "decision": "accept",
+        "reason": "경제적 배경이 부족함",
+    })
+    scene = {
+        "index": 6,
+        "image_path": str(image),
+        "scene_type": "metric",
+        "text": "체육 분야 병역특례는 1973년 도입 이후 기준이 여러 차례 바뀌어 왔죠.",
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    reviewed = report["reviewed"][0]
+    assert reviewed["score"] < 78
 
 
 def test_visual_qa_allows_charts_in_an_actual_information_scene(tmp_path: Path):
@@ -477,6 +641,85 @@ def test_local_edit_preservation_accepts_text_surface_only_change(tmp_path: Path
     assert result["passed"] is True
 
 
+def test_local_edit_preservation_accepts_when_model_says_accept_despite_low_score(tmp_path: Path):
+    """2026-10-12 job 14 재현: 같은 재시도 라운드에서 두 번 확인됨(씬4 score=72,
+    씬7 score=70) — 모델이 모든 세부 항목을 통과시키고 decision="accept"라고
+    명시했는데도, 점수가 75 미만이라는 이유만으로 코드가 그 판정을 뒤집어
+    폐기했다. 모델 자신의 accept 판정과 세부 항목이 모두 일치하면 점수와
+    무관하게 통과해야 한다."""
+    source = tmp_path / "source.png"
+    candidate = tmp_path / "candidate.png"
+    Image.new("RGB", (1920, 1080), "navy").save(source)
+    Image.new("RGB", (1920, 1080), "navy").save(candidate)
+    verdict = {
+        "composition_preserved": True,
+        "camera_and_crop_preserved": True,
+        "character_face_preserved": True,
+        "character_pose_preserved": True,
+        "background_preserved": True,
+        "unrelated_props_preserved": True,
+        "style_preserved": True,
+        "only_requested_changes": True,
+        "repaired_surface_clean": True,
+        "no_blur_smear_or_ghosting": True,
+        "added_unrequested_objects": [],
+        "removed_unrequested_objects": [],
+        "changed_unrequested_regions": [],
+        "preservation_score": 70,
+        "decision": "accept",
+        "reason": "요청된 의상 변경 외 배경, 구도, 인물 표정이 원본과 동일하게 유지됨",
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        result = assess_local_edit_preservation(
+            str(source), str(candidate),
+            allowed_change_categories=["character_wardrobe"],
+        )
+
+    assert result["passed"] is True
+
+
+def test_local_edit_preservation_still_uses_score_when_decision_is_ambiguous(tmp_path: Path):
+    """decision이 accept/reject 둘 다 아니거나 비어 있을 때는 여전히 세부
+    항목+점수 기준이 안전장치로 동작해야 한다(회귀 가드)."""
+    source = tmp_path / "source.png"
+    candidate = tmp_path / "candidate.png"
+    Image.new("RGB", (1920, 1080), "navy").save(source)
+    Image.new("RGB", (1920, 1080), "navy").save(candidate)
+    verdict = {
+        "composition_preserved": True,
+        "camera_and_crop_preserved": True,
+        "character_face_preserved": True,
+        "character_pose_preserved": True,
+        "background_preserved": True,
+        "unrelated_props_preserved": True,
+        "style_preserved": True,
+        "only_requested_changes": True,
+        "repaired_surface_clean": True,
+        "no_blur_smear_or_ghosting": True,
+        "added_unrequested_objects": [],
+        "removed_unrequested_objects": [],
+        "changed_unrequested_regions": [],
+        "preservation_score": 60,
+        "decision": "review",
+        "reason": "애매함",
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        result = assess_local_edit_preservation(
+            str(source), str(candidate),
+            allowed_change_categories=["character_wardrobe"],
+        )
+
+    assert result["passed"] is False
+
+
 def test_local_edit_preservation_rejects_a_blurred_text_patch(tmp_path: Path):
     source = tmp_path / "source.png"
     candidate = tmp_path / "candidate.png"
@@ -565,6 +808,68 @@ def test_scene_visual_qa_uses_claude_only_after_gemini_server_failure(tmp_path: 
 
     assert len(report["reviewed"]) == 1
     assert report["warnings"] == []
+    fallback.assert_called_once()
+
+
+def test_scene_visual_qa_uses_claude_after_gemini_402_prepayment_depleted(tmp_path: Path):
+    """2026-10-14 job 18 재현: Gemini 선불 크레딧이 소진되면
+    generativelanguage.googleapis.com이 402 RESOURCE_EXHAUSTED를 반환한다
+    (실제 API 직접 호출로 재현 확인). 기존 코드는 429/5xx일 때만 Claude
+    폴백을 태웠고 402는 조건에 없어서, 멀쩡한 이미지인데도 씬이 통째로
+    visual_qa_unavailable로 보류되며 재시도해도 매번 똑같이 막혔다. 402도
+    429/5xx와 동일하게 "검수를 완료 못 함" 상태로 취급해 Claude로 넘어가야
+    한다."""
+    image = tmp_path / "scene.png"
+    Image.new("RGB", (1920, 1080), "navy").save(image)
+    payment_required = Mock(status_code=402)
+    scene = {
+        "index": 1,
+        "image_path": str(image),
+        "text": "주주환원 방식입니다.",
+        "screen_texts": ["주주환원"],
+        "art_direction": {"character_required": True},
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review", return_value=payment_required,
+    ), patch(
+        "app.utils.visual_qa._claude_visual_review", return_value=_accepted_verdict(),
+    ) as fallback:
+        report = assess_visual_alignment([scene], enabled=True, max_scenes=1)
+
+    assert len(report["reviewed"]) == 1
+    assert report["warnings"] == []
+    fallback.assert_called_once()
+
+
+def test_local_edit_qa_uses_claude_after_gemini_402_prepayment_depleted(tmp_path: Path):
+    """assess_local_edit_preservation 쪽도 같은 402 폴백 누락이 있었다
+    (job 18 scene 14 재현: local_edit_qa_unavailable:402)."""
+    source = tmp_path / "source.png"
+    candidate = tmp_path / "candidate.png"
+    Image.new("RGB", (1920, 1080), "navy").save(source)
+    Image.new("RGB", (1920, 1080), "navy").save(candidate)
+    payment_required = Mock(status_code=402)
+    accepted_edit_verdict = {
+        "composition_preserved": True, "camera_and_crop_preserved": True,
+        "character_face_preserved": True, "character_pose_preserved": True,
+        "background_preserved": True, "unrelated_props_preserved": True,
+        "style_preserved": True, "only_requested_changes": True,
+        "repaired_surface_clean": True, "no_blur_smear_or_ghosting": True,
+        "preservation_score": 95, "decision": "accept", "reason": "요청된 변경만 반영됨",
+    }
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review", return_value=payment_required,
+    ), patch(
+        "app.utils.visual_qa._claude_visual_review", return_value=accepted_edit_verdict,
+    ) as fallback:
+        result = assess_local_edit_preservation(
+            str(source), str(candidate),
+            allowed_change_categories=["text_unexpected_or_malformed"],
+        )
+
+    assert result["status"] != "unavailable"
     fallback.assert_called_once()
 
 
@@ -1075,3 +1380,27 @@ def test_claude_visual_review_requests_max_tokens_32000(monkeypatch):
 
     assert captured.get("max_tokens") == 32000
     assert result == {"scene_match": 80, "decision": "accept", "reason": "ok"}
+
+
+def test_scene_with_no_image_path_at_all_is_skipped_not_crashed(tmp_path: Path):
+    """2026-10-15 job 18 재현: 슬라이드형 모드에서 예산 초과 등으로 생성
+    자체가 실패한 장면은 image_path도 final_image_path도 전혀 없다.
+    과거에는 Path("")가 "현재 디렉터리는 존재한다"로 True를 반환해 이런
+    장면이 검수 후보로 잘못 들어갔고, scene["image_path"] 직접 접근이
+    KeyError로 죽어 전체 배치의 다른 장면 검수까지 조용히 스킵됐다."""
+    good_image = tmp_path / "ok.png"
+    Image.new("RGB", (1920, 1080), "navy").save(good_image)
+    verdict = _accepted_verdict()
+    scene_without_image = {"index": 6, "text": "생성 실패한 장면입니다."}
+    scene_with_image = {"index": 7, "image_path": str(good_image), "text": "정상 장면입니다."}
+
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}), patch(
+        "app.utils.visual_qa._post_visual_review",
+        return_value=_visual_response(verdict),
+    ):
+        report = assess_visual_alignment(
+            [scene_without_image, scene_with_image], enabled=True, max_scenes=0,
+        )
+
+    reviewed_indices = {item["index"] for item in report["reviewed"]}
+    assert reviewed_indices == {7}

@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from app import config as app_config
 from app import runtime_config
 from app.utils.script_length import (
     effective_duration_tolerance,
@@ -82,6 +83,15 @@ class DeliveryDefaultsTests(unittest.TestCase):
         actual_seconds = 85.2
         allowed_delta = target_seconds * effective_tts_measured_duration_tolerance(0.5)
         self.assertGreaterEqual(allowed_delta, actual_seconds - target_seconds)
+
+    def test_deployed_default_actually_uses_the_2026_10_01_fifty_percent_decision(self):
+        """2026-10-14 job 15 재현: 안전 상한(MAX_TTS_MEASURED_DURATION_TOLERANCE)과
+        effective_tts_measured_duration_tolerance()는 이미 50%를 올바르게
+        허용하는데도, config.py/.env의 실제 배포 기본값 TTS_DURATION_TOLERANCE가
+        0.25에 그대로 남아 있어 같은 사유(목표 60초, 실제 87.6초=+46%)로 또
+        막혔다. 상한을 고치는 것만으로는 부족하고, 실제 기본값도 올려야 한다."""
+        self.assertEqual(app_config.TTS_DURATION_TOLERANCE, 0.50)
+        self.assertEqual(runtime_config.value("tts_duration_tolerance"), 0.50)
 
     def test_default_images_are_pro_2k_with_a_mascot(self):
         self.assertEqual(runtime_config.value("image_quality_tier"), "pro")

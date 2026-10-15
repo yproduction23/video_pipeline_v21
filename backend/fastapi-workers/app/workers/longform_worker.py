@@ -878,6 +878,36 @@ class LongformWorker:
             raise RuntimeError(f"Job {job_id} stopped by user.")
 
         _prepare_deterministic_scene_asset(scene, temp_dir, i)
+
+        # 2026-10-15 사용자 결정: 슬라이드형 모드의 Pixabay 매칭 장면은 이미
+        # "이미지 1장 + 모션"이 아니라 그 자체로 완성된 영상 소재다 — 기존
+        # 경로는 모든 씬이 정지 이미지라고 가정해(아래 img_path 필수 체크)
+        # 이런 씬을 처리할 방법이 없었다. 캐릭터 경로는 전혀 건드리지 않고,
+        # stock_video_path가 있을 때만 이 새 분기를 탄다.
+        stock_video_path = scene.get("stock_video_path")
+        if stock_video_path:
+            raw_dur = scene.get("duration")
+            duration = float(raw_dur) if raw_dur is not None else 15.0
+            clip_path = str(temp_dir / f"clip_{i:03d}.mp4")
+            clip_fingerprint = _scene_clip_fingerprint(scene, stock_video_path, duration, "slide_stock_video")
+            if _can_reuse_scene_clip(
+                clip_path, duration, motion_requested=False,
+                expected_source_type="slide_stock_video", expected_fingerprint=clip_fingerprint,
+            ):
+                logger.info("Reusing completed slide_stock_video scene clip %s", i)
+                return i, clip_path, "slide_stock_video", None
+            if not os.path.exists(stock_video_path):
+                raise RuntimeError(f"scene {i} stock video missing: {stock_video_path}")
+            _ffmpeg_trim_scale_stock_video(stock_video_path, clip_path, duration, job_id)
+            if not _verify_video(clip_path):
+                raise RuntimeError(f"scene {i} stock video clip failed validation")
+            if not _apply_editorial_overlays(scene, clip_path, temp_dir, i, duration, job_id):
+                raise RuntimeError(f"scene {i} editorial overlay failed")
+            if not _verify_video(clip_path):
+                raise RuntimeError(f"scene {i} clip failed validation after overlay")
+            _write_scene_clip_meta(clip_path, "slide_stock_video", clip_fingerprint)
+            return i, clip_path, "slide_stock_video", None
+
         article_capture = _article_capture_for_scene(scene)
         img_path = _article_image_path(scene)
         if article_capture:
@@ -1696,6 +1726,26 @@ def _ffmpeg_static_image(img_path: str, clip_path: str, duration: float, bg_colo
     ret = _run_subprocess(cmd, job_id)
     if ret != 0 or not _verify_video(clip_path):
         raise RuntimeError(f"static image clip render failed: {img_path}")
+
+
+def _ffmpeg_trim_scale_stock_video(src_path: str, clip_path: str, duration: float, job_id: int = 0) -> None:
+    """Pixabay 등 기존 영상 소재를 장면 길이에 맞게 트리밍·스케일한다.
+
+    2026-10-15 사용자 결정: 확대/축소(zoompan) 효과를 넣지 않는다 — "계속
+    움직이는 효과가 지루하다"는 피드백으로 슬라이드형 전체에서 효과 없는
+    정지/고정 프레임을 기본으로 삼았다. 영상이 duration보다 짧으면
+    -stream_loop로 반복해 길이를 채운다.
+    """
+    cmd = (
+        f'ffmpeg -stream_loop -1 -i "{src_path}" '
+        f'-vf "scale=1920:1080:force_original_aspect_ratio=increase,'
+        f'crop=1920:1080,setsar=1,fps=30" '
+        f'-t {duration:.3f} -an -c:v libx264 -threads 2 -preset fast -crf 18 -pix_fmt yuv420p '
+        f'-y "{clip_path}" -loglevel error'
+    )
+    ret = _run_subprocess(cmd, job_id)
+    if ret != 0 or not _verify_video(clip_path):
+        raise RuntimeError(f"stock video clip render failed: {src_path}")
 
 
 def _ffmpeg_reveal_images(plain_path: str, emphasized_path: str, clip_path: str, duration: float, job_id: int) -> None:

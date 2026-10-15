@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import random
@@ -15,6 +16,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from app import runtime_config
+
+logger = logging.getLogger(__name__)
 
 
 NEEDS_REVIEW_COOLDOWN_SECONDS = 24 * 60 * 60
@@ -133,7 +136,13 @@ class ImageRequestControl:
         from app import config
         self.path = path or Path(cfg.get("gemini_request_state_path", config.GEMINI_REQUEST_STATE_PATH))
         self.project = str(cfg.get("gemini_project_scope", "default"))
-        self.limit = min(3, max(1, int(cfg.get("gemini_scene_request_limit", 3))))
+        # 2026-10-13 job 14 씬2 재현: 이 영속 상한이 images_worker.py의 단일 요청
+        # 내부 재시도 상한(max_retries = max(3, min(gemini_retry_max, 8)))보다
+        # 낮으면, 정상 교정 과정이 재시도 기회를 다 쓰기 전에 "상한 도달"로 조기
+        # 차단된다. 기본값은 runtime_config.py에서 gemini_retry_max와 같은 공식으로
+        # 맞춰두지만, 명시적으로 더 낮게 설정된 값(과거 한도 재현 등)은 그대로
+        # 존중한다 — 절대 천장(8)만 넘지 못하게 막는다.
+        self.limit = min(8, max(1, int(cfg.get("gemini_scene_request_limit", 3))))
         self.base = max(1.0, float(cfg.get("gemini_pro_retry_base_seconds", 20)))
         self.clock = clock or time.time
         self.uniform = uniform or random.uniform
@@ -268,6 +277,61 @@ class ImageRequestControl:
                 "reopened_from_first_needs_review_at": reopened_from,
                 "cooldown_override_used": cooldown_override_used,
                 "legacy_first_needs_review_at_recovered": legacy_first_review_recovered,
+            }
+        finally:
+            db.close()
+
+    def operator_reopen(self, *, scope: str, scene: str, approved_by: str, override_cooldown: bool = False) -> dict:
+        """사람이 명시적으로 승인한 재도전만 needs_review 상태를 푼다.
+
+        2026-10-14 사용자 재현(job 18 scene 11): reserve()의 review_retry_of/
+        review_reopen_of 경로는 전부 budget.py의 단일 503 재시도 감사
+        체인(ProviderRequestAudit.before_attempt)에서만 호출되고, 그 체인은
+        직전 원장 항목이 정확히 http_503이어야만 통과한다. 그런데 scene 11은
+        비전 검수 콘텐츠 거부(의미 불일치)로 needs_review에 들어갔지 503이
+        아니어서, 실제로는 이 needs_review를 풀 수 있는 API 경로가 전혀 없었다
+        (코드는 있지만 아무 호출자도 없는 죽은 경로). 이 메서드는 콘텐츠
+        거부로 막힌 장면을 위한 별도의, 더 단순한 운영자 승인 경로다 — 비용
+        예약/원장 매칭 로직은 전혀 건드리지 않고, 요청 상한 카운터만
+        초기화해 다음 일반 재시도가 정상적으로 새 예약을 받게 한다.
+
+        24시간 냉각이 지나지 않았으면 override_cooldown=True(운영자의 명시적
+        "지금 바로" 승인)가 있어야만 통과한다.
+        """
+        scene = canonical_scene(scene)
+        db = self._db()
+        try:
+            row = db.execute(
+                "SELECT count,n,next,active,status,first_needs_review_at,review_cycle "
+                "FROM scenes WHERE scope=? AND scene=?", (scope, scene),
+            ).fetchone()
+            if not row:
+                raise ImageRequestHeld("재도전 승인 대상 장면 기록 없음")
+            count, n, deadline, active, status, first_review_at, review_cycle = row
+            if status != "needs_review":
+                raise ImageRequestHeld(f"검수 대기 상태가 아니라 승인 대상이 아님 (현재 상태={status})")
+            now = self.clock()
+            reopen_at = (first_review_at or now) + NEEDS_REVIEW_COOLDOWN_SECONDS
+            if first_review_at is not None and now < reopen_at and not override_cooldown:
+                raise ImageRequestHeld(
+                    "24시간 냉각 미경과; 즉시 재도전은 명시적 승인(override_cooldown)이 필요함",
+                    status="needs_review", next_allowed_at=reopen_at,
+                )
+            next_review_cycle = review_cycle + 1
+            db.execute(
+                "UPDATE scenes SET count=0,n=0,next=0,active=NULL,status='ready',"
+                "first_needs_review_at=NULL,review_cycle=? WHERE scope=? AND scene=?",
+                (next_review_cycle, scope, scene),
+            )
+            db.commit()
+            logger.warning(
+                "운영자 재도전 승인: scope=%s scene=%s approved_by=%s review_cycle=%s->%s "
+                "override_cooldown=%s 직전 누적 요청=%s",
+                scope, scene, approved_by, review_cycle, next_review_cycle, override_cooldown, count,
+            )
+            return {
+                "scene": scene, "previous_status": status, "previous_count": count,
+                "review_cycle": next_review_cycle, "override_cooldown_used": bool(override_cooldown),
             }
         finally:
             db.close()

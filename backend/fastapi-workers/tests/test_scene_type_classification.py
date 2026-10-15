@@ -69,6 +69,47 @@ def test_dialogue_rewrite_placeholder_prompt_ko_does_not_force_text_classificati
     assert scene["scene_type"] == "general"
 
 
+def test_style_suffix_digit_in_prompt_en_does_not_force_a_spurious_metric_classification():
+    """2026-10-14 사용자 재현(job 15): 흉기 난동 사건을 다루는 범죄 뉴스
+    대본인데, 숫자·수치 신호가 전혀 없는 인트로·결론 장면이 "metric"으로
+    분류돼 엉뚱한 주식 하락 차트가 그려졌다. 원인은 모든 장면의 prompt_en에
+    공통으로 들어가는 화풍 태그 "original 2D Korean editorial illustration"의
+    숫자 "2"(2D)를 수치 신호로 오인한 것이었다 — title/prompt_ko에서 이미
+    같은 종류의 버그를 두 번 고쳤던 것과 동일한 패턴. prompt_en은 AI가 쓴
+    시각 프롬프트이지 실제 내러티브 신호가 아니므로 분류 근거에서 빠져야
+    한다."""
+    scene = _classify_scene_types([{
+        "section": "intro",
+        "content": "양손에 흉기를 묶고 대낮 마트에 나타났습니다. 단순한 흉기 난동이 아니었습니다.",
+        "text": "양손에 흉기를 묶고 대낮 마트에 나타났습니다. 단순한 흉기 난동이 아니었습니다.",
+        "prompt_en": (
+            "large discount mart exterior daytime, multiple police vehicles with "
+            "lights on parked outside, police line tape across entrance, tense "
+            "emergency scene, original 2D Korean editorial illustration, bold ink "
+            "outlines, cel shading"
+        ),
+    }])[0]
+
+    assert scene["scene_type"] != "metric"
+
+
+def test_data_section_alone_does_not_force_a_metric_classification_without_real_signals():
+    """2026-10-14 사용자 재현(job 18 scene 5·7): 흉기 난동 범죄 뉴스
+    대본에서 "그것도 전자발찌를 찬 상태에서 이 범행을 저질렀습니다"처럼
+    수치가 전혀 없는 장면이, 서사 구조상 "data" 단계에 배치됐다는 이유만으로
+    metric으로 분류됐다. metric 분류는 이미지 프롬프트 생성 단계에서
+    "금융 애니메이션 채널·경제 상황" 시스템 프롬프트를 강제로 씌워, 전자발찌
+    내용과 무관한 데이터랩풍(SF스러운) 배경이 나오는 원인이 됐다. section은
+    서사 구조상의 위치일 뿐 내용을 보장하지 않으므로, 실제 수치 신호가 없으면
+    metric이 아니라 general로 분류돼야 한다."""
+    scene = _classify_scene_types([{
+        "section": "data",
+        "content": "그것도 전자발찌를 찬 상태에서 이 범행을 저질렀습니다.",
+    }])[0]
+
+    assert scene["scene_type"] == "general"
+
+
 def test_graph_signal_has_priority_over_data_section_metric_fallback():
     scene = _classify_scene_types([{
         "section": "data",

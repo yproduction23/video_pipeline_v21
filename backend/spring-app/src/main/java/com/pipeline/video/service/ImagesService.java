@@ -62,6 +62,7 @@ public class ImagesService {
     private final GateService gateService;
     private final AutonomyService autonomyService;
     private final CostService costService;
+    private final OperatorAlertService operatorAlertService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Transactional(noRollbackFor = {
@@ -114,9 +115,15 @@ public class ImagesService {
         // FastAPI 호출
         // 선행 단계에서 이미 확정된 실제 비용을 제외한 잔여 KRW만 워커에 전달한다.
         // 워커의 이미지·Kling 요청 감사 원장은 이 금액을 넘는 외부 호출을 차단한다.
+        // 2026-10-12 job 14 재현: 여기서 costService.getTotal()(Spring+Worker
+        // 합산)을 쓰면, FastAPI가 자기 장부(Worker 누적)를 다시 더해 비교하므로
+        // 같은 금액이 이중으로 빠져 Worker 누적이 전체 예산의 절반을 넘는
+        // 순간부터 재시도가 구조적으로 불가능해진다. Worker 쪽 누적 비용은
+        // FastAPI 자신의 장부가 단독으로 추적하므로, 여기서는 Spring이 직접
+        // 추적하는 비용(TTS/Claude 등)만 뺀다.
         BigDecimal remainingBudget = null;
         if (job.getBudgetCap() != null) {
-            BigDecimal spent = costService.getTotal(jobId);
+            BigDecimal spent = costService.getSpringOnlyTotal(jobId);
             remainingBudget = job.getBudgetCap().subtract(spent);
             if (remainingBudget.compareTo(BigDecimal.ZERO) <= 0) {
                 throw new IllegalStateException("이전 단계 비용으로 이미지 생성 잔여 예산이 없습니다.");
@@ -138,7 +145,8 @@ public class ImagesService {
                     jobId, ttsMetaJson, scriptMetaJson, character.imagePath(), character.stylePrompt(), character.posesDir(),
                     character.loraModelId(), character.loraTriggerWord(), character.loraScale(),
                     job.getAutonomy() == null ? null : job.getAutonomy().name(),
-                    remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION, sceneIndices);
+                    remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION, sceneIndices,
+                    job.getVisualMode() == null ? null : job.getVisualMode().name());
         } catch (RuntimeException e) {
             if (isImageGenerationAlreadyRunning(e)) {
                 // GUIDED 화면의 명시적 생성 요청과 Temporal 재개가 동시에 도착할
@@ -155,6 +163,7 @@ public class ImagesService {
                 job.setStatus(JobStatus.IMAGES_RETRY_REQUIRED);
                 jobRepository.save(job);
                 log.warn("이미지 공급자 크레딧/쿼터 부족으로 재시도 대기: jobId={}", jobId);
+                operatorAlertService.notifyJobNeedsAttention(jobId, job.getTitle(), "이미지 공급자 크레딧/쿼터 부족");
                 throw new ImageProviderRetryRequiredException(
                         "이미지 공급자 크레딧 또는 쿼터가 부족합니다. 충전 후 이미지 생성만 다시 시도해 주세요.", e);
             }
@@ -182,10 +191,28 @@ public class ImagesService {
             return result;
         }
 
+        persistGenerateResult(jobId, job, result);
+        return result;
+    }
+
+    /**
+     * SCENE_IMAGE/GIF_CLIP 자산 저장, IMAGE_QC_REPORT 갱신, AUTO 모드 자동 확정을
+     * 하나의 공통 경로로 묶는다. generate()의 배치 재시도와 acceptHeldScene()의
+     * 단일 보류 장면 수동 승인이 서로 다른 코드로 각자 이 로직을 반복하면, 한쪽만
+     * 고쳤을 때 다른 쪽이 조용히 어긋난다(2026-10-13 "검토 이미지 그대로 사용"
+     * 기능 추가 시 발견).
+     */
+    private void persistGenerateResult(Long jobId, VideoJob job, ImagesGenerateResponse result) {
         if (result.getScenes() != null) {
             for (SceneImageDto scene : result.getScenes()) {
-                boolean alreadyRegistered = assetRepository.findByJobIdAndAssetType(jobId, AssetType.SCENE_IMAGE)
-                        .stream().anyMatch(existing -> scene.getImagePath().equals(existing.getLocalPath()));
+                // 슬라이드형은 한 장면의 생성이 실패하면 image_path 없이 오류만 담아 돌려준다
+                // (배치 전체를 막지 않기 위함). 그런 장면은 경로 중복 판정을 건너뛰고 그대로
+                // 저장해 검수·재생성 대상으로 남긴다 — 여기서 NPE가 나면 나머지 장면 결과까지
+                // 저장되지 못한다.
+                String scenePath = scene.getImagePath();
+                boolean alreadyRegistered = scenePath != null
+                        && assetRepository.findByJobIdAndAssetType(jobId, AssetType.SCENE_IMAGE)
+                        .stream().anyMatch(existing -> scenePath.equals(existing.getLocalPath()));
                 if (alreadyRegistered) continue;
                 Asset asset = Asset.builder()
                         .jobId(jobId)
@@ -227,6 +254,10 @@ public class ImagesService {
                 jobRepository.save(job);
                 log.warn("AUTO 모드 — 이미지 검수 실패로 자동 확정 차단, 수동 검토 대기: jobId={}, reasons={}",
                         jobId, result.getReviewReasons());
+                List<String> reasons = result.getReviewReasons();
+                operatorAlertService.notifyJobNeedsAttention(
+                        jobId, job.getTitle(),
+                        "AUTO 모드 이미지 검수 실패: " + (reasons == null || reasons.isEmpty() ? "사유 미기록" : String.join(", ", reasons)));
                 // confirm() 호출하지 않음 — 사람이 직접 UI에서 검수 후 확정 필요
             } else {
                 log.info("AUTO 모드 — 이미지 자동 확정");
@@ -236,8 +267,69 @@ public class ImagesService {
             log.info("OCR 추정 사실 포함 등 수동 검토 필요: jobId={}, reasons={}",
                     jobId, result.getReviewReasons());
         }
+    }
 
+    /**
+     * 2026-10-13 사용자 요청: 자동 게이트가 보류시킨 장면이라도 사용자가 실물
+     * 후보 이미지를 직접 보고 괜찮다고 판단하면, 재생성 없이 그대로 최종
+     * 이미지로 승격한다. FastAPI는 공급자를 다시 호출하지 않으므로 예산·요청
+     * 상한 게이트와 무관하다.
+     */
+    @Transactional
+    public ImagesGenerateResponse acceptHeldScene(Long jobId, int index, String username) {
+        VideoJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
+        SceneNarration narration = resolveSceneNarration(jobId, index);
+        ImagesGenerateResponse result = fastApiClient.acceptHeldScene(
+                jobId, index, username, narration.text(), narration.section());
+        persistGenerateResult(jobId, job, result);
+        log.info("보류 장면 수동 승인 완료: jobId={}, scene={}, by={}", jobId, index, username);
         return result;
+    }
+
+    /**
+     * 2026-10-14 사용자 재현(job 18 scene 11): 콘텐츠 거부 반복으로
+     * needs_review에 들어간 씬은 재시도 상한을 아무리 올려도 풀리지 않았다
+     * (기존 재도전 승인 경로는 단일 503 전용이라 콘텐츠 거부 케이스에
+     * 호출되지 않았음). 이 메서드는 사람이 명시적으로 승인한 경우에만
+     * 요청 상한 카운터를 연다 — 실제 이미지 재생성은 별도의 일반
+     * generate() 호출로 이어서 진행한다.
+     */
+    public Map<String, Object> approveSceneRetry(Long jobId, int index, String username, boolean overrideCooldown) {
+        Map<String, Object> result = fastApiClient.approveSceneRetry(jobId, index, username, overrideCooldown);
+        log.info("씬 재도전 승인 완료: jobId={}, scene={}, by={}, overrideCooldown={}",
+                jobId, index, username, overrideCooldown);
+        return result;
+    }
+
+    private record SceneNarration(String text, String section) {}
+
+    /**
+     * 2026-10-13 job 14 씬5 재현: 승인 이미지만 저장하고 내레이션 원문을 함께
+     * 보내지 않으면 SCENE_IMAGE 자산의 text가 비어, longform 조립 직전 "대본
+     * 원문과 장면 내레이션 불일치"로 전체 조립이 막힌다. 승인 SCRIPT 자산에서
+     * 해당 인덱스의 원문을 직접 가져와 FastAPI로 함께 보낸다.
+     */
+    @SuppressWarnings("unchecked")
+    private SceneNarration resolveSceneNarration(Long jobId, int index) {
+        String scriptMetaJson = loadAssetMeta(jobId, AssetType.SCRIPT);
+        try {
+            Map<String, Object> scriptMeta = objectMapper.readValue(scriptMetaJson, Map.class);
+            List<Map<String, Object>> sections = (List<Map<String, Object>>) scriptMeta.get("sections");
+            if (sections == null || index < 0 || index >= sections.size()) {
+                throw new IllegalStateException("승인 대본에서 scene " + index + "의 내레이션을 찾을 수 없습니다.");
+            }
+            Map<String, Object> section = sections.get(index);
+            String text = (String) section.get("text_for_tts");
+            if (text == null || text.isBlank()) text = (String) section.get("content");
+            if (text == null || text.isBlank()) text = (String) section.get("text");
+            if (text == null || text.isBlank()) {
+                throw new IllegalStateException("승인 대본의 scene " + index + " 내레이션이 비어 있습니다.");
+            }
+            return new SceneNarration(text, (String) section.get("section"));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("승인 대본 파싱 실패: " + e.getMessage(), e);
+        }
     }
 
     private static boolean isProviderCreditRequired(Throwable error) {
@@ -321,6 +413,7 @@ public class ImagesService {
         if (job.getStatus() == JobStatus.IMAGES_PENDING) {
             job.setStatus(JobStatus.IMAGES_RETRY_REQUIRED);
             jobRepository.save(job);
+            operatorAlertService.notifyJobNeedsAttention(jobId, job.getTitle(), "Gemini Pro 배치 영구 실패: " + reason);
         }
         log.error("Gemini Pro Batch marked retry-required after terminal failure: jobId={}, reason={}", jobId, reason);
     }

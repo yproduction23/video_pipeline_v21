@@ -19,7 +19,7 @@ from app.utils.scene_visual_quality_contract import build_scene_visual_quality_c
 
 logger = logging.getLogger(__name__)
 VISUAL_QA_MODEL = "gemini-3.7-flash"
-VISUAL_QA_POLICY_VERSION = 19
+VISUAL_QA_POLICY_VERSION = 21
 _VISUAL_QA_GEMINI_OPEN_UNTIL = 0.0
 _VISUAL_QA_GEMINI_COOLDOWN_SECONDS = 600.0
 
@@ -186,13 +186,17 @@ def assess_local_edit_preservation(
         except (requests.Timeout, requests.ConnectionError) as exc:
             _open_gemini_visual_qa_circuit()
             logger.warning("Gemini local-edit QA network failure; 10분간 Claude 검수 사용: %s", exc)
-        if response is not None and (response.status_code == 429 or response.status_code >= 500):
+        # 2026-10-14 job 18 재현: Gemini 선불 크레딧이 소진되면 402가 오는데,
+        # 이전엔 429/5xx만 폴백 대상이라 402는 Claude 검수로 안 넘어가고
+        # 바로 scene을 통째로 보류시켰다(비전 검수가 끊긴 동안 생성 자체가
+        # 멈춤). 402도 같은 "검수를 완료 못 함" 상태이므로 동일하게 취급한다.
+        if response is not None and (response.status_code in (402, 429) or response.status_code >= 500):
             _open_gemini_visual_qa_circuit()
     verdict = None
     if response is not None and response.status_code == 200:
         parts = (response.json().get("candidates") or [{}])[0].get("content", {}).get("parts") or []
         verdict = _parse_json(next((part.get("text") for part in parts if part.get("text")), ""))
-    elif response is None or response.status_code == 429 or response.status_code >= 500:
+    elif response is None or response.status_code in (402, 429) or response.status_code >= 500:
         verdict = _claude_visual_review(payload)
     if not verdict:
         status = response.status_code if response is not None else "network"
@@ -204,11 +208,20 @@ def assess_local_edit_preservation(
     )
     if any(str(category).startswith("text_") for category in categories):
         required = (*required, "repaired_surface_clean", "no_blur_smear_or_ghosting")
-    passed = (
-        all(bool(verdict.get(key)) for key in required)
-        and float(verdict.get("preservation_score", 0) or 0) >= 75
-        and str(verdict.get("decision") or "").lower() == "accept"
-    )
+    all_required_met = all(bool(verdict.get(key)) for key in required)
+    decision = str(verdict.get("decision") or "").lower()
+    # 2026-10-12 job 14 재현(씬4 score=72, 씬7 score=70, 같은 재시도 라운드에서
+    # 두 번 확인): 모델이 모든 세부 항목을 통과시키고 decision="accept"라고
+    # 명시했는데도, 점수가 75 미만이라는 이유만으로 그 판정을 뒤집어 폐기해
+    # 멀쩡한 후보가 매번 국소 수정 예산을 하나씩 낭비시켰다. 모델 자신의
+    # accept/reject 판정이 명확하면 그걸 우선하고, 점수는 decision이 모호할
+    # 때만(즉 "accept"도 "reject"도 아닐 때) 보조 기준으로 쓴다.
+    if decision == "accept" and all_required_met:
+        passed = True
+    elif decision == "reject":
+        passed = False
+    else:
+        passed = all_required_met and float(verdict.get("preservation_score", 0) or 0) >= 75
     return {"passed": passed, "status": "completed", **verdict}
 
 
@@ -245,7 +258,17 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
         report["warnings"].append("visual_qa_no_gemini_key")
         return report
 
-    eligible = [scene for scene in scenes if Path(str(scene.get("final_image_path") or scene.get("image_path") or "")).exists()]
+    # 2026-10-15 job 18 재현: 장면에 image_path/final_image_path가 둘 다 없을
+    # 때 "" or ""가 되고, pathlib은 빈 문자열을 현재 디렉터리(".")로 봐서
+    # Path("").exists()가 True를 반환한다 — 이미지가 아예 없는 장면(슬라이드형
+    # 예산 초과 등으로 생성 자체가 실패한 장면)이 검수 대상으로 잘못
+    # 들어와, 아래에서 scene["image_path"] 직접 접근이 KeyError로 죽었다.
+    # 두 경로 모두 비어 있으면 애초에 후보에서 제외한다.
+    eligible = [
+        scene for scene in scenes
+        if (scene.get("final_image_path") or scene.get("image_path"))
+        and Path(str(scene.get("final_image_path") or scene.get("image_path"))).exists()
+    ]
     eligible.sort(key=_review_priority, reverse=True)
     # 5분 영상의 모든 장면을 검수할 수 있도록 기존 24장 하드캡을 제거한다.
     # 운영자가 명시한 상한만 따르며 0 이하는 전체 장면을 뜻한다.
@@ -254,7 +277,7 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
     for scene in eligible[:review_limit]:
         index = int(scene.get("index", 0))
         try:
-            image_path = Path(str(scene.get("final_image_path") or scene["image_path"]))
+            image_path = Path(str(scene.get("final_image_path") or scene.get("image_path") or ""))
             image_sha256 = _image_sha256(image_path)
             cached_review = scene.get("visual_qa_review")
             if (
@@ -366,8 +389,14 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                 "except when this scene supplies an explicit composition, camera, position, or occupancy plan. "
                 "Apply one shared acceptance floor without forcing identical scene direction. The face construction must be intentional and readable at the shown scale; "
                 "closed or simplified eyes are allowed only when coherent whites, brows, mouth, and acting make the expression deliberate. Judge wardrobe and expression by whether "
-                "they perform this scene's supplied role, not by pixel similarity to one reference. Require the same original 2D editorial-comic family, narration-specific causal story, "
-                "and information-rich economic setting in every scene. A deterministic typography surface must remain a bounded subordinate in-world prop rather than dominating the frame. "
+                "they perform this scene's supplied role, not by pixel similarity to one reference. Require the same original 2D editorial-comic family and narration-specific causal story in every scene. "
+                + (
+                    "Also require an information-rich economic or financial setting appropriate to this scene; score finance_specificity on how well it delivers that. "
+                    if chart_expected else
+                    "This scene is explicitly non-financial (general scene_type) — do NOT require economic, market, or financial setting, props, or iconography here, and do not penalize its absence. "
+                    "Score finance_specificity as not applicable to this scene (return 100) and judge it only on narration-specific causal story and setting richness instead. "
+                ) +
+                "A deterministic typography surface must remain a bounded subordinate in-world prop rather than dominating the frame. "
                 "Detect a genuinely different character design and inspect MAIN GOLD-COIN MASCOT anatomy separately from supporting people. A scene costume may wrap modestly below the coin rim, "
                 "so do not reject that accepted Job52-style costume extension by itself. Reject when the coin is no longer the dominant unified head-and-upper-body identity, when a narrow-necked independent human trunk appears, "
                 "or when visible mascot legs are long human proportions instead of compact legs roughly half the coin diameter or shorter. Audience members may have their own hands, "
@@ -454,7 +483,9 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                         "Gemini visual QA network failure for scene %s; 10분간 Claude 검수 사용: %s",
                         index, exc,
                     )
-                if response is not None and (response.status_code == 429 or response.status_code >= 500):
+                # 2026-10-14 job 18 재현: Gemini 402(선불 크레딧 소진)도 429/5xx와
+                # 같은 "검수 완료 못 함" 상태로 취급해 Claude 폴백을 탄다.
+                if response is not None and (response.status_code in (402, 429) or response.status_code >= 500):
                     _open_gemini_visual_qa_circuit()
             verdict = None
             if response is not None and response.status_code == 200:
@@ -472,13 +503,19 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                         index,
                     )
                     verdict = _claude_visual_review(payload)
-            elif response is None or response.status_code == 429 or response.status_code >= 500:
+            elif response is None or response.status_code in (402, 429) or response.status_code >= 500:
                 verdict = _claude_visual_review(payload)
             if not verdict:
                 status = response.status_code if response is not None else "network"
                 report["warnings"].append(f"visual_qa_unavailable:{status}:{index}")
                 continue
-            score_keys = ["scene_match", "finance_specificity", "composition", "style_adherence", "text_integrity"]
+            score_keys = ["scene_match", "composition", "style_adherence", "text_integrity"]
+            # 일반형(비금융) 장면은 애초에 경제적 배경이 없는 게 정상이므로
+            # finance_specificity를 종합 점수에 넣으면 정상 장면이 구조적으로
+            # 불리해진다. chart_expected(=scene_type != "general")와 동일한
+            # 기준으로만 포함한다.
+            if chart_expected:
+                score_keys.append("finance_specificity")
             if character_required:
                 score_keys.append("character_identity")
             scores = [float(verdict.get(key, 0)) for key in score_keys]
@@ -670,9 +707,33 @@ def assess_visual_alignment(scenes: list[dict[str, Any]], *, enabled: bool, max_
                 and not bool(verdict.get("composition_plan_match"))
             ):
                 hard_failures.append("scene_composition_plan_mismatch")
-            retry = bool(hard_failures) or score < 78 or str(verdict.get("decision", "")).lower() == "review"
+            # 2026-10-13 job 14 씬2 재현: 하드 실패가 하나도 없고 모델 스스로도
+            # "accept"라고 판단했는데, 5개 세부 점수가 고르게 70점대라는 이유만으로
+            # 평균이 78 문턱을 살짝 못 넘겨 버려지는 사례를 실제로 확인했다(평균
+            # 71, decision=accept, 구체적인 긍정 reason). assess_local_edit_preservation에
+            # 이미 적용한 것과 같은 원칙: 하드 실패가 없으면 모델의 종합 판정을
+            # 숫자 평균보다 우선한다. "review"는 그대로 재시도를 강제한다.
+            decision = str(verdict.get("decision", "")).lower()
+            if hard_failures:
+                retry = True
+            elif decision == "accept":
+                retry = False
+            elif decision == "review":
+                retry = True
+            else:
+                retry = score < 78
             if retry and not hard_failures:
                 hard_failures.append("visual_quality_floor")
+                # 2026-10-13 job 14 씬2 재현: "visual_quality_floor"만 찍히면
+                # 어느 세부 점수가 낮았는지 전혀 남지 않아 사후 분석이 불가능했다.
+                # 실제 생성 호출은 아니므로 추가 비용 없이 세부 점수를 로그에 남긴다.
+                logger.warning(
+                    "scene %s visual_quality_floor 세부 점수: %s (decision=%s, reason=%s)",
+                    index,
+                    {key: verdict.get(key) for key in score_keys},
+                    verdict.get("decision"),
+                    str(verdict.get("reason") or "")[:200],
+                )
             report["reviewed"].append({
                 "index": index,
                 "score": score,

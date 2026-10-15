@@ -49,6 +49,10 @@ export const jobsApi = {
     apiClient.post(`/jobs/${id}/images/scenes/${index}/split`, { part1, part2 }).then(r => r.data),
   setSceneKling: (id, index, enabled) =>
     apiClient.post(`/jobs/${id}/images/scenes/${index}/kling`, { enabled }).then(r => r.data),
+  acceptHeldScene: (id, index) =>
+    apiClient.post(`/jobs/${id}/images/scenes/${index}/accept`, {}).then(r => r.data),
+  approveSceneRetry: (id, index, overrideCooldown = false) =>
+    apiClient.post(`/jobs/${id}/images/scenes/${index}/approve-retry`, { overrideCooldown }).then(r => r.data),
 
   // 롱폼
   generateLongform: (id) => apiClient.post(`/jobs/${id}/longform/generate`).then(r => r.data),

@@ -78,7 +78,7 @@ class BenchmarkServiceTest {
     void recentUploadsWithoutChannelsSkipsYoutubeCall() {
         when(referenceChannelService.listForOwner("channel_a")).thenReturn(List.of());
 
-        Map<String, Object> result = service.recentUploads("channel_a", 7);
+        Map<String, Object> result = service.recentUploads("channel_a", null, 7);
 
         assertThat((List<?>) result.get("videos")).isEmpty();
         assertThat(result.get("empty")).isEqualTo(true);
@@ -91,9 +91,24 @@ class BenchmarkServiceTest {
         when(referenceChannelService.listForOwner("channel_a")).thenReturn(List.of(channel));
         when(fastApiClient.getRecentUploads(List.of("UC1"), 7)).thenReturn(Map.of("videos", List.of(), "channels", List.of()));
 
-        service.recentUploads("channel_a", 7);
+        service.recentUploads("channel_a", null, 7);
 
         verify(fastApiClient).getRecentUploads(List.of("UC1"), 7);
+    }
+
+    @Test
+    void recentUploadsScopedToOneReferenceChannelIgnoresOwner() {
+        // 2026-10-15: 벤치마크 채널 하나를 클릭해 그 채널 영상만 보는 경로 —
+        // referenceChannelId가 오면 listForOwner는 아예 호출되지 않아야 한다.
+        ReferenceChannel channel = ReferenceChannel.builder().id(9L).channelId("UCecKUJ_BDvc2iEtB-n3VZ8g").displayName("알기쉬운 경제스쿨").active(true).build();
+        when(referenceChannelService.requireActiveChannel(9L)).thenReturn(channel);
+        when(fastApiClient.getRecentUploads(List.of("UCecKUJ_BDvc2iEtB-n3VZ8g"), 7))
+                .thenReturn(Map.of("videos", List.of(), "channels", List.of()));
+
+        service.recentUploads("channel_a", 9L, 7);
+
+        verify(fastApiClient).getRecentUploads(List.of("UCecKUJ_BDvc2iEtB-n3VZ8g"), 7);
+        verify(referenceChannelService, never()).listForOwner(any());
     }
 
     @Test

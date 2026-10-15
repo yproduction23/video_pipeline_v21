@@ -106,6 +106,20 @@ public class CostService {
     }
 
     /**
+     * 2026-10-12 job 14 재현: ImagesService가 이미지 생성 전 "남은 예산"을
+     * 계산할 때 getTotal()(Spring+Worker 합산)을 쓰면, FastAPI의
+     * budget.py::before_attempt()가 Worker 누적 비용을 자기 장부에서 다시
+     * 더해 비교하므로 같은 금액이 양쪽에서 이중으로 차감된다. Worker 누적
+     * 비용이 전체 예산의 절반을 넘으면 재시도를 아무리 반복해도 구조적으로
+     * 통과할 수 없는 상태가 된다. 이미지/모션 생성 전 "남은 예산"은 Spring이
+     * 직접 추적하는 비용(TTS/Claude 등)만 빼야 하고, Worker 쪽 누적 비용은
+     * FastAPI 자신의 장부가 단독으로 추적·집행한다.
+     */
+    public BigDecimal getSpringOnlyTotal(Long jobId) {
+        return totalInSpringBudgetKrw(jobId).setScale(0, RoundingMode.HALF_UP);
+    }
+
+    /**
      * Spring 원장(Claude/TTS 등)과 Worker 원장(Gemini/Fal 등)의 전체 누적 비용(KRW)을 구한다.
      */
     public BigDecimal calculateTotalCostKrw(Long jobId) {

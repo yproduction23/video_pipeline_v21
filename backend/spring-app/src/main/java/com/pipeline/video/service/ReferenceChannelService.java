@@ -33,6 +33,15 @@ public class ReferenceChannelService {
     }
 
     @Transactional(readOnly = true)
+    public ReferenceChannel requireActiveChannel(long id) {
+        ReferenceChannel channel = requireChannel(id);
+        if (!channel.isActive()) {
+            throw new IllegalArgumentException("비활성화된 레퍼런스 채널입니다.");
+        }
+        return channel;
+    }
+
+    @Transactional(readOnly = true)
     public List<ReferenceChannel> listForOwner(String ownerChannelId) {
         String owner = normalizeOwner(ownerChannelId);
         if (owner == null) {

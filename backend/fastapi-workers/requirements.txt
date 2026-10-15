@@ -4,6 +4,11 @@ redis==5.2.0
 pydantic==2.9.2
 python-dotenv==1.0.1
 faster-whisper==1.1.0
+# 2026-10-14 재현: faster-whisper 1.1.0의 audio.py가 av.open(..., metadata_errors=...)을
+# 호출하는데, 상한 미지정 상태로 pip가 최신 av(19.x)를 설치하면 그 인자가 없어
+# "open() got an unexpected keyword argument 'metadata_errors'"로 TTS 발화 검증이
+# 매번 조용히 실패하고 불필요한 재시도(API 3배 과금)만 반복됐다. 호환 버전으로 고정한다.
+av==14.2.0
 rapidfuzz==3.10.0
 ffmpeg-python==0.2.0
 boto3==1.35.0

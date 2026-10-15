@@ -1,0 +1,11 @@
+# 로컬 개발용 오버라이드 (docker-compose.yml과 자동 병합됨).
+# FastAPI 소스를 바인드 마운트하고 --reload를 켜서, 코드를 고칠 때마다
+# docker cp + 컨테이너 재시작을 반복하지 않아도 되게 한다.
+# 운영 배포에는 영향 없음 — docker-compose.yml만으로 빌드하는 이미지는 그대로.
+services:
+  fastapi-workers:
+    volumes:
+      - ./backend/fastapi-workers:/app
+      - ./backend/shared:/app/shared
+      - fastapi_data:/app/data
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]

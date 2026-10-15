@@ -74,7 +74,7 @@ class ScriptAutoModeGateTest {
         ScriptGenerateResponse response = response(true);
         when(fastApiClient.generateScript(
                 eq(1L), eq("삼성전자 실적"), eq(5), eq("INDIVIDUAL_STOCK"),
-                isNull(), eq(false), isNull(), eq("AUTO"), isNull(), isNull()
+                isNull(), eq(false), isNull(), eq("AUTO"), isNull(), isNull(), isNull()
         )).thenReturn(response);
 
         scriptService.generate(1L, "AUTO");
@@ -88,7 +88,7 @@ class ScriptAutoModeGateTest {
         ScriptGenerateResponse response = response(false);
         when(fastApiClient.generateScript(
                 eq(1L), eq("삼성전자 실적"), eq(5), eq("INDIVIDUAL_STOCK"),
-                isNull(), eq(false), isNull(), eq("AUTO"), isNull(), isNull()
+                isNull(), eq(false), isNull(), eq("AUTO"), isNull(), isNull(), isNull()
         )).thenReturn(response);
         doNothing().when(scriptService).confirm(
                 eq(1L), eq("검증된 대본"), eq(List.of()), eq("AUTO"));

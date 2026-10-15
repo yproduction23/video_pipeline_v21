@@ -546,6 +546,17 @@ def _job_path(job_id: int, name: str) -> Path:
     return path / name
 
 
+def approve_scene_retry(job_id: int, index: int, *, approved_by: str, override_cooldown: bool = False) -> dict:
+    """사람이 명시적으로 승인한 경우에만 needs_review 상태의 씬 요청 상한을
+    초기화한다 (image_request_control.ImageRequestControl.operator_reopen 참고).
+    scope는 reserve()가 쓰는 것과 동일한 문자열(해당 Job의 cost_ledger.json
+    절대경로)이어야 같은 SQLite 행을 가리킨다."""
+    scope = str(_job_path(job_id, "cost_ledger.json").resolve())
+    return ImageRequestControl().operator_reopen(
+        scope=scope, scene=f"scene:{index}", approved_by=approved_by, override_cooldown=override_cooldown,
+    )
+
+
 def _load_ledger(path: Path) -> dict[str, Any]:
     try:
         ledger = json.loads(path.read_text(encoding="utf-8"))

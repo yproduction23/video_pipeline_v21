@@ -18,8 +18,10 @@ import hashlib
 import math
 import logging
 import random
+import shutil
 import time
 import uuid
+from datetime import datetime, timezone
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -27,7 +29,7 @@ from PIL import Image, ImageFilter, ImageStat
 from app.utils.process_manager import is_job_stopped
 from app import runtime_config
 from app.utils.quality_gate import enrich_scene_plan, assess_images, persist_quality_report
-from app.utils.art_direction import direct_scenes, plan_image_quality_tiers, compile_editorial_prompt, assess_art_diversity, flag_archetype_content_mismatch
+from app.utils.art_direction import direct_scenes, plan_image_quality_tiers, compile_editorial_prompt, assess_art_diversity, flag_archetype_content_mismatch, keyword_fallback
 from app.utils.scene_entity_binder import bind_scene_entities, compute_grounding_score
 from app.utils.scene_visual_quality_contract import (
     build_scene_visual_quality_contract,
@@ -56,6 +58,7 @@ from app.utils.narration_contract import (
     verify_tts_against_script_contract,
 )
 from app.utils.operational_contract_audit import build_operational_contract_audit
+from app.services.scene_preparation import prepare_job_scenes
 from app.utils.gemini_pressure import gemini_pressure
 from app.utils.image_job_lock import acquire_image_job_lock, release_image_job_lock
 from app.utils.retry_policy import classify_image_error, error_signature
@@ -102,7 +105,20 @@ from app.utils.entity_english_map import REAL_ENTITY_ENGLISH_MAP, get_entity_eng
 
 STYLE_SUFFIX = (
     "original 2D Korean finance comic, bold ink outlines, cel shading, "
-    "at most one round gold coin mascot, no secondary mascot, contextual background people allowed when the scene needs them"
+    "at most one round gold coin mascot, no secondary mascot, contextual background people allowed when the scene needs them. "
+    # 2026-10-12 사용자 피드백(job 14 scene 3): "Korean"이 그림체 장르 이름일
+    # 뿐, 배경·소품·복장을 한국적으로 그리라는 지시가 없어 군대 장면이
+    # 국적 불명의 범용 군사기지처럼 나왔다. 모든 장면 프롬프트에 공통으로
+    # 붙는 이 상수에 한국 시각 정체성 요소를 넣어 전체 영상에 반영한다.
+    # 2026-10-12 사용자 피드백(job 14 scene 4): "Taegeukgi colors or emblem"처럼
+    # 모호하게 쓰니 Gemini가 실제 태극 문양 대신 횃불 같은 임의의 국가 상징을
+    # 지어냈다. 실제 구성(흰 바탕·빨강파랑 태극 원·검은 4괘)을 명시한다.
+    "Ground every scene in recognizably Korean visual identity: the authentic Taegeukgi flag design — a white field with a "
+    "red-and-blue taegeuk circle and four black trigrams at the corners, never a substitute symbol such as a torch or flame — "
+    "where a flag fits the scene; ROK military-style cap insignia and rank markings on any uniformed figure; a Korean "
+    "broadcast news-studio look (KBS/SBS/YTN-style anchor desk, backdrop, and lighting) for studio scenes; and Korean "
+    "public-institution or school architecture and interior details. Any signage or props should look Korean in color, "
+    "layout, and typography style without inventing readable Hangul or English text beyond what is separately approved."
 )
 
 # LLM이 같은 승인 장면을 조금 다르게 표현해도 재개 실행이 이미 승인된 PNG를
@@ -895,6 +911,88 @@ def _held_scene_candidate_image_path(job_dir: Path, index: int) -> str | None:
     return str(display_candidate) if display_candidate.is_file() else None
 
 
+def accept_held_scene_as_is(
+    job_id: int, index: int, *, text: str, accepted_by: str | None = None,
+    section: str | None = None, root: Path = Path("/app/data/jobs"),
+) -> dict:
+    """2026-10-13 사용자 요청: 자동 게이트가 보류시킨 장면이라도 사용자가 실물
+    후보 이미지를 직접 보고 괜찮다고 판단하면, 공급자를 다시 호출하지 않고 그
+    후보를 최종 이미지로 승격한다. 이 함수는 재생성을 하지 않으므로 유료 호출이
+    없고, "장면 누적 요청 상한" 같은 재시도 전용 게이트와 무관하다.
+
+    AGENTS.md 유료 이미지 canary 규정: 자동 게이트의 판정(통과/보류)과
+    사용자의 육안 판정은 다른 축이다. 이 승인은 자동 게이트를 속이는 게 아니라
+    사람의 최종 판단을 manual_scene_overrides.json에 그대로 남겨 사후 추적
+    가능하게 한다.
+    """
+    job_dir = Path(root) / str(job_id) / "images"
+    review_path = job_dir / "image_request_review.json"
+    if not review_path.exists():
+        raise ImageRequestHeld(f"scene {index}에 대한 검토 대기 상태가 없습니다")
+    try:
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise ImageRequestHeld("이미지 보류 상태 파일을 읽을 수 없음") from exc
+    if not str(text or "").strip():
+        raise ImageRequestHeld(f"scene {index}의 승인 내레이션 원문이 비어 있습니다")
+    held = list((review or {}).get("scenes") or [])
+    entry = next((scene for scene in held if int(scene.get("index", -1)) == index), None)
+    if entry is None:
+        raise ImageRequestHeld(f"scene {index}은 현재 검토 대기 목록에 없습니다")
+
+    candidate_path_str = entry.get("image_path") or _held_scene_candidate_image_path(job_dir, index)
+    if not candidate_path_str or not Path(candidate_path_str).is_file():
+        raise ImageRequestHeld(f"scene {index}의 후보 이미지 파일을 찾을 수 없습니다")
+    candidate_path = Path(candidate_path_str)
+
+    final_path = job_dir / f"scene_{index:03d}.png"
+    staged_final = final_path.with_suffix(".tmp")
+    shutil.copy2(candidate_path, staged_final)
+    os.replace(staged_final, final_path)
+    image_sha256 = hashlib.sha256(final_path.read_bytes()).hexdigest()
+
+    override_record = {
+        "index": index,
+        "accepted_at": datetime.now(timezone.utc).isoformat(),
+        "accepted_by": accepted_by or "unknown",
+        "original_status": entry.get("status"),
+        "original_reason": entry.get("reason"),
+        "source_image_path": str(candidate_path),
+        "final_image_path": str(final_path),
+        "image_sha256": image_sha256,
+    }
+    overrides_path = job_dir / "manual_scene_overrides.json"
+    try:
+        overrides = json.loads(overrides_path.read_text(encoding="utf-8")) if overrides_path.is_file() else []
+        if not isinstance(overrides, list):
+            overrides = []
+    except (ValueError, OSError):
+        overrides = []
+    overrides.append(override_record)
+    staged_overrides = overrides_path.with_suffix(".tmp")
+    staged_overrides.write_text(json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(staged_overrides, overrides_path)
+
+    remaining = [scene for scene in held if int(scene.get("index", -1)) != index]
+    write_request_review(job_dir, job_id, remaining)
+
+    return {
+        "status": "COMPLETE",
+        "job_id": job_id,
+        "scenes": [{
+            "index": index,
+            "image_path": str(final_path),
+            "text": text,
+            "section": section,
+            "generation_method": "manual_accept_held",
+            "manual_override": override_record,
+        }],
+        "held_scenes": remaining,
+        "requires_manual_review": bool(remaining),
+        "review_reasons": [scene.get("reason") for scene in remaining if scene.get("reason")],
+    }
+
+
 def _apply_info_scene_template(scene: dict) -> tuple[dict, object | None]:
     """검증 payload 기반으로만 v4 장면 계약을 주입한다."""
     template = select_template(scene, scene.get("proposed_template_id"))
@@ -1153,6 +1251,7 @@ class ImagesWorker:
         visual_mode: str | None = None,
         character_required: bool = True,
         screen_texts: list[str] | None = None,
+        is_general_scene: bool = False,
     ) -> str:
         """
         대사(narration)와 바인딩된 엔티티/수치를 읽고 내용에 맞는 시각 은유 배경/캐릭터 프롬프트를 LLM으로 생성한다.
@@ -1161,6 +1260,14 @@ class ImagesWorker:
           금융 수치는 결정론 표면 렌더러가 담당한다.
         - character_required=True일 경우 Goldie(금화 마스코트) 캐릭터가 전경의 1/3 크기로 명시 배치된다.
         - 매 씬마다 대사가 다르면 반드시 다른 프롬프트가 나와야 함
+        - is_general_scene=True(= scene_type "general", 수치·그래프 신호 없음)이면
+          시스템 프롬프트 자체가 "금융 채널 비주얼 디렉터" 프레이밍을 쓰지 않는다.
+          2026-10-12 job 14 scene 0 재현: 호출부가 이 함수의 scene_type 인자에
+          archetype(briefing_podium 등)을 우선 넣기 때문에, scene_type이 실제로는
+          "general"이어도 이 함수 안에서는 구분할 수 없었다. 그 결과 금메달/군
+          면제 논란처럼 금융과 무관한 장면도 "경제 상황을 보여주는 장면"으로
+          강제 프레이밍되어, 이후 차트 억제 지시문과 상관없이 Claude가 주가
+          차트·불꽃놀이를 서사 자체에 계속 집어넣었다.
         """
         composition = ARCHETYPE_COMPOSITION.get(scene_type, ARCHETYPE_COMPOSITION["general"])
         visual_narration = redact_financial_values_for_visual_direction(narration)
@@ -1182,6 +1289,39 @@ class ImagesWorker:
                 "- Background people may appear when the narration needs an audience, traders, shoppers, press, or workers; never add a second coin mascot.\n"
                 "- The background and information surfaces follow this scene's specific visual metaphor, not a default studio template."
             )
+        elif is_general_scene and character_required and visual_mode != "background_only":
+            system = (
+                "You are a visual director for a Korean 2D story-driven animation channel. "
+                "Convert the Korean narration into a vivid English scene description featuring the channel's Goldie (2D gold coin mascot) character. "
+                "This scene has no financial figures, charts, or market data behind it — it is a general narrative or explainer moment, not an economic report. "
+                # 2026-10-12 job 14 scene 3 재현: "주가 차트·캔들스틱·코스피"
+                # 처럼 금융 어휘로만 막으니, 비전 QA가 금융 여부와 무관하게
+                # 모든 차트/데이터 시각화를 잡는 것과 달리 일반 격자·표
+                # 형태의 비금융 데이터 보드는 안 막혔다. 범위를 넓힌다.
+                "Do not draw stock tickers, candlestick or line charts, KOSPI/market index screens, percentage arrows, or any other financial dashboard imagery. "
+                "Do not draw any other chart, grid, table, spreadsheet, schedule board, roster, or bracket either — this scene has no data to visualize at all. "
+                "Any background screens, boards, or monitors must show plain non-data content such as a presentation slide, a photo, or a text banner. "
+                # 2026-10-12 job 14 scene 2 재현: "a chalkboard"라고만 쓰고
+                # 비어있다는 말을 안 하니, Gemini가 "칠판엔 뭔가 적혀있다"는
+                # 학습 데이터 습성대로 차트를 반복해서 채워 넣었다. 칠판·
+                # 화이트보드는 명시적으로 빈 상태로 지시한다.
+                "If this scene includes a chalkboard or whiteboard, it must be shown blank and empty, with no writing, charts, or diagrams on it, unless an exact approved caption is specified elsewhere. "
+                # 2026-10-12 job 14 scene 7 재현: 국가대표 선수가 나오는 장면인데도
+                # 지시가 없어 "유럽 클럽 유니폼" 같은 국적 불명 복장이 나왔다.
+                "When this scene depicts a Korean national-team athlete, dress that figure in an authentic Korean national team kit — the Taegeuk emblem and Korea's team colors, never a generic or foreign club jersey. "
+                "The 2D gold coin mascot character stands in the foreground taking part in or reacting to this scene's actual story. "
+                "Output only the prompt text, no explanation, no markdown."
+            )
+            char_rules = (
+                "- Depict one Goldie gold-coin mascot with scene-specific size, placement, expression, costume, headwear, and action; do not copy one neutral face or navy presenter outfit into every scene.\n"
+                "- Preserve the shared round coin-character drawing language, not a frozen face sheet.\n"
+                # 2026-10-12 job 14 scene 2 재현: "배경 인물은 장면에 필요할 때만
+                # 등장"이 모호해서, 전역모라는 핵심 소품을 Goldie 대신 배경 교사가
+                # 쥐고 있는 장면이 나왔다. 핵심 소품의 소유권을 명시한다.
+                "- When this scene centers on one specific named prop (the item the narration is actually about), Goldie must be the one holding or wearing it, not a background figure; background people may only react to it.\n"
+                "- Background people may appear only when they serve this scene's story; never add a second coin mascot.\n"
+                "- The character reacts to or takes part in this scene's actual narrative moment, not a financial market event."
+            )
         elif character_required and visual_mode != "background_only":
             system = (
                 "You are a visual director for a Korean 2D financial animation channel. "
@@ -1195,6 +1335,15 @@ class ImagesWorker:
                 "- Background people may appear only when they serve the scene's economic story; never add a second coin mascot.\n"
                 "- The character reacts to or presents the economic situation in the way this particular scene requires."
             )
+        elif is_general_scene:
+            system = (
+                "You are a visual director for a Korean 2D story-driven animation channel. "
+                "Convert the Korean narration into a vivid English background scene description. "
+                "Never describe characters. Only describe the background environment and symbolic objects. "
+                "This scene has no financial figures or charts behind it. Do not draw stock tickers, market index screens, or any financial chart imagery. "
+                "Output only the prompt text, no explanation, no markdown."
+            )
+            char_rules = "- No characters, no people, no coin character, background environment only."
         else:
             system = (
                 "You are a visual director for a Korean 2D financial animation channel. "
@@ -1452,80 +1601,109 @@ Rules:
             final_path = target_dir / f"scene_{index:03d}.png"
             raw_path = target_dir / f"scene_{index:03d}_regenerate_raw.png"
             ctx["_request_raw_path"] = str(raw_path)
-            generation_prompt = _bounded_text_generation_prompt(
-                base_prompt,
-                audit_target=ctx,
-            )
 
             all_references: list[str] = []
             if character_image_path and Path(character_image_path).is_file():
                 all_references.append(character_image_path)
             all_references.extend(_load_default_references())
             character_required = bool((ctx.get("art_direction") or {}).get("character_required", True))
-            selected_references = (
-                select_contextual_reference_paths(generation_prompt, all_references)
-                if character_required else []
-            )
 
-            if character_poses_dir and Path(character_poses_dir).is_dir():
-                background_path = target_dir / f"scene_{index:03d}_regenerate_bg.png"
-                self._generate_background_layer(
-                    provider,
-                    generation_prompt,
-                    str(background_path),
-                    section,
-                    str(ctx.get("pose") or "neutral"),
-                    ctx.get("image_profile") or {},
-                    job_id=job_id,
-                    scene_key=f"background:{index}",
+            # 2026-10-14 job 18 scene 5 재현: 이 단일 장면 경로는 재시도가
+            # 전혀 없어, 비전 검수가 한 번이라도 거부하면(예: "전자발찌
+            # 착용이 나레이션과 불일치, 기본 정장 착용 상태") 바로 처리되지
+            # 않은 예외가 500으로 사용자에게 노출됐다. 메인 배치 경로처럼
+            # 교정 피드백을 반영해 몇 차례 더 시도하고, 그래도 안 되면
+            # 조용히 나쁜 이미지를 승격하지 않고 ImageRequestHeld로 보류한다
+            # (main.py가 이미 409로 매핑해 처리함).
+            max_retries = max(3, min(int(runtime_config.value("gemini_retry_max")), 8))
+            retry_feedback: dict | None = None
+            last_error: Exception | None = None
+            for attempt in range(max_retries):
+                generation_prompt = _bounded_text_generation_prompt(
+                    base_prompt,
+                    retry=attempt > 0,
+                    retry_feedback=retry_feedback,
+                    audit_target=ctx,
                 )
-                self._normalize_canvas(str(background_path))
-                self._compose_layered_scene(
-                    ctx,
-                    str(background_path),
-                    character_poses_dir,
-                    str(ctx.get("pose") or "neutral"),
-                    str(raw_path),
-                    job_id,
+                selected_references = (
+                    select_contextual_reference_paths(generation_prompt, all_references)
+                    if character_required else []
                 )
-                generation_method = "single_scene_operational_composite"
+                try:
+                    if character_poses_dir and Path(character_poses_dir).is_dir():
+                        background_path = target_dir / f"scene_{index:03d}_regenerate_bg.png"
+                        self._generate_background_layer(
+                            provider,
+                            generation_prompt,
+                            str(background_path),
+                            section,
+                            str(ctx.get("pose") or "neutral"),
+                            ctx.get("image_profile") or {},
+                            job_id=job_id,
+                            scene_key=f"background:{index}",
+                        )
+                        self._normalize_canvas(str(background_path))
+                        self._compose_layered_scene(
+                            ctx,
+                            str(background_path),
+                            character_poses_dir,
+                            str(ctx.get("pose") or "neutral"),
+                            str(raw_path),
+                            job_id,
+                        )
+                        generation_method = "single_scene_operational_composite"
+                    else:
+                        provider.generate_image(
+                            prompt=generation_prompt,
+                            output_path=str(raw_path),
+                            section=section,
+                            keyword=narration[:30],
+                            character_image_path=selected_references[0] if selected_references else None,
+                            character_image_paths=selected_references,
+                            character_style_prompt=character_style_prompt,
+                            image_provider=runtime_config.value("image_provider"),
+                            openai_job_id=job_id,
+                            openai_scene_key=f"image:{index}",
+                            gemini_model=str((ctx.get("image_profile") or {}).get("model") or "gemini-3-pro-image"),
+                            gemini_image_size=str((ctx.get("image_profile") or {}).get("image_size") or "2K"),
+                            gemini_service_tier=runtime_config.value("gemini_service_tier"),
+                            gemini_max_attempts=1,
+                            gemini_retry_base_seconds=runtime_config.value("gemini_pro_retry_base_seconds"),
+                            gemini_request_audit=ProviderRequestAudit.for_job(
+                                job_id=job_id,
+                                scene_key=f"image:{index}",
+                                model=str((ctx.get("image_profile") or {}).get("model") or "gemini-3-pro-image"),
+                            ),
+                            style_locked=True,
+                            gemini_reference_contract_declared=True,
+                        )
+                        generation_method = "single_scene_operational"
+
+                    if not raw_path.is_file() or raw_path.stat().st_size <= 15_000:
+                        raise RuntimeError("단일 장면 공급자가 검증 가능한 이미지를 반환하지 않았습니다.")
+                    self._normalize_canvas(str(raw_path))
+                    _inspect_generated_textless_image(ctx, str(raw_path))
+
+                    staged_final = target_dir / f"scene_{index:03d}_regenerate_final.png"
+                    shutil.copy2(raw_path, staged_final)
+                    self._apply_image_overlays(ctx, str(staged_final))
+                    _inspect_generated_visual_image(ctx, str(staged_final))
+                    os.replace(staged_final, final_path)
+                    break
+                except (GeneratedImageTextDetectedError, GeneratedImageVisualContractError) as exc:
+                    last_error = exc
+                    retry_feedback = (
+                        exc.review if isinstance(exc, GeneratedImageVisualContractError)
+                        else {"failure_categories": ["text_unexpected_or_malformed"], "reason": str(exc)}
+                    )
+                    logger.warning(
+                        "단일 장면 재생성 scene %s QA 거부(시도 %s/%s): %s",
+                        index, attempt + 1, max_retries, exc,
+                    )
             else:
-                provider.generate_image(
-                    prompt=generation_prompt,
-                    output_path=str(raw_path),
-                    section=section,
-                    keyword=narration[:30],
-                    character_image_path=selected_references[0] if selected_references else None,
-                    character_image_paths=selected_references,
-                    character_style_prompt=character_style_prompt,
-                    image_provider=runtime_config.value("image_provider"),
-                    openai_job_id=job_id,
-                    openai_scene_key=f"image:{index}",
-                    gemini_model=str((ctx.get("image_profile") or {}).get("model") or "gemini-3-pro-image"),
-                    gemini_image_size=str((ctx.get("image_profile") or {}).get("image_size") or "2K"),
-                    gemini_service_tier=runtime_config.value("gemini_service_tier"),
-                    gemini_max_attempts=1,
-                    gemini_retry_base_seconds=runtime_config.value("gemini_pro_retry_base_seconds"),
-                    gemini_request_audit=ProviderRequestAudit.for_job(
-                        job_id=job_id,
-                        scene_key=f"image:{index}",
-                        model=str((ctx.get("image_profile") or {}).get("model") or "gemini-3-pro-image"),
-                    ),
-                    style_locked=True,
-                    gemini_reference_contract_declared=True,
-                )
-                generation_method = "single_scene_operational"
-
-            if not raw_path.is_file() or raw_path.stat().st_size <= 15_000:
-                raise RuntimeError("단일 장면 공급자가 검증 가능한 이미지를 반환하지 않았습니다.")
-            self._normalize_canvas(str(raw_path))
-            _inspect_generated_textless_image(ctx, str(raw_path))
-
-            staged_final = target_dir / f"scene_{index:03d}_regenerate_final.png"
-            shutil.copy2(raw_path, staged_final)
-            self._apply_image_overlays(ctx, str(staged_final))
-            _inspect_generated_visual_image(ctx, str(staged_final))
-            os.replace(staged_final, final_path)
+                raise ImageRequestHeld(
+                    f"scene {index} 단일 재생성이 {max_retries}회 모두 비전 계약을 통과하지 못함: {last_error}"
+                ) from last_error
 
             ctx.update({
                 "image_path": str(final_path),
@@ -1560,149 +1738,25 @@ Rules:
                   lora_scale: float = 1.0, autonomy_mode: str | None = None,
                   budget_limit_krw: int | None = None, budget_policy_version: str | None = None,
                   scene_indices: list[int] | None = None) -> dict:
-        market_snapshot = {}
-        self.market_snapshot = {}
-        self.evidence_audit = {}
         self.visual_mix_plan: dict = {}
-        self.tts_subtitle_sync: dict = {"passed": None, "reason": "tts_metadata_not_supplied"}
-        script_data: dict = {}
-        # scenes_meta가 주어지지 않은 경우 script_meta_json에서 복원
-        if script_meta_json:
-            try:
-                import json
-                script_data = json.loads(script_meta_json)
-                if isinstance(script_data, str):
-                    script_data = json.loads(script_data)
-                market_snapshot = script_data.get("market_snapshot") or {}
-                self.market_snapshot = market_snapshot
-                if not scenes_meta:
-                    scenes_meta = script_data.get("sections") or script_data.get("scenes") or []
-                if not scenes_meta and script_data.get("script"):
-                    import re
-                    raw_script = script_data.get("script", "").strip()
-                    parts = [p.strip() for p in re.split(r'(?m)^##\s*|\n{2,}', raw_script) if p.strip()]
-                    total_parts = len(parts)
-                    section_keys = ["intro", "background", "data", "scenario", "action", "conclusion"]
-                    for idx, part in enumerate(parts):
-                        ratio = idx / max(total_parts - 1, 1) if total_parts > 1 else 0
-                        section_type = section_keys[min(int(ratio * len(section_keys)), len(section_keys) - 1)]
-                        scenes_meta.append({
-                            "title": f"Scene {idx + 1}",
-                            "content": part,
-                            "text": part,
-                            "prompt": "A Korean finance editorial comic scene with one clear visual metaphor and specific business context.",
-                            "section": section_type
-                        })
-                logger.info(f"script_meta_json에서 {len(scenes_meta)}개 씬 복원 성공")
-            except Exception as e:
-                logger.error(f"script_meta_json에서 씬 목록 추출 실패: {e}")
-                scenes_meta = []
-
-        # 기존 이미지 생성 경로는 유지한다. 다만 TTS 메타데이터가 함께 온
-        # 정상 롱폼 경로에서는 이미지가 다른 대본에서 출발하지 않았는지 먼저 막는다.
-        if tts_meta_json and script_data:
-            try:
-                tts_data = json.loads(tts_meta_json)
-                if isinstance(tts_data, str):
-                    tts_data = json.loads(tts_data)
-                contract = script_data.get("narration_contract") or build_script_contract(
-                    str(script_data.get("script") or ""),
-                    list(script_data.get("sections") or script_data.get("scenes") or []),
-                )
-                narration_sync = verify_tts_against_script_contract(tts_data, contract)
-                scenes_meta, sentence_boundary_sync = normalize_scene_sentence_boundaries(
-                    list(scenes_meta),
-                )
-                caption_sync = bind_caption_chunks_to_scenes(
-                    list(scenes_meta),
-                    list(tts_data.get("chunks") or []),
-                )
-                tts_chunks = list(tts_data.get("chunks") or [])
-                for scene, mapping in zip(scenes_meta, caption_sync["mappings"]):
-                    narration = str(
-                        scene.get("text_for_tts") or scene.get("content") or scene.get("text") or ""
-                    ).strip()
-                    planned = scene.get("caption_chunk_plan")
-                    if isinstance(planned, dict) and isinstance(planned.get("chunks"), list):
-                        planned_texts = [str(item.get("text") or "") for item in planned["chunks"]]
-                        actual_texts = [
-                            str(item.get("text") or "")
-                            for item in tts_chunks[
-                                mapping["chunk_start_index"]:mapping["chunk_end_index"] + 1
-                            ]
-                        ]
-                        if planned_texts != actual_texts:
-                            raise RuntimeError(
-                                f"장면 {mapping['scene_index'] + 1}의 SCRIPT 예상 자막 청크와 "
-                                "실제 TTS 자막 청크가 다릅니다. 설정 변경 후 TTS를 재사용할 수 없습니다."
-                            )
-                    scene["subtitle_text"] = narration
-                    scene["caption_chunk_contract"] = mapping
-                    # 이미지 프롬프트가 설명해야 하는 의미 원문도 동일한 장면
-                    # 텍스트 해시로 고정한다. 실제 자막 문구를 이미지 안에
-                    # 그리라는 뜻이 아니라, 이미지의 설명 대상 계보이다.
-                    scene["caption_image_contract"] = {
-                        "version": mapping["version"],
-                        "scene_text_sha256": mapping["scene_text_sha256"],
-                        "prompt_semantic_source_sha256": mapping["scene_text_sha256"],
-                        "caption_compact_sha256": mapping["caption_compact_sha256"],
-                        "chunk_start_index": mapping["chunk_start_index"],
-                        "chunk_end_index": mapping["chunk_end_index"],
-                        "transition_on_caption_boundary": True,
-                    }
-                self.tts_subtitle_sync = {
-                    **narration_sync,
-                    "scene_sentence_boundary": sentence_boundary_sync,
-                    "caption_scene_contract_version": caption_sync["version"],
-                    "scene_count": caption_sync["scene_count"],
-                    "all_scene_boundaries_on_caption_boundaries": True,
-                    "scene_mappings": caption_sync["mappings"],
-                }
-            except Exception as exc:
-                raise RuntimeError(f"이미지 단계 대본·TTS·자막 계보 검증 실패: {exc}") from exc
-
-        if not scenes_meta:
-            scenes_meta = []
-        else:
-            # 이전 대본 자산도 재생성 없이 최신 장면 로컬 문자 계약을 적용한다.
-            # 기존 명시 screen_texts는 보존하고, 빈 씬만 승인 대본에서 추출한다.
-            scenes_meta = attach_scene_screen_texts(scenes_meta)
-        still_image_pilot = bool(script_data.get("still_image_pilot"))
-        if still_image_pilot:
-            test_budget_limit = int(runtime_config.value("gemini_test_image_budget_krw"))
-            if test_budget_limit <= 0:
-                raise RuntimeError("정지 이미지 파일럿 예산은 0원보다 커야 합니다.")
-            budget_limit_krw = min(
-                test_budget_limit,
-                int(budget_limit_krw) if budget_limit_krw is not None else test_budget_limit,
-            )
-
-        if scenes_meta and bool(runtime_config.value("article_evidence_auto_enabled")):
-            try:
-                from app.services.article.evidence_planner import (
-                    ArticleEvidencePlanner,
-                    NarrationHashMismatch,
-                )
-
-                planned = ArticleEvidencePlanner().attach(
-                    job_id=job_id,
-                    scenes=scenes_meta,
-                    verified_facts=list(script_data.get("verified_facts") or []),
-                )
-                scenes_meta = planned.scenes
-                self.evidence_audit = planned.audit
-            except NarrationHashMismatch:
-                raise
-            except Exception as exc:
-                # Public news is an optional evidence enhancement.  Search,
-                # publisher, or capture failures preserve the approved scene.
-                logger.warning("automatic article evidence planning skipped: %s", exc)
-                self.evidence_audit = {
-                    "job_id": job_id,
-                    "status": "unavailable",
-                    "reason": str(exc),
-                    "selected": [],
-                }
+        # 2026-10-15: 장면 목록 복원 + 대본·TTS·자막 계보 검증 + 기사 증거
+        # 자동 부착은 모든 시각 모드가 공유한다 — slides_worker.py도 동일
+        # 함수를 호출한다(app/services/scene_preparation.py).
+        prepared = prepare_job_scenes(
+            job_id=job_id,
+            tts_meta_json=tts_meta_json,
+            script_meta_json=script_meta_json,
+            scenes_meta=scenes_meta,
+            budget_limit_krw=budget_limit_krw,
+        )
+        scenes_meta = prepared.scenes_meta
+        script_data = prepared.script_data
+        market_snapshot = prepared.market_snapshot
+        self.market_snapshot = prepared.market_snapshot
+        self.evidence_audit = prepared.evidence_audit
+        self.tts_subtitle_sync = prepared.tts_subtitle_sync
+        budget_limit_krw = prepared.budget_limit_krw
+        still_image_pilot = prepared.still_image_pilot
 
         # 기사 캡처가 확정된 뒤에만 전체 대본의 장면 계보를 세 유형으로
         # 배정한다. 원문·TTS 문장·장면 순서는 바꾸지 않는다.
@@ -2208,6 +2262,7 @@ Rules:
                     visual_mode=b_visual_mode,
                     character_required=character_required,
                     screen_texts=list(scene.get("screen_texts") or []),
+                    is_general_scene=str(scene.get("scene_type") or "general") == "general",
                 )
                 scene["prompt_en"] = prompt_en
                 scene["prompt"] = prompt_en
@@ -2766,6 +2821,7 @@ Rules:
                     visual_mode=b_visual_mode,
                     character_required=character_required,
                     screen_texts=list(scene.get("screen_texts") or []),
+                    is_general_scene=str(scene.get("scene_type") or "general") == "general",
                 )
                 scene["prompt_en"] = prompt_en
                 scene["prompt"] = prompt_en
@@ -3058,12 +3114,48 @@ Rules:
 
             max_retries = max(3, min(int(runtime_config.value("gemini_retry_max")), 8))
             last_error = None
+            archetype_swap_attempted = False
             for attempt in range(max_retries):
                 if is_job_stopped(job_id):
                     raise RuntimeError(f"Job {job_id} stopped by user.")
                 provider_request_started = False
                 localized_edit = False
                 try:
+                    # 2026-10-14 job 18 scene 11 재현: 매 재시도가 "Remove every
+                    # bar chart..." 같은 교정 지시문을 추가해도, 기반 prompt_en
+                    # 자체가 잘못된 archetype(data_lab 등)의 설정·소품 묘사로
+                    # 고정돼 있으면 모델이 같은 오인을 반복한다(retry 지시문은
+                    # 덧붙이는 것일 뿐 기반 장면 설정을 바꾸지 않음). 같은 의미
+                    # 불일치 계열 사유가 두 번째로 반복되면, 남은 예산을 같은
+                    # 실패를 반복하는 데 쓰지 않고 archetype 자체를 한 번
+                    # 교체한다. 내레이션(자막·TTS 원문)은 절대 건드리지 않고
+                    # 시각 프롬프트만 다시 만든다.
+                    if (
+                        not archetype_swap_attempted
+                        and contract_rejections >= 2
+                        and retry_feedback
+                        and set(retry_feedback.get("failure_categories") or [])
+                        & {"scene_semantic_mismatch", "unexpected_chart_or_data_visualization", "scene_semantic_underexplained"}
+                    ):
+                        archetype_swap_attempted = True
+                        old_archetype = ctx.get("archetype") or (ctx.get("art_direction") or {}).get("archetype")
+                        narration_text = ctx.get("text") or ctx.get("prompt_ko") or ""
+                        new_archetype = keyword_fallback(narration_text, recent_prev=str(old_archetype or ""))
+                        if new_archetype and new_archetype != old_archetype:
+                            logger.warning(
+                                "scene %s 동일 의미 불일치 반복(%s) — archetype %s -> %s로 교체 후 프롬프트 재생성",
+                                index, retry_feedback.get("failure_categories"), old_archetype, new_archetype,
+                            )
+                            ctx["archetype"] = new_archetype
+                            if isinstance(ctx.get("art_direction"), dict):
+                                ctx["art_direction"]["archetype"] = new_archetype
+                            ctx["prompt_en"] = self._build_prompt_from_narration(
+                                narration=narration_text,
+                                scene_type=new_archetype,
+                                title=str(ctx.get("title") or f"scene_{index}"),
+                                character_required=character_required,
+                                is_general_scene=(str(ctx.get("scene_type") or "") == "general"),
+                            )
                     generation_prompt = _bounded_text_generation_prompt(
                         ctx["prompt_en"],
                         retry=contract_rejections > 0,
@@ -3373,10 +3465,33 @@ Rules:
                         Path(retry_source_path).unlink(missing_ok=True)
                         full_regeneration_after_local_drift = True
                         contract_rejections = 0
+                        # 2026-10-12 사용자 요청("파봐줘"): 요약 reason 텍스트만 보면
+                        # 긍정적으로 써놓고도 폐기되는 자기모순 사례가 반복됐다. 실제로는
+                        # 9개 이상 항목 중 reason에 언급 안 된 다른 항목 하나가 걸렸을
+                        # 가능성이 높아, 다음 발생 시 바로 원인을 특정하도록 전체 판정
+                        # 항목을 함께 남긴다.
+                        raw_verdict = (exc.review or {}).get("raw") or {}
+                        bool_fields = (
+                            "composition_preserved", "camera_and_crop_preserved", "character_face_preserved",
+                            "character_pose_preserved", "background_preserved", "unrelated_props_preserved",
+                            "style_preserved", "only_requested_changes", "repaired_surface_clean",
+                            "no_blur_smear_or_ghosting",
+                        )
+                        failed_fields = [
+                            field for field in bool_fields
+                            if field in raw_verdict and not raw_verdict.get(field)
+                        ]
                         logger.warning(
-                            "Image scene %s local edit drifted; discarded candidate and switching to full scene regeneration: %s",
+                            "Image scene %s local edit drifted; discarded candidate and switching to full scene regeneration: %s "
+                            "| failed_criteria=%s score=%s decision=%s added=%s removed=%s changed=%s",
                             index,
                             exc,
+                            failed_fields,
+                            raw_verdict.get("preservation_score"),
+                            raw_verdict.get("decision"),
+                            raw_verdict.get("added_unrequested_objects"),
+                            raw_verdict.get("removed_unrequested_objects"),
+                            raw_verdict.get("changed_unrequested_regions"),
                         )
                         continue
                     if isinstance(exc, VisualQaUnavailableError):
@@ -3392,14 +3507,39 @@ Rules:
                         ) from exc
                     if isinstance(exc, DeterministicSurfaceMissingError):
                         _audit_scene_quality(ctx, img_path, outcome="rejected", category="surface_composition")
+                        # 2026-10-08 job 14 scene 0 재현: 이 경로는 지금까지
+                        # _inspect_generated_visual_image(차트 게이트 포함 전체
+                        # 비전 계약 검수)보다 먼저 실패해 그쪽을 아예 건너뛰었다.
+                        # 그 결과 금융 차트·불꽃놀이가 그려진 후보도 "표면을
+                        # 못 찾음"으로만 기록되고, 다음 시도 프롬프트에는 진짜
+                        # 원인(차트 제거 지시)이 전혀 전달되지 않은 채 재시도
+                        # 예산을 소진했다. 표면 탐지 실패를 가리지 않고 콘텐츠
+                        # 자체도 한 번 더 검수해 범주를 합친다.
+                        merged_categories = list(exc.review.get("failure_categories") or [])
+                        merged_reason = str(exc.review.get("reason") or "")
+                        try:
+                            _inspect_generated_visual_image(ctx, img_path)
+                        except GeneratedImageVisualContractError as content_exc:
+                            content_categories = list((content_exc.review or {}).get("failure_categories") or [])
+                            merged_categories = list(dict.fromkeys(merged_categories + content_categories))
+                            content_reason = str((content_exc.review or {}).get("reason") or "").strip()
+                            if content_reason:
+                                merged_reason = f"{merged_reason} / {content_reason}" if merged_reason else content_reason
+                        except VisualQaUnavailableError:
+                            pass
                         preserve_for_display(img_path)
                         Path(retry_source_path).unlink(missing_ok=True)
                         full_regeneration_after_local_drift = True
                         contract_rejections += 1
-                        retry_feedback = exc.review
+                        retry_feedback = {**exc.review, "failure_categories": merged_categories, "reason": merged_reason}
                         if contract_rejections >= 3:
+                            extra = (
+                                f" (콘텐츠 QA 추가 범주: {', '.join(merged_categories)})"
+                                if set(merged_categories) - set(exc.review.get("failure_categories") or [])
+                                else ""
+                            )
                             raise ImageRequestHeld(
-                                f"scene {index} 안전한 결정론 수치 표면을 3개 후보에서 찾지 못함: {exc}"
+                                f"scene {index} 안전한 결정론 수치 표면을 3개 후보에서 찾지 못함{extra}: {exc}"
                             ) from exc
                         logger.warning(
                             "Image scene %s has no safe numeric surface; regenerating the full scene %s/3",

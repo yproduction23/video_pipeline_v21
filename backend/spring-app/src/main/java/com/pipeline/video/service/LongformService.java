@@ -128,6 +128,12 @@ public class LongformService {
         // GIF_CLIP Asset 목록 로드
         List<Asset> gifAssets = assetRepository.findByJobIdAndAssetType(jobId, AssetType.GIF_CLIP);
 
+        // 2026-10-13 job 14 씬5 재현: SCENE_IMAGE 자산의 text가 비어 있으면
+        // (예: 수동 승인 경로가 narration을 빠뜨린 경우) 조립 직전
+        // "대본 원문과 장면 내레이션 불일치"로 전체 조립이 막힌다. rebuild()에만
+        // 있던 SCRIPT 자산 기반 복구를 최초 조립 경로에도 동일하게 적용한다.
+        recoverMissingSceneTextFromScript(jobId, sceneAssets);
+
         log.info("롱폼 조립 시작: jobId={}, scenes={}, gifs={}, autonomy={}",
                 jobId, sceneAssets.size(), gifAssets.size(), job.getAutonomy());
 
@@ -297,6 +303,42 @@ public class LongformService {
             return objectMapper.writeValueAsString(obj);
         } catch (JsonProcessingException e) {
             return "[]";
+        }
+    }
+
+    /**
+     * 2026-10-13 job 14 씬5 재현: SCENE_IMAGE 자산의 text가 비어 있으면
+     * longform 조립 직전 "대본 원문과 장면 내레이션 불일치"로 전체 조립이
+     * 막힌다. rebuild()에 이미 있던 SCRIPT 자산 기반 복구를 generate()와
+     * 공유해, 한쪽만 고쳤을 때 다른 쪽이 조용히 다시 어긋나지 않게 한다.
+     */
+    @SuppressWarnings("unchecked")
+    private void recoverMissingSceneTextFromScript(Long jobId, List<Asset> sceneAssets) {
+        try {
+            java.util.Optional<Asset> scriptAssetOpt =
+                    assetRepository.findTopByJobIdAndAssetTypeOrderByCreatedAtDesc(jobId, AssetType.SCRIPT);
+            if (scriptAssetOpt.isEmpty()) return;
+            Map<String, Object> scriptMeta = objectMapper.readValue(scriptAssetOpt.get().getMetaJson(), Map.class);
+            List<Map<String, Object>> sections = (List<Map<String, Object>>) scriptMeta.get("sections");
+            if (sections == null) return;
+            for (int i = 0; i < sceneAssets.size(); i++) {
+                Asset asset = sceneAssets.get(i);
+                SceneImageDto dto = objectMapper.readValue(asset.getMetaJson(), SceneImageDto.class);
+                if ((dto.getText() == null || dto.getText().isBlank()) && i < sections.size()) {
+                    Map<String, Object> section = sections.get(i);
+                    String content = (String) section.get("text_for_tts");
+                    if (content == null || content.isBlank()) content = (String) section.get("content");
+                    if (content == null || content.isBlank()) content = (String) section.get("text");
+                    if (content != null && !content.isBlank()) {
+                        dto.setText(content);
+                        asset.setMetaJson(safeJson(dto));
+                        assetRepository.save(asset);
+                        log.info("씬 {} 내레이션 원문을 SCRIPT 자산에서 복구: jobId={}", dto.getIndex(), jobId);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.warn("SCRIPT 에셋으로부터 null 텍스트 복구 실패: jobId={}, err={}", jobId, e.getMessage());
         }
     }
 
