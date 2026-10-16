@@ -20,6 +20,8 @@ def _prepared(scenes):
 def _no_real_overlay_planning(monkeypatch):
     """오버레이 계획은 실제 Claude를 부르므로 기본적으로 빈 계획으로 막는다."""
     monkeypatch.setattr("app.workers.slides_worker.plan_slide_overlays", lambda briefs, **kw: {})
+    # 기존 테스트는 계획서 없이 즉석 계획 경로를 검증한다(계획서 경로는 test_slide_edit_plan.py).
+    monkeypatch.setattr("app.workers.slides_worker.build_edit_plan", lambda *a, **k: None)
     monkeypatch.setattr("app.workers.slides_worker._PIXABAY_MIN_INTERVAL", 0.0)
     monkeypatch.setattr(
         SlidesWorker, "_disclaimer_scene_index", staticmethod(lambda scenes_meta, targets, highlight=None: None),
@@ -252,7 +254,8 @@ def test_disclaimer_banner_goes_on_the_first_scene_after_the_intro_highlight(mon
     assert banner_scenes == [3, 4]
     assert result["scenes"][3]["slide_layers"]["overlays"][-1]["type"] == "disclaimer_banner"
     assert len(seen["composed"]) == 2
-    first, second = seen["composed"]
+    # 장면은 병렬로 합성되므로 호출 순서가 아니라 페이드 값으로 첫 조각과 끝 조각을 구분한다.
+    first, second = sorted(seen["composed"], key=lambda c: -c["fade_in_seconds"])
     assert first["fade_in_seconds"] > 0 and first["fade_out_seconds"] == 0 and first["hold_to_end"] is True
     assert second["fade_in_seconds"] == 0 and second["fade_out_seconds"] > 0 and second["hold_to_end"] is False
     assert first["motion"] == "none" and second["motion"] == "none"

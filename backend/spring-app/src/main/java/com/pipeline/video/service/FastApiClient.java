@@ -1061,6 +1061,19 @@ public class FastApiClient {
         }
     }
 
+    /** 슬라이드형 편집 계획서. 조회 실패는 계획서 없음으로 둔다. */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getSlideEditPlan(Long jobId) {
+        try {
+            Map<String, Object> response = restTemplate.getForObject(
+                    fastApiUrl + "/workers/slides/plan/" + jobId, Map.class);
+            return response == null ? Map.of() : response;
+        } catch (Exception e) {
+            log.warn("편집 계획서 조회 실패: jobId={}, error={}", jobId, e.getMessage());
+            return Map.of();
+        }
+    }
+
     /** 돋보기(확대 보기)용 — 완성된 장면의 영상(있으면) 또는 이미지 원본. */
     public ResponseEntity<byte[]> getSlideSceneMedia(Long jobId, int index) {
         try {

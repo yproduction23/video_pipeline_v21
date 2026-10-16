@@ -39,6 +39,9 @@ from app import runtime_config
 from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
+from app.services.slide_edit_plan import (
+    build_edit_plan, fallback_key_phrase, load_plan, plan_matches, save_plan,
+)
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
     DISCLAIMER_SECONDS,
@@ -202,10 +205,14 @@ class SlidesWorker:
 
         briefs: dict[int, dict] = {}
         all_narrations = [narration_of(scene) for scene in scenes_meta]
-        for index, scene in targets:
+        # 계획서는 일부 장면만 다시 만드는 실행에서도 전체 흐름을 기준으로 하므로 모든 장면의 브리프를 만든다.
+        for index, scene in enumerate(scenes_meta):
             # 수치 오버레이 검증용: 같은 흐름에서 직전 두 장면이 이미 말한 내용(원문 그대로).
             context = " ".join(all_narrations[max(0, index - 2):index]) if index < len(all_narrations) else ""
-            brief = {"narration": narration_of(scene), "context": context}
+            brief = {
+                "narration": narration_of(scene), "context": context,
+                "duration": scene_duration_seconds(scene, float(runtime_config.value("scene_duration_sec"))),
+            }
             capture = scene.get("article_capture")
             if capture:
                 series = capture.get("numeric_series") or extract_numeric_series(str(capture.get("quote") or ""))
@@ -214,12 +221,31 @@ class SlidesWorker:
                     article_brief=f"{capture.get('publisher') or ''} · {str(capture.get('source_title') or '')[:40]}",
                 )
             briefs[index] = brief
-        planned = plan_slide_overlays(briefs)
-        plan_failed = planned is None
-        overlay_plan = planned or {}
-        banner_index = self._disclaimer_scene_index(
-            scenes_meta, {i for i, _ in targets}, self._highlight_boundary(script_meta_json),
-        )
+        highlight = self._highlight_boundary(script_meta_json)
+        banner_index = self._disclaimer_scene_index(scenes_meta, {i for i, _ in targets}, highlight)
+        highlight_end = self._highlight_end_scene(scenes_meta, highlight)
+
+        # 편집 계획서(2026-10-16 운영자 결정): 배경과 후편집을 생성 전에 한 번에 계획·저장하고, 이후
+        # 장면 생성은 계획서를 그대로 실행한다. 같은 내레이션·같은 계획 버전이면 저장된 계획서를 재사용한다.
+        edit_plan = load_plan(job_id, DATA_DIR)
+        if not plan_matches(edit_plan, briefs):
+            edit_plan = build_edit_plan(
+                briefs, job_id=job_id,
+                highlight_end_index=(highlight_end - 1) if highlight_end else None,
+            )
+            if edit_plan:
+                save_plan(edit_plan, DATA_DIR)
+        if edit_plan:
+            plan_failed = False
+            plan_scenes = {s["index"]: s for s in edit_plan["scenes"]}
+            overlay_plan = {i: s["overlay"] for i, s in plan_scenes.items() if s.get("overlay")}
+            base_plans = plan_scenes
+        else:
+            # 계획서 생성 실패: 조용히 넘기지 않고 검수 사유로 남기고, 기존 방식(즉석 오버레이 계획)으로 진행한다.
+            planned = plan_slide_overlays({i: briefs[i] for i, _ in targets})
+            plan_failed = planned is None
+            overlay_plan = planned or {}
+            base_plans = {}
         banner_plan = self._banner_schedule(scenes_meta, banner_index, {i for i, _ in targets})
 
         def render(item: tuple[int, dict]) -> dict:
@@ -229,6 +255,7 @@ class SlidesWorker:
                 used_pixabay_ids=used_pixabay_ids, kling_state=kling_state,
                 overlay_plan=overlay_plan.get(index),
                 banner=banner_plan.get(index),
+                base_plan=base_plans.get(index),
                 # 전체 실행에서만 배경을 재사용한다. 단일 장면 다시 생성은 새 결과를 원하는 요청이다.
                 reuse_base=scene_indices is None,
             )
@@ -283,7 +310,7 @@ class SlidesWorker:
 
         if plan_failed:
             review_reasons.append(
-                "오버레이 계획 생성 실패(Claude) — 모든 장면이 배경만 사용됐습니다. 후편집 다시 생성이 필요합니다."
+                "편집 계획서·오버레이 계획 생성 실패(Claude) — 모든 장면이 배경만 사용됐습니다. 다시 생성이 필요합니다."
             )
 
         progress.finish("completed")
@@ -304,12 +331,21 @@ class SlidesWorker:
             }),
             "requires_manual_review": bool(review_reasons),
             "review_reasons": review_reasons,
+            "edit_plan": (
+                {
+                    "version": edit_plan["version"], "input_hash": edit_plan["input_hash"],
+                    "scene_count": edit_plan["scene_count"], "summary": edit_plan["summary"],
+                    "segments": edit_plan["segments"],
+                }
+                if edit_plan else None
+            ),
         }
 
     def _render_scene(
         self, *, index: int, scene: dict, job_id: int, job_dir: Path,
         used_pixabay_ids: set[int], kling_state: dict | None = None,
         overlay_plan: dict | None = None, banner: dict | None = None, reuse_base: bool = False,
+        base_plan: dict | None = None,
     ) -> dict:
         narration = str(
             scene.get("subtitle_text") or scene.get("content") or scene.get("text") or ""
@@ -333,16 +369,43 @@ class SlidesWorker:
         # 칠판 배경 위에 인포그래픽을 크게 보여준다(레퍼런스 영상의 방식, 비용·시간도 줄어든다).
         try:
             board_path = job_dir / "board_background_v2.png"
-            if overlay_plan and overlay_plan.get("explain") and ensure_board_background(str(board_path)):
+            planned_background = (base_plan or {}).get("background")
+            if planned_background == "board" or (
+                not base_plan and overlay_plan and overlay_plan.get("explain")
+            ):
+                if not ensure_board_background(str(board_path)):
+                    raise RuntimeError("칠판 배경 생성 실패")
                 out["image_path"] = str(board_path)
                 out["visual_type"] = "slide_board"
+                rendered = True
+            elif planned_background == "photo":
+                # 계획서가 정한 사진 장면: 스톡 검색 없이 계획서의 촬영 설명(글자·화면 금지)으로 생성한다.
+                self._render_ai_background_scene(
+                    index=index, narration=narration, job_id=job_id, job_dir=job_dir, out=out,
+                    reuse_base=reuse_base, photo_brief=base_plan.get("photo_brief") or "",
+                )
                 rendered = True
             else:
                 rendered = self._render_pixabay_scene(
                     index=index, narration=narration, duration=duration,
                     job_dir=job_dir, used_pixabay_ids=used_pixabay_ids, out=out,
                     reuse_base=reuse_base,
+                    planned_queries=(base_plan or {}).get("stock_queries") if planned_background == "stock" else None,
                 )
+                if not rendered and planned_background == "stock":
+                    # 스톡이 없으면 유료 사진으로 넘어가지 않고 칠판 + 계획서의 대체 구절로 만든다.
+                    if not ensure_board_background(str(board_path)):
+                        raise RuntimeError("칠판 배경 생성 실패")
+                    out["image_path"] = str(board_path)
+                    out["visual_type"] = "slide_board"
+                    out["base_fallback"] = "stock_miss_to_board"
+                    if not overlay_plan:
+                        overlay_plan = {
+                            "type": "key_text", "text": base_plan.get("fallback_key_text")
+                            or fallback_key_phrase(narration),
+                            "icon": None, "explain": True, "source": "fallback_phrase",
+                        }
+                    rendered = True
             if not rendered:
                 if kling_state is not None and kling_state["streak"] < MAX_CONSECUTIVE_KLING:
                     self._render_kling_scene(
@@ -642,6 +705,7 @@ class SlidesWorker:
     def _render_pixabay_scene(
         self, *, index: int, narration: str, duration: float, job_dir: Path,
         used_pixabay_ids: set[int], out: dict, reuse_base: bool = False,
+        planned_queries: list[str] | None = None,
     ) -> bool:
         if reuse_base:
             cached = _read_base_cache(job_dir, index, "stock", narration)
@@ -655,7 +719,11 @@ class SlidesWorker:
                 out["pixabay_id"] = cached.get("pixabay_id")
                 out["base_reused"] = True
                 return True
-        direction = generate_slide_direction(narration)
+        if planned_queries:
+            # 계획서의 검색어(장면 맥락을 이미 반영)를 그대로 쓴다. 한국 현장 우선 → 일반 검색 순서.
+            direction = {"pexels_query": planned_queries[0], "alt_queries": list(planned_queries[1:])}
+        else:
+            direction = generate_slide_direction(narration)
         with _PIXABAY_LOCK:
             claimed = set(used_pixabay_ids)
         # 첫 검색어에 맞는 스톡이 없으면 유료 AI 배경으로 넘어가므로, 같은 장면의 다른 각도 검색어를
@@ -761,24 +829,31 @@ class SlidesWorker:
 
     def _render_ai_background_scene(
         self, *, index: int, narration: str, job_id: int, job_dir: Path, out: dict,
-        reuse_base: bool = False,
+        reuse_base: bool = False, photo_brief: str = "",
     ) -> None:
+        # 계획서의 촬영 설명이 바뀌면 같은 문장이어도 다른 사진이므로 캐시 키에 함께 넣는다.
+        cache_text = f"{narration}|{photo_brief}" if photo_brief else narration
         if reuse_base:
-            cached = _read_base_cache(job_dir, index, "bg", narration)
+            cached = _read_base_cache(job_dir, index, "bg", cache_text)
             if cached and cached.get("image_path"):
                 out["image_path"] = cached["image_path"]
                 out["visual_type"] = "slide_ai_background"
                 out["base_reused"] = True
                 return
-        direction = generate_slide_direction(narration)
+        if photo_brief:
+            direction = {"pexels_query": photo_brief}
+            scene_prompt = photo_brief
+        else:
+            direction = generate_slide_direction(narration)
+            scene_prompt = f"{direction['pexels_query']} — scene context: {narration}"
         image_path = job_dir / f"scene_{index:03d}_bg.png"
         # 2026-10-14 사용자 재현: 압축된 pexels_query만 넘기면 "마트 안" 같은
         # 장소 맥락이 사라져 AI 배경이 엉뚱한 장소로 나왔다. 내레이션 원문을
         # 함께 넘겨 장소/맥락을 보존한다.
         generate_korean_slide_background(
-            f"{direction['pexels_query']} — scene context: {narration}", str(image_path),
+            scene_prompt, str(image_path),
             job_id=job_id, scene_key=f"slide_bg:{index}",
         )
         out["image_path"] = str(image_path)
         out["visual_type"] = "slide_ai_background"
-        _write_base_cache(job_dir, index, "bg", narration, image_path=str(image_path))
+        _write_base_cache(job_dir, index, "bg", cache_text, image_path=str(image_path))

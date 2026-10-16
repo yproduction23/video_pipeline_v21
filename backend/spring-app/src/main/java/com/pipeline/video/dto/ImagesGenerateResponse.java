@@ -38,6 +38,10 @@ public class ImagesGenerateResponse {
     @JsonProperty("quality_report")
     private Map<String, Object> qualityReport;
 
+    /** 슬라이드형 편집 계획서 요약(버전·입력 해시·배경/후편집 개수·구간). 산출물 계보 확인용. */
+    @JsonProperty("edit_plan")
+    private Map<String, Object> editPlan;
+
     @JsonProperty("tts_subtitle_sync")
     private Map<String, Object> ttsSubtitleSync;
 

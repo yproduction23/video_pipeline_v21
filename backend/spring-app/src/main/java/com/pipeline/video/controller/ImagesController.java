@@ -42,6 +42,12 @@ public class ImagesController {
         return ResponseEntity.ok(fastApiClient.getSlideProgress(jobId));
     }
 
+    /** 슬라이드형 편집 계획서(씬별 생성 시작 시 만들어져 저장된다). */
+    @GetMapping("/plan")
+    public ResponseEntity<Map<String, Object>> editPlan(@PathVariable Long jobId) {
+        return ResponseEntity.ok(fastApiClient.getSlideEditPlan(jobId));
+    }
+
     @GetMapping("/progress/scene/{index}")
     public ResponseEntity<byte[]> progressSceneMedia(@PathVariable Long jobId, @PathVariable int index) {
         ResponseEntity<byte[]> response = fastApiClient.getSlideSceneMedia(jobId, index);

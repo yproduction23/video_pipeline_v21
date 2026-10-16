@@ -39,6 +39,14 @@ export default function SlideProgressPanel({ jobId, running }) {
     },
   })
 
+  // 편집 계획서(2026-10-16): 생성 전에 배경·후편집을 한 번에 계획·저장한다. 읽기 전용(자동화 계약).
+  const { data: planData } = useQuery({
+    queryKey: ['slide-plan', jobId],
+    queryFn: () => apiClient.get(`/jobs/${jobId}/images/plan`).then(r => r.data),
+    refetchInterval: running || data?.status === 'running' || data?.status === 'preparing' ? 4000 : false,
+  })
+  const plan = planData?.plan || null
+
   const scenes = data?.scenes || []
   useEffect(() => {
     scenes.forEach((scene) => {
@@ -180,6 +188,7 @@ export default function SlideProgressPanel({ jobId, running }) {
           <div className="h-full bg-cyan-600 transition-all" style={{ width: `${percent}%` }} />
         </div>
       )}
+      {plan && <EditPlanSection plan={plan} />}
       {(problemIndexes.length > 0 || actionError) && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {problemIndexes.length > 0 && (
@@ -234,5 +243,76 @@ export default function SlideProgressPanel({ jobId, running }) {
         </div>
       )}
     </div>
+  )
+}
+
+const BACKGROUND_LABEL = { board: '칠판', stock: '스톡 영상', photo: 'AI 사진' }
+const BACKGROUND_TONE = {
+  board: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  stock: 'bg-sky-100 text-sky-800 border-sky-300',
+  photo: 'bg-amber-100 text-amber-800 border-amber-300',
+}
+const OVERLAY_LABEL = {
+  key_text: '강조 텍스트', big_number: '큰 숫자', compare_numbers: '수치 비교', flow: '흐름도',
+  bullet_list: '목록', stat_chart: '수치 그래프', equation: '계산식', article_card: '기사 카드',
+}
+
+function overlayText(overlay) {
+  if (!overlay) return ''
+  return overlay.text || overlay.value || overlay.title || overlay.headline
+    || (overlay.nodes || []).map(n => n.label).join(' → ') || ''
+}
+
+// 편집 계획서: 구간(연속된 같은 배경) 요약 + 장면별 후편집. 저장된 계획서를 그대로 실행한다.
+function EditPlanSection({ plan }) {
+  const summary = plan.summary || {}
+  const scenes = plan.scenes || []
+  return (
+    <details open className="rounded-lg border border-slate-200 bg-white p-3">
+      <summary className="cursor-pointer text-sm font-bold text-slate-900">
+        편집 계획서 · 칠판 {summary.board || 0} · 스톡 {summary.stock || 0} · AI 사진 {summary.photo || 0}
+        <span className="ml-2 font-semibold text-slate-500">
+          후편집 {summary.overlay_scenes || 0}장면 · 예상 Gemini ₩{(summary.gemini_krw_expected || 0).toLocaleString()}
+        </span>
+      </summary>
+      <div className="mt-2 space-y-1.5">
+        {(plan.segments || []).map(segment => (
+          <div key={segment.id} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={`rounded-full border px-2 py-0.5 font-bold ${BACKGROUND_TONE[segment.background] || ''}`}>
+              {BACKGROUND_LABEL[segment.background] || segment.background}
+            </span>
+            <span className="font-bold text-slate-800">
+              씬 {segment.range[0] + 1}{segment.range[1] !== segment.range[0] ? `~${segment.range[1] + 1}` : ''}
+            </span>
+            <span className="text-slate-500">{Math.round(segment.seconds)}초</span>
+            {segment.highlight && (
+              <span className="rounded-full bg-rose-100 px-2 py-0.5 font-bold text-rose-700">하이라이트</span>
+            )}
+            <span className="text-slate-600">
+              {(segment.overlay_types || []).map(t => OVERLAY_LABEL[t] || t).join(' · ') || '후편집 없음'}
+            </span>
+          </div>
+        ))}
+      </div>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold text-slate-500">장면별 계획 보기</summary>
+        <div className="mt-2 max-h-72 overflow-y-auto divide-y divide-slate-100 text-xs">
+          {scenes.map(scene => (
+            <div key={scene.index} className="flex gap-2 py-1.5">
+              <span className="w-10 shrink-0 font-bold text-slate-700">#{scene.index + 1}</span>
+              <span className={`h-fit shrink-0 rounded-full border px-1.5 py-0.5 font-bold ${BACKGROUND_TONE[scene.background] || ''}`}>
+                {BACKGROUND_LABEL[scene.background] || scene.background}
+              </span>
+              <span className="text-slate-700">
+                {scene.overlay
+                  ? `${OVERLAY_LABEL[scene.overlay.type] || scene.overlay.type}${overlayText(scene.overlay) ? ` · ${overlayText(scene.overlay)}` : ''}`
+                  : '후편집 없음'}
+                {scene.reason ? <span className="text-slate-400"> — {scene.reason}</span> : null}
+              </span>
+            </div>
+          ))}
+        </div>
+      </details>
+    </details>
   )
 }

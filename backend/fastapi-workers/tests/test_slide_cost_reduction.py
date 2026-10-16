@@ -19,6 +19,8 @@ from app.workers.slides_worker import SlidesWorker
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr("app.workers.slides_worker.plan_slide_overlays", lambda briefs, **kw: {})
+    # 기존 테스트는 계획서 없이 즉석 계획 경로를 검증한다(계획서 경로는 test_slide_edit_plan.py).
+    monkeypatch.setattr("app.workers.slides_worker.build_edit_plan", lambda *a, **k: None)
     monkeypatch.setattr("app.workers.slides_worker._PIXABAY_MIN_INTERVAL", 0.0)
     monkeypatch.setattr(
         SlidesWorker, "_disclaimer_scene_index", staticmethod(lambda scenes_meta, targets, highlight=None: None),

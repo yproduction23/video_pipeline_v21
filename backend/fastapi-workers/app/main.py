@@ -181,6 +181,16 @@ def slide_generation_progress(job_id: int):
     return read_progress(job_id, DATA_DIR) or {"job_id": job_id, "status": "none", "total": 0, "done": 0, "scenes": []}
 
 
+@app.get("/workers/slides/plan/{job_id}")
+def slide_edit_plan(job_id: int):
+    """슬라이드형 편집 계획서(배경·후편집·구간·비용 추정). 아직 없으면 plan=null."""
+    from app.services.slide_edit_plan import load_plan
+
+    if job_id <= 0:
+        raise HTTPException(status_code=422, detail="job_id는 양수여야 합니다.")
+    return {"job_id": job_id, "plan": load_plan(job_id, DATA_DIR)}
+
+
 @app.get("/workers/slides/progress/{job_id}/scene/{index}")
 def slide_generation_scene_media(job_id: int, index: int):
     """돋보기(확대 보기)용 — 완성된 장면의 영상(있으면) 또는 이미지를 원본 크기로 내려준다.
