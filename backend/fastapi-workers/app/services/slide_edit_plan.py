@@ -24,7 +24,7 @@ from app.services.slide_overlay import _PLAN_SYSTEM_PROMPT, validate_overlay_pla
 
 logger = logging.getLogger(__name__)
 
-PLAN_VERSION = "slide-edit-plan-v2"
+PLAN_VERSION = "slide-edit-plan-v3"
 # 2026-10-16 레퍼런스 영상 분석(5초 간격 프레임 전수 분류, 연구 영상 2종 + 벤치마크 1종):
 #   기준 영상(32분 경제 해설): 스톡 67% · 어두운 회색 배경+글자 29% · 칠판 2% · 출연자 2%,
 #   후편집이 붙은 시간 58%(강조 문구 22 · 목록 15 · 막대 8 · 카드 5 · 숫자 5), 배경 전환 12초 간격,

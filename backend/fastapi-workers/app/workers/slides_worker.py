@@ -41,6 +41,7 @@ from app.services.slide_background import generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
+from app.services.slide_sequence import render_sequence_clip
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
     DISCLAIMER_SECONDS,
@@ -272,12 +273,16 @@ class SlidesWorker:
             plan_scenes = {s["index"]: s for s in edit_plan["scenes"]}
             overlay_plan = {i: s["overlay"] for i, s in plan_scenes.items() if s.get("overlay")}
             base_plans = plan_scenes
+            sequences_by_scene = {
+                index: seq for seq in edit_plan.get("sequences", []) for index in seq["scenes"]
+            }
         else:
             # 계획서 생성 실패: 조용히 넘기지 않고 검수 사유로 남기고, 기존 방식(즉석 오버레이 계획)으로 진행한다.
             planned = plan_slide_overlays({i: briefs[i] for i, _ in targets})
             plan_failed = planned is None
             overlay_plan = planned or {}
             base_plans = {}
+            sequences_by_scene = {}
         banner_plan = self._banner_schedule(scenes_meta, banner_index, {i for i, _ in targets})
 
         def render(item: tuple[int, dict]) -> dict:
@@ -288,6 +293,7 @@ class SlidesWorker:
                 overlay_plan=overlay_plan.get(index),
                 banner=banner_plan.get(index),
                 base_plan=base_plans.get(index),
+                sequence=sequences_by_scene.get(index),
                 # 전체 실행에서만 배경을 재사용한다. 단일 장면 다시 생성은 새 결과를 원하는 요청이다.
                 reuse_base=scene_indices is None,
             )
@@ -377,7 +383,7 @@ class SlidesWorker:
         self, *, index: int, scene: dict, job_id: int, job_dir: Path,
         used_pixabay_ids: set[int], kling_state: dict | None = None,
         overlay_plan: dict | None = None, banner: dict | None = None, reuse_base: bool = False,
-        base_plan: dict | None = None,
+        base_plan: dict | None = None, sequence: dict | None = None,
     ) -> dict:
         narration = str(
             scene.get("subtitle_text") or scene.get("content") or scene.get("text") or ""
@@ -469,10 +475,16 @@ class SlidesWorker:
             "overlays": [],
         }
         try:
-            self._apply_overlay(
-                index=index, scene=scene, duration=duration, job_dir=job_dir,
-                out=out, overlay_plan=overlay_plan,
-            )
+            if sequence and base_visual_type == "slide_board" and not out.get("base_fallback"):
+                # 회색 배경 구간은 장면 경계를 넘어 이어지는 모션 시퀀스가 화면을 담당한다(장면 몫만 잘라 낸다).
+                self._render_sequence_scene(
+                    index=index, duration=duration, job_dir=job_dir, out=out, sequence=sequence,
+                )
+            else:
+                self._apply_overlay(
+                    index=index, scene=scene, duration=duration, job_dir=job_dir,
+                    out=out, overlay_plan=overlay_plan,
+                )
         except Exception as exc:
             logger.exception("슬라이드 장면 %s 오버레이 실패", index)
             out["overlay_failure_reason"] = str(exc)
@@ -487,6 +499,27 @@ class SlidesWorker:
                 out["overlay_failure_reason"] = str(exc)
                 out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "banner_failed"]))
         return out
+
+    def _render_sequence_scene(
+        self, *, index: int, duration: float, job_dir: Path, out: dict, sequence: dict,
+    ) -> None:
+        """시퀀스 시간축에서 이 장면 몫만 mp4로 만든다. 같은 시간 함수라 인접 장면과 화면이 이어진다."""
+        offsets = sequence.get("offsets") or {}
+        t0 = float(offsets.get(str(index), 0.0))
+        clip_path = job_dir / f"scene_{index:03d}_seq.mp4"
+        if not render_sequence_clip(sequence, t0, t0 + duration, str(out["image_path"]), str(clip_path)):
+            raise RuntimeError("모션 시퀀스 렌더링 실패")
+        out["stock_video_path"] = str(clip_path)
+        frame_path = job_dir / f"scene_{index:03d}_seq_frame.png"
+        if _extract_first_frame_at(str(clip_path), str(frame_path), min(1.6, max(duration * 0.7, 0.5))):
+            out["image_path"] = str(frame_path)
+        out["visual_type"] = "slide_sequence"
+        out["overlay_type"] = "sequence"
+        out["slide_layers"]["overlays"].append({
+            "type": "sequence", "sequence_id": sequence.get("id"), "signature": sequence.get("signature"),
+            "elements": [{"id": e["id"], "kind": e["kind"], "at": e["at"], "until": e["until"]}
+                         for e in sequence.get("elements", [])],
+        })
 
     @staticmethod
     def _highlight_boundary(script_meta_json: str | None) -> dict | None:

@@ -25,6 +25,7 @@ from app.services.slide_edit_plan import (
     refresh_plan,
 )
 from app.services.slide_overlay import validate_overlay_plan
+from app.services.slide_sequence import attach_sequences
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,7 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
         updated["review_notes"] = {**(plan.get("review_notes") or {}), **{str(i): n for i, n in notes.items()}}
         updated["revised_at"] = time.time()
     refresh_plan(updated, demoted)
-    return updated
+    return attach_sequences(updated, llm_call=llm_call)
 
 
 # ---- 계획서 자동 보정 -----------------------------------------------------------------
@@ -243,4 +244,5 @@ def build_edit_plan_with_repair(
         plan = repaired
         rounds += 1
     plan["auto_repair_rounds"] = rounds
-    return plan
+    # 회색 배경 구간마다 장면 경계를 넘어 이어지는 모션 시퀀스를 설계한다(실패해도 장면별 후편집으로 대체).
+    return attach_sequences(plan, llm_call=llm_call)

@@ -299,3 +299,37 @@ def test_plan_only_reports_failure_without_generating_anything(monkeypatch, work
     assert result["status"] == "PLAN_FAILED" and result["requires_manual_review"] is True
     assert result["edit_plan"] is None
     assert worker_env["gemini"] == []
+
+
+def test_board_scenes_in_a_sequence_render_through_the_sequence_and_keep_other_paths(monkeypatch, worker_env, tmp_path):
+    texts = [f"칠판 시퀀스 {i}번 문장입니다 충분히 깁니다 숫자 {i}." for i in range(3)]
+    fillers = [f"스톡 장면 {i}번 문장입니다 충분히 깁니다." for i in range(7)]
+    _prepare(monkeypatch, _scenes(*texts, *fillers))
+
+    def build(briefs, *, job_id, highlight_end_index=None, llm_call=None):
+        entries = [{"index": i, "background": "board",
+                    "overlay": {"type": "key_text", "text": briefs[i]["narration"][:12]}} for i in range(3)]
+        entries += [{"index": i, "background": "stock", "stock_queries": ["city skyline", "office"]}
+                    for i in range(3, 10)]
+        plan = assemble_plan(briefs, entries, job_id=job_id)
+        from app.services.slide_sequence import attach_sequences
+        return attach_sequences(plan, llm_call=lambda s, m, t: "not json", workers=1)  # 설계 실패 → 장면별 후편집 대체
+
+    monkeypatch.setattr("app.workers.slides_worker.build_edit_plan", build)
+    rendered = []
+
+    def fake_sequence(sequence, t0, t1, board_path, output_path):
+        rendered.append((round(t0, 2), round(t1, 2)))
+        Path(output_path).write_bytes(b"seq-mp4")
+        return True
+
+    monkeypatch.setattr("app.workers.slides_worker.render_sequence_clip", fake_sequence)
+
+    result = SlidesWorker().generate(job_id=14, tts_meta_json=None, script_meta_json="{}")
+
+    first = result["scenes"][:3]
+    assert [s["visual_type"] for s in first] == ["slide_sequence"] * 3
+    assert sorted(rendered) == [(0.0, 4.0), (4.0, 8.0), (8.0, 12.0)]  # 장면마다 시퀀스 시간축의 자기 몫
+    assert first[0]["overlay_type"] == "sequence"
+    assert first[0]["slide_layers"]["overlays"][0]["sequence_id"] == 1
+    assert result["scenes"][5]["visual_type"] in {"slide_board", "slide_key_text"}  # 스톡 미적중 → 회색 배경 대체

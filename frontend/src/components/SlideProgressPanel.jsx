@@ -15,6 +15,7 @@ const TYPE_LABEL = {
   slide_bullet_list: '목록 인포',
   slide_equation: '계산식',
   slide_board: '설명 장면',
+  slide_sequence: '모션 시퀀스',
   slide_big_number: '큰 숫자',
   slide_compare_numbers: '수치 비교',
   slide_flow: '흐름도',
@@ -345,7 +346,9 @@ export function EditPlanSection({ plan, onReplan, busy }) {
   }
 
   const renderScene = (scene) => {
-    const lines = overlayLines(scene.overlay)
+    // 회색 배경 구간은 모션 시퀀스가 화면을 담당한다(구간 카드의 시간표 참고) — 장면별 후편집 줄은 숨긴다.
+    const inSequence = !!scene.sequence_id
+    const lines = inSequence ? [] : overlayLines(scene.overlay)
     const onFootage = scene.background !== 'board'
     return (
       <div key={scene.index} className={`py-2 ${scene.index in marked ? 'bg-amber-50' : ''}`}>
@@ -357,7 +360,9 @@ export function EditPlanSection({ plan, onReplan, busy }) {
           <span className="text-slate-500">
             {fmtTime(startAt[scene.index])}~{fmtTime(startAt[scene.index] + (scene.duration || 0))} · {Math.round(scene.duration || 0)}초
           </span>
-          {scene.overlay
+          {inSequence
+            ? <span className="rounded-full bg-violet-100 px-2 py-0.5 font-bold text-violet-700">모션 시퀀스 #{scene.sequence_id}의 일부</span>
+            : scene.overlay
             ? <span className="rounded-full bg-violet-100 px-2 py-0.5 font-bold text-violet-700">
                 후편집 · {OVERLAY_LABEL[scene.overlay.type] || scene.overlay.type}
               </span>
@@ -458,6 +463,10 @@ export function EditPlanSection({ plan, onReplan, busy }) {
                   {withOverlay.length > 0 && ` (${Object.entries(counts).map(([t, c]) => `${OVERLAY_LABEL[t] || t} ${c}`).join(', ')})`}
                 </span>
               </summary>
+              {(() => {
+                const sequence = (plan.sequences || []).find(seq => seq.scenes[0] === first)
+                return sequence ? <SequenceTimetable sequence={sequence} /> : null
+              })()}
               <div className="divide-y divide-slate-100 px-3 text-xs">
                 {segScenes.map(renderScene)}
               </div>
@@ -466,5 +475,60 @@ export function EditPlanSection({ plan, onReplan, busy }) {
         })}
       </div>
     </details>
+  )
+}
+
+const ELEMENT_KIND_LABEL = {
+  text: '문구', number: '큰 숫자', icon: '그림', arrow: '화살표', bars: '막대 그래프', list: '목록', rows: '비교 행', flow: '흐름도',
+}
+const SLOT_LABEL = {
+  center: '화면 가운데(전체)', top: '위', bottom: '아래', left: '왼쪽', right: '오른쪽',
+  upper_left: '왼쪽 위', upper_right: '오른쪽 위', lower_left: '왼쪽 아래', lower_right: '오른쪽 아래',
+}
+const ANIM_LABEL = { rise: '아래에서 올라오며', pop: '튀어나오며', draw: '그려지며', count: '숫자가 올라가며', grow: '막대가 자라며' }
+const KIND_TO_OVERLAY = {
+  text: 'key_text', number: 'big_number', bars: 'stat_chart', list: 'bullet_list', rows: 'compare_numbers', flow: 'flow',
+}
+
+function elementContentLines(element) {
+  const { kind, content } = element
+  if (kind === 'icon') return [`그림 ${content.name}`]
+  if (kind === 'arrow') return [`화살표 ${{ up: '위(상승)', down: '아래(하락)', right: '오른쪽(이어짐)' }[content.direction] || content.direction}`]
+  return overlayLines({ type: KIND_TO_OVERLAY[kind], ...content })
+}
+
+// 모션 시퀀스 시간표: 회색 배경 구간이 끊기지 않고 이어지면서 요소가 언제·어디에·어떻게 나타나고 사라지는지.
+// (레퍼런스 10~33초처럼 요소가 문장 흐름에 맞춰 하나씩 등장·유지·교체된다)
+function SequenceTimetable({ sequence }) {
+  const base = sequence.start || 0
+  return (
+    <div className="border-b border-violet-100 bg-violet-50/50 px-3 py-2 text-xs">
+      <p className="mb-1 font-bold text-violet-800">
+        모션 시퀀스 #{sequence.id} · {fmtTime(base)}~{fmtTime(base + sequence.duration)} ({Math.round(sequence.duration)}초) ·
+        요소 {sequence.elements.length}개{sequence.source === 'fallback_overlays' ? ' · 장면별 후편집으로 대체됨' : ''}
+      </p>
+      <ol className="space-y-1">
+        {sequence.elements.map(element => {
+          const lines = elementContentLines(element)
+          const replaced = element.until < sequence.duration - 0.05
+          return (
+            <li key={element.id} className="flex gap-2">
+              <span className="w-14 shrink-0 font-mono font-bold text-violet-700">{(base + element.at).toFixed(1)}초</span>
+              <span className="text-slate-700">
+                <b>{ELEMENT_KIND_LABEL[element.kind] || element.kind}</b>
+                {' '}· {SLOT_LABEL[element.slot] || element.slot} · {ANIM_LABEL[element.anim] || element.anim} 등장
+                {element.anchor ? <span className="text-slate-500"> · “{element.anchor}” 말할 때</span> : null}
+                {lines.map((line, k) => (
+                  <span key={k} className="block pl-3 text-slate-600">{line.trimStart()}</span>
+                ))}
+                <span className="block pl-3 text-slate-400">
+                  {replaced ? `${(base + element.until).toFixed(1)}초에 사라짐(같은 자리에 새 요소)` : '구간 끝까지 화면에 남음'}
+                </span>
+              </span>
+            </li>
+          )
+        })}
+      </ol>
+    </div>
   )
 }

@@ -45,8 +45,9 @@ def test_only_marked_scenes_change_and_notes_are_kept():
     assert updated["scenes"][2]["overlay"]["type"] == "bullet_list"
     assert updated["scenes"][2]["revised"] is True
     assert updated["scenes"][2]["reason"].startswith("운영자 수정")
-    for i in (0, 1, 3):  # 표시하지 않은 장면은 그대로
-        assert updated["scenes"][i] == before["scenes"][i]
+    strip = lambda scene: {k: v for k, v in scene.items() if k != "sequence_id"}  # noqa: E731
+    for i in (0, 1, 3):  # 표시하지 않은 장면은 그대로(회색 배경 구간에 붙는 시퀀스 번호만 추가될 수 있다)
+        assert strip(updated["scenes"][i]) == strip(before["scenes"][i])
     assert updated["review_notes"] == {"2": "원인을 목록으로 보여 줘"}
     assert updated["input_hash"] == before["input_hash"]  # 같은 내레이션이면 계획서는 계속 유효
     assert plan == before  # 원본 객체는 건드리지 않는다
