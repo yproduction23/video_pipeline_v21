@@ -16,6 +16,9 @@ from app.services.slide_edit_plan import (
     MAX_BARE_STOCK_SECONDS,
     MAX_BOARD_RUN_SECONDS,
     MAX_PHOTO_SCENE_RATIO,
+    MAX_STOCK_OVERLAY_RATIO,
+    OVERLAY_RATIO_RANGE,
+    TARGET_STOCK_OVERLAY_RATIO,
     MIN_FOOTAGE_RATIO,
     MIN_MEAN_BG_RUN_SECONDS,
     MIN_STOCK_OVERLAY_RATIO,
@@ -279,6 +282,41 @@ def repair_targets(plan: dict) -> list[dict]:
     return [{"index": i, "note": note} for i, note in sorted(marked.items())]
 
 
+def trim_excess_stock_overlays(plan: dict) -> dict:
+    """스톡 위 후편집이 상한을 넘으면 정보량이 가장 적은 강조 문구(key_text)부터 하나 건너 하나씩 걷어 낸다(결정론적).
+
+    걷어 낸 장면의 앞뒤는 후편집이 있는 장면만 고르므로 후편집 없는 스톡이 연달아 생기지 않는다."""
+    updated = json.loads(json.dumps(plan))
+    scenes = updated["scenes"]
+
+    def ratios() -> tuple[float, float]:
+        stock = [s for s in scenes if s["background"] == "stock"]
+        stock_ratio = sum(1 for s in stock if s.get("overlay")) / max(len(stock), 1)
+        return stock_ratio, sum(1 for s in scenes if s.get("overlay")) / max(len(scenes), 1)
+
+    stock_count = sum(1 for s in scenes if s["background"] == "stock")
+    stock_ratio, overall = ratios()
+    if stock_count < 3 or (stock_ratio <= MAX_STOCK_OVERLAY_RATIO and overall <= OVERLAY_RATIO_RANGE[1]):
+        return plan
+    removed: list[int] = []
+    for position, scene in enumerate(scenes):
+        stock_ratio, overall = ratios()
+        if stock_ratio <= TARGET_STOCK_OVERLAY_RATIO and overall <= OVERLAY_RATIO_RANGE[1]:
+            break
+        if scene["background"] != "stock" or (scene.get("overlay") or {}).get("type") != "key_text":
+            continue
+        before = scenes[position - 1] if position > 0 else None
+        after = scenes[position + 1] if position + 1 < len(scenes) else None
+        if (before is not None and not before.get("overlay")) or (after is not None and not after.get("overlay")):
+            continue
+        scene["overlay"] = None
+        removed.append(scene["index"])
+    if removed:
+        updated["trimmed_overlay_scenes"] = removed
+        refresh_plan(updated)
+    return updated
+
+
 def build_edit_plan_with_repair(
     briefs: dict[int, dict], *, job_id: int, highlight_end_index: int | None = None, llm_call=None,
 ) -> dict | None:
@@ -288,6 +326,7 @@ def build_edit_plan_with_repair(
     plan = build_edit_plan(briefs, job_id=job_id, highlight_end_index=highlight_end_index, llm_call=llm_call)
     if not plan:
         return None
+    plan = trim_excess_stock_overlays(plan)
     rounds = 0
     for _ in range(MAX_REPAIR_ROUNDS):
         items = repair_targets(plan)
@@ -296,7 +335,7 @@ def build_edit_plan_with_repair(
         repaired = replan_scenes(plan, items, llm_call=llm_call, source="auto")
         if not repaired:
             break
-        plan = repaired
+        plan = trim_excess_stock_overlays(repaired)
         rounds += 1
     plan["auto_repair_rounds"] = rounds
     # 회색 배경 구간마다 장면 경계를 넘어 이어지는 모션 시퀀스를 설계한다(실패해도 장면별 후편집으로 대체).

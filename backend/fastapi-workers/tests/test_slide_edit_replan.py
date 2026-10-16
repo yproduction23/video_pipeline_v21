@@ -250,3 +250,43 @@ def test_replan_asks_once_more_when_an_overlay_is_rejected_for_not_copying_the_n
     assert len(calls) == 2 and "글자 그대로" in calls[1] and "위험회피 심리 확산" in calls[1]
     assert updated["scenes"][0]["background"] == "stock"
     assert updated["scenes"][0]["overlay"]["text"] == "위험회피 심리가"
+
+
+def test_excess_overlays_on_stock_are_trimmed_without_creating_a_long_bare_run():
+    """2026-10-16 20번 Job: 스톡 위 후편집 하한(60%)을 강조하자 Claude가 거의 모든 스톡 장면(93%)에 문구를 얹어 단조로워졌다.
+    상한(80%)을 넘으면 정보량이 가장 적은 강조 문구부터 하나 건너 하나씩 걷어 낸다."""
+    from app.services.slide_edit_plan import MAX_STOCK_OVERLAY_RATIO, MIN_STOCK_OVERLAY_RATIO
+    from app.services.slide_edit_replan import trim_excess_stock_overlays
+
+    plan = _stock_plan([True] * 10)
+
+    trimmed = trim_excess_stock_overlays(plan)
+
+    stock = [s for s in trimmed["scenes"] if s["background"] == "stock"]
+    ratio = sum(1 for s in stock if s.get("overlay")) / len(stock)
+    assert MIN_STOCK_OVERLAY_RATIO <= ratio <= MAX_STOCK_OVERLAY_RATIO
+    assert "stock_overlay_ratio_high" not in plan_violations(trimmed)["violations"]
+    assert "bare_stock_run_too_long" not in plan_violations(trimmed)["violations"]
+    assert all(not (a.get("overlay") is None and b.get("overlay") is None) for a, b in zip(stock, stock[1:]))
+
+
+def test_trim_keeps_informative_overlays_and_only_removes_key_text():
+    from app.services.slide_edit_replan import trim_excess_stock_overlays
+
+    briefs = {i: {"narration": f"{i}번 장면의 주장 문장입니다 충분히 깁니다.", "context": "", "duration": 4.0} for i in range(10)}
+    entries = []
+    for i in range(10):
+        entry = {"index": i, "background": "stock", "stock_queries": ["office", "city"]}
+        if i % 3 == 0:
+            entry["overlay"] = {"type": "bullet_list", "title": "근거 목록", "items": [f"{i}번 장면의 주장", "충분히 깁니다"]}
+        else:
+            entry["overlay"] = {"type": "key_text", "text": f"{i}번 장면의 주장 문장입니다"}
+        entries.append(entry)
+    plan = assemble_plan(briefs, entries, job_id=1)
+    kept_types = {s["index"]: (s.get("overlay") or {}).get("type") for s in plan["scenes"]}
+
+    trimmed = trim_excess_stock_overlays(plan)
+
+    for scene in trimmed["scenes"]:
+        if kept_types[scene["index"]] == "bullet_list":
+            assert scene["overlay"] and scene["overlay"]["type"] == "bullet_list"

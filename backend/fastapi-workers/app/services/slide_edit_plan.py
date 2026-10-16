@@ -43,6 +43,9 @@ OVERLAY_RATIO_RANGE = (0.45, 0.80)
 # 2026-10-16 운영자 요청: 20번 Job에서 스톡 영상만 후편집 없이 길게 이어지는 부분이 밋밋했다. 레퍼런스(스톡 장면의 41%에
 # 후편집)보다 더 촘촘하게, 스톡 장면의 60% 이상에 후편집을 얹고 후편집 없는 스톡이 12초(약 3장면) 넘게 이어지지 않게 한다.
 MIN_STOCK_OVERLAY_RATIO = 0.6
+# 상한: 하한을 강조하자 Claude가 거의 모든 스톡 장면(93%)에 문구를 얹어 단조로워졌다. 넘으면 강조 문구부터 걷어 낸다.
+MAX_STOCK_OVERLAY_RATIO = 0.8
+TARGET_STOCK_OVERLAY_RATIO = 0.7
 MAX_BARE_STOCK_SECONDS = 12.0
 # 장당 Gemini 이미지 비용 추정(원장 기준 gemini_pro_request 1건).
 GEMINI_IMAGE_EST_KRW = 339
@@ -73,7 +76,7 @@ _SYSTEM_PROMPT = (
     '"photo_brief"에 촬영 가능한 장소·인물·사물을 영어 한 문장으로. 화면·전광판·차트·간판·글자·숫자는 절대 '
     "언급하지 않는다.\n"
     "- board 장면은 반드시 overlay를 가진다. stock 장면도 문장의 숫자·핵심 주장·목록·비교를 overlay로 얹는다(스톡 장면의 "
-    "60% 이상). 후편집 없이 영상과 자막만 나오는 스톡이 연속 3장면(약 12초)을 넘지 않게 한다. 기사 증거([article: …])가 "
+    "60~75%). 모든 스톡 장면에 붙이지는 않는다. 후편집 없이 영상과 자막만 나오는 스톡이 연속 3장면(약 12초)을 넘지 않게 한다. 기사 증거([article: …])가 "
     "붙은 장면은 article_card를 우선 쓴다.\n"
     "- key_text는 자막 문장을 그대로 되풀이하지 말고 핵심어(2~3단어, 16자 이내)만 뽑는다.\n"
     "- 후편집이 붙는 장면은 전체의 약 55~60%다(모든 장면에 붙이지 않는다). 연속 3장면 이상 같은 종류의 overlay를 "
@@ -299,6 +302,8 @@ def plan_violations(plan: dict) -> dict:
         violations.append("bare_stock_run_too_long")
     if len(stock_scenes) >= 3 and stock_overlay_ratio < MIN_STOCK_OVERLAY_RATIO:
         violations.append("stock_overlay_ratio_low")
+    if len(stock_scenes) >= 3 and stock_overlay_ratio > MAX_STOCK_OVERLAY_RATIO:
+        violations.append("stock_overlay_ratio_high")
     return {
         "violations": violations,
         "footage_ratio": round(footage_seconds / total, 3),
