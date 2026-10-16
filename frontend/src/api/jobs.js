@@ -44,6 +44,8 @@ export const jobsApi = {
     apiClient.post(`/jobs/${id}/images/generate`, sceneIndices?.length ? { sceneIndices } : {}).then(r => r.data),
   // 슬라이드형: 편집 계획서만 만든다(이미지·영상은 만들지 않아 비용이 나가지 않는다).
   buildEditPlan: (id) => apiClient.post(`/jobs/${id}/images/plan`, {}).then(r => r.data),
+  // 계획서에서 문제로 표시한 장면({index, note})만 다시 계획한다(이미지는 만들지 않는다).
+  replanEditPlan: (id, items) => apiClient.post(`/jobs/${id}/images/plan/replan`, { items }).then(r => r.data),
   confirmImages: (id) => apiClient.post(`/jobs/${id}/images/confirm`, {}).then(r => r.data),
   updateSceneImage: (id, index, payload) =>
     apiClient.post(`/jobs/${id}/images/scenes/${index}`, payload).then(r => r.data),

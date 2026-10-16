@@ -200,7 +200,22 @@ def assemble_plan(
         scene["duration"] = round(float(brief.get("duration") or 0), 2)
         scene["narration"] = brief.get("narration", "")
 
-    # 4) 구간(연속된 같은 배경) 요약
+    plan = {
+        "version": PLAN_VERSION,
+        "job_id": job_id,
+        "input_hash": plan_input_hash(briefs),
+        "created_at": time.time(),
+        "highlight_end_index": highlight_end_index,
+        "scenes": scenes,
+    }
+    refresh_plan(plan, demoted)
+    return plan
+
+
+def refresh_plan(plan: dict, demoted: list[int] | None = None) -> None:
+    """장면 목록에서 구간·요약·총 길이를 다시 계산한다(전체 계획과 부분 재계획 공통)."""
+    scenes = plan["scenes"]
+    highlight_end_index = plan.get("highlight_end_index")
     segments: list[dict] = []
     for scene in scenes:
         if segments and segments[-1]["background"] == scene["background"] \
@@ -211,40 +226,33 @@ def assemble_plan(
             segments.append({
                 "background": scene["background"], "scenes": [scene["index"]], "seconds": scene["duration"],
             })
+    by_index = {s["index"]: s for s in scenes}
     for number, segment in enumerate(segments, start=1):
         first, last = segment["scenes"][0], segment["scenes"][-1]
         segment["id"] = number
         segment["range"] = [first, last]
-        types = [scenes[i]["overlay"]["type"] for i in segment["scenes"] if scenes[i]["overlay"]]
+        types = [by_index[i]["overlay"]["type"] for i in segment["scenes"] if by_index[i]["overlay"]]
         segment["overlay_types"] = sorted(set(types))
         segment["highlight"] = highlight_end_index is not None and last <= highlight_end_index
 
     photo = sum(1 for s in scenes if s["background"] == "photo")
     stock = sum(1 for s in scenes if s["background"] == "stock")
-    board_count = len(scenes) - photo - stock
     overlay_counts: dict[str, int] = {}
     for scene in scenes:
         if scene["overlay"]:
             overlay_counts[scene["overlay"]["type"]] = overlay_counts.get(scene["overlay"]["type"], 0) + 1
-    return {
-        "version": PLAN_VERSION,
-        "job_id": job_id,
-        "input_hash": plan_input_hash(briefs),
-        "created_at": time.time(),
-        "scene_count": len(scenes),
-        "total_seconds": round(sum(s["duration"] for s in scenes), 1),
-        "highlight_end_index": highlight_end_index,
-        "scenes": scenes,
-        "segments": segments,
-        "summary": {
-            "board": board_count, "stock": stock, "photo": photo,
-            "overlay_scenes": sum(1 for s in scenes if s["overlay"]),
-            "overlay_types": overlay_counts,
-            "demoted_to_board": demoted,
-            # 스톡 미적중 시 사진이 아니라 칠판으로 내려가므로 Gemini는 photo 장면만 쓴다.
-            "gemini_images_expected": photo,
-            "gemini_krw_expected": photo * GEMINI_IMAGE_EST_KRW,
-        },
+    previous = (plan.get("summary") or {}).get("demoted_to_board", [])
+    plan["scene_count"] = len(scenes)
+    plan["total_seconds"] = round(sum(s["duration"] for s in scenes), 1)
+    plan["segments"] = segments
+    plan["summary"] = {
+        "board": len(scenes) - photo - stock, "stock": stock, "photo": photo,
+        "overlay_scenes": sum(1 for s in scenes if s["overlay"]),
+        "overlay_types": overlay_counts,
+        "demoted_to_board": demoted if demoted is not None else previous,
+        # 스톡 미적중 시 사진이 아니라 칠판으로 내려가므로 Gemini는 photo 장면만 쓴다.
+        "gemini_images_expected": photo,
+        "gemini_krw_expected": photo * GEMINI_IMAGE_EST_KRW,
     }
 
 

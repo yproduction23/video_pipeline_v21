@@ -191,6 +191,35 @@ def slide_edit_plan(job_id: int):
     return {"job_id": job_id, "plan": load_plan(job_id, DATA_DIR)}
 
 
+class SlidePlanReplanItem(BaseModel):
+    index: int
+    note: Optional[str] = ""
+
+
+class SlidePlanReplanRequest(BaseModel):
+    items: list[SlidePlanReplanItem]
+
+
+@app.post("/workers/slides/plan/{job_id}/replan")
+def slide_edit_plan_replan(job_id: int, request: SlidePlanReplanRequest):
+    """운영자가 문제로 표시한 장면만 수정 지시를 반영해 다시 계획한다(이미지는 만들지 않는다)."""
+    from app.services.slide_edit_plan import load_plan, save_plan
+    from app.services.slide_edit_replan import replan_scenes
+
+    if job_id <= 0:
+        raise HTTPException(status_code=422, detail="job_id는 양수여야 합니다.")
+    plan = load_plan(job_id, DATA_DIR)
+    if not plan:
+        raise HTTPException(status_code=404, detail="편집 계획서가 없습니다. 먼저 계획서를 만들어 주세요.")
+    if not request.items:
+        raise HTTPException(status_code=400, detail="다시 계획할 장면을 하나 이상 표시하세요.")
+    updated = replan_scenes(plan, [item.model_dump() for item in request.items])
+    if not updated:
+        raise HTTPException(status_code=502, detail="계획서 부분 재계획에 실패했습니다. 기존 계획서는 그대로입니다.")
+    save_plan(updated, DATA_DIR)
+    return {"job_id": job_id, "plan": updated}
+
+
 @app.get("/workers/slides/progress/{job_id}/scene/{index}")
 def slide_generation_scene_media(job_id: int, index: int):
     """돋보기(확대 보기)용 — 완성된 장면의 영상(있으면) 또는 이미지를 원본 크기로 내려준다.

@@ -1080,6 +1080,22 @@ public class FastApiClient {
         }
     }
 
+    /**
+     * 운영자가 문제로 표시한 장면({index, note})만 편집 계획서에서 다시 계획한다. 이미지는 만들지 않는다.
+     * 실패(502/404 등)는 메시지를 그대로 올려 UI가 보여 준다.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> replanSlideEdit(Long jobId, List<Map<String, Object>> items) {
+        try {
+            Map<String, Object> bodyMap = new HashMap<>();
+            bodyMap.put("items", items);
+            return objectMapper.readValue(
+                    postJson(fastApiUrl + "/workers/slides/plan/" + jobId + "/replan", bodyMap), Map.class);
+        } catch (Exception e) {
+            throw new RuntimeException("편집 계획서 부분 재계획 오류: " + e.getMessage(), e);
+        }
+    }
+
     /** 슬라이드형 편집 계획서. 조회 실패는 계획서 없음으로 둔다. */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getSlideEditPlan(Long jobId) {

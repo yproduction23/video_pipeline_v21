@@ -8,7 +8,7 @@ import {
   Clock, Edit, Save, Printer, Scissors, Copy, ExternalLink, Youtube, Info
 } from 'lucide-react'
 import Layout from '../components/Layout'
-import SlideProgressPanel from '../components/SlideProgressPanel'
+import SlideProgressPanel, { EditPlanSection } from '../components/SlideProgressPanel'
 import { jobsApi } from '../api/jobs'
 import { authStore } from '../store/auth'
 import apiClient from '../api/client'
@@ -688,6 +688,40 @@ export default function JobDetail() {
     },
     onError: (err) => alert('스크립트 재시작 실패: ' + (err.response?.data?.message || err.message)),
   })
+
+  // 슬라이드형 편집 계획서: 씬별 생성(비용 단계) 전에 만들고 확인한다.
+  const isSlideJob = job?.visualMode === 'SLIDE'
+  const { data: slidePlanData } = useQuery({
+    queryKey: ['slide-plan', id],
+    queryFn: () => apiClient.get(`/jobs/${id}/images/plan`).then(r => r.data),
+    enabled: isSlideJob,
+    refetchInterval: runningStep === 'images' || runningStep === 'images-plan' ? 4000 : false,
+  })
+  const slidePlan = slidePlanData?.plan || null
+
+  const handleBuildPlan = async () => {
+    setRunningStep('images-plan')
+    try {
+      await jobsApi.buildEditPlan(id)
+      qc.invalidateQueries(['slide-plan', id])
+    } catch (e) {
+      console.error(e)
+      alert('편집 계획서 생성 실패: ' + (e.response?.data?.message || e.message))
+    } finally {
+      setRunningStep(null)
+    }
+  }
+
+  // 계획서에서 문제로 표시한 장면만 수정 지시를 반영해 다시 계획한다(이미지는 만들지 않는다).
+  const handleReplan = async (items) => {
+    setRunningStep('images-plan')
+    try {
+      await jobsApi.replanEditPlan(id, items)
+      qc.invalidateQueries(['slide-plan', id])
+    } finally {
+      setRunningStep(null)
+    }
+  }
 
   const handleRun = async (step) => {
     setRunningStep(step.key)
@@ -1370,9 +1404,19 @@ export default function JobDetail() {
                             )}
                           </div>
                         )}
-                        <button onClick={() => handleRun(step)} disabled={!!runningStep}
+                        {step.key === 'images' && isSlideJob && !isAuto && (
+                          <button onClick={handleBuildPlan} disabled={!!runningStep}
+                            className="flex items-center gap-1.5 bg-slate-700 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:opacity-90 disabled:opacity-50 transition">
+                            {runningStep === 'images-plan' ? <Loader size={14} className="animate-spin"/> : <Zap size={14}/>}
+                            {slidePlan ? '계획서 다시 만들기' : '편집 계획서 만들기'}
+                          </button>
+                        )}
+                        <button onClick={() => handleRun(step)}
+                          disabled={!!runningStep || (step.key === 'images' && isSlideJob && !isAuto && !slidePlan)}
+                          title={step.key === 'images' && isSlideJob && !slidePlan ? '편집 계획서를 먼저 만들어 주세요' : undefined}
                           className="flex items-center gap-1.5 bg-accent-cyan text-navy-950 text-sm font-semibold px-4 py-2 rounded-xl hover:opacity-90 disabled:opacity-50 transition">
-                          {runningStep === step.key ? <Loader size={14} className="animate-spin"/> : <Zap size={14}/>}실행
+                          {runningStep === step.key ? <Loader size={14} className="animate-spin"/> : <Zap size={14}/>}
+                          {step.key === 'images' && isSlideJob ? '씬별 실행' : '실행'}
                         </button>
                       </div>
                     )}
@@ -1448,7 +1492,17 @@ export default function JobDetail() {
                     <div className="text-navy-400 leading-relaxed text-sm">
                       {step.key === 'images' && job?.visualMode === 'SLIDE' ? SLIDE_IMAGES_DESC : STEP_PROGRESS_INFO[step.key]?.desc}
                     </div>
-                    {step.key === 'images' && job?.visualMode === 'SLIDE' && (
+                    {step.key === 'images' && isSlideJob && (
+                      slidePlan
+                        ? <EditPlanSection plan={slidePlan} onReplan={handleReplan} busy={runningStep === 'images-plan'} />
+                        : (
+                          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-800">
+                            아직 편집 계획서가 없어요. 아래 <b>편집 계획서 만들기</b>를 먼저 누르세요 —
+                            계획서만 만들고 이미지·영상은 만들지 않아 비용이 나가지 않습니다.
+                          </div>
+                        )
+                    )}
+                    {step.key === 'images' && isSlideJob && (
                       <SlideProgressPanel jobId={id} running={runningStep === 'images'} />
                     )}
                     {isAuto && (

@@ -26,7 +26,6 @@ export default function SlideProgressPanel({ jobId, running }) {
   const [thumbs, setThumbs] = useState({})
   const [regenerating, setRegenerating] = useState(false)
   const [actionError, setActionError] = useState('')
-  const [planBuilding, setPlanBuilding] = useState(false)
   const [viewer, setViewer] = useState(null) // { index, kind: 'image'|'video', url } | { index, loading: true }
   const requested = useRef(new Set())
   const queryClient = useQueryClient()
@@ -39,14 +38,6 @@ export default function SlideProgressPanel({ jobId, running }) {
       return running || status === 'running' || status === 'preparing' ? 3000 : false
     },
   })
-
-  // 편집 계획서(2026-10-16): 생성 전에 배경·후편집을 한 번에 계획·저장한다. 읽기 전용(자동화 계약).
-  const { data: planData } = useQuery({
-    queryKey: ['slide-plan', jobId],
-    queryFn: () => apiClient.get(`/jobs/${jobId}/images/plan`).then(r => r.data),
-    refetchInterval: running || data?.status === 'running' || data?.status === 'preparing' ? 4000 : false,
-  })
-  const plan = planData?.plan || null
 
   const scenes = data?.scenes || []
   useEffect(() => {
@@ -113,47 +104,7 @@ export default function SlideProgressPanel({ jobId, running }) {
     }
   }
 
-  const buildPlan = async () => {
-    if (planBuilding) return
-    setPlanBuilding(true)
-    setActionError('')
-    try {
-      await jobsApi.buildEditPlan(jobId)
-      queryClient.invalidateQueries(['slide-plan', jobId])
-    } catch (e) {
-      setActionError(e.response?.data?.message || e.message || '편집 계획서 생성에 실패했습니다.')
-    } finally {
-      setPlanBuilding(false)
-    }
-  }
-  const planButton = (label) => (
-    <button type="button" disabled={planBuilding || running || data?.status === 'running'}
-      onClick={buildPlan}
-      className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
-      {planBuilding ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />}
-      {planBuilding ? '계획서 만드는 중 (이미지는 만들지 않아요)' : label}
-    </button>
-  )
-
-  if (!data || data.status === 'none') {
-    return (
-      <div className="mt-3 rounded-xl border border-cyan-200 bg-cyan-50/50 p-4 space-y-3">
-        <p className="text-xs font-semibold text-slate-600">
-          {plan
-            ? '편집 계획서가 준비됐어요. 확인한 뒤 씬별 생성을 눌러 주세요.'
-            : '씬별 생성 전에 편집 계획서를 먼저 만드세요. 계획서만 만들 때는 이미지 비용이 나가지 않아요.'}
-        </p>
-        {plan && <EditPlanSection plan={plan} />}
-      <div className="flex flex-wrap items-center gap-2">
-        {planButton(plan ? '계획서 다시 만들기' : '편집 계획서 만들기')}
-      </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {planButton(plan ? '계획서 다시 만들기' : '편집 계획서 만들기')}
-          {actionError && <span className="text-xs font-semibold text-rose-600">{actionError}</span>}
-        </div>
-      </div>
-    )
-  }
+  if (!data || data.status === 'none') return null
   const total = data.total || 0
   const done = data.done || 0
   const percent = total > 0 ? Math.round((done / total) * 100) : 0
@@ -229,7 +180,6 @@ export default function SlideProgressPanel({ jobId, running }) {
           <div className="h-full bg-cyan-600 transition-all" style={{ width: `${percent}%` }} />
         </div>
       )}
-      {plan && <EditPlanSection plan={plan} />}
       {(problemIndexes.length > 0 || actionError) && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {problemIndexes.length > 0 && (
@@ -304,10 +254,36 @@ function overlayText(overlay) {
     || (overlay.nodes || []).map(n => n.label).join(' → ') || ''
 }
 
+
 // 편집 계획서: 구간(연속된 같은 배경) 요약 + 장면별 후편집. 저장된 계획서를 그대로 실행한다.
-function EditPlanSection({ plan }) {
+// 2026-10-16 운영자 요청: 계획서를 보고 문제 되는 장면을 표시하고 말로 수정 지시를 적으면 그 장면만
+// 다시 계획한다(필드를 손으로 고치는 편집기가 아니라 자동화 흐름을 유지한다).
+export function EditPlanSection({ plan, onReplan, busy }) {
   const summary = plan.summary || {}
   const scenes = plan.scenes || []
+  const notes = plan.review_notes || {}
+  const [marked, setMarked] = useState({}) // { [index]: 수정 지시 }
+  const [error, setError] = useState('')
+  const markedIndexes = Object.keys(marked).map(Number).sort((a, b) => a - b)
+
+  const toggle = (index) => setMarked(prev => {
+    const next = { ...prev }
+    if (index in next) delete next[index]
+    else next[index] = ''
+    return next
+  })
+
+  const submit = async () => {
+    if (!markedIndexes.length || busy || !onReplan) return
+    setError('')
+    try {
+      await onReplan(markedIndexes.map(index => ({ index, note: marked[index] || '' })))
+      setMarked({})
+    } catch (e) {
+      setError(e.response?.data?.message || e.message || '다시 계획하지 못했어요. 기존 계획서는 그대로예요.')
+    }
+  }
+
   return (
     <details open className="rounded-lg border border-slate-200 bg-white p-3">
       <summary className="cursor-pointer text-sm font-bold text-slate-900">
@@ -335,21 +311,63 @@ function EditPlanSection({ plan }) {
           </div>
         ))}
       </div>
-      <details className="mt-3">
-        <summary className="cursor-pointer text-xs font-semibold text-slate-500">장면별 계획 보기</summary>
-        <div className="mt-2 max-h-72 overflow-y-auto divide-y divide-slate-100 text-xs">
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
+        <span className="font-semibold text-amber-800">
+          문제 되는 장면은 ‘문제’를 체크하고 수정 지시를 적은 뒤 다시 계획하세요. 이미지는 만들지 않아요.
+        </span>
+        <button type="button" onClick={submit} disabled={!markedIndexes.length || busy}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 font-bold text-white disabled:opacity-50">
+          {busy ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+          표시한 {markedIndexes.length}장면 다시 계획
+        </button>
+      </div>
+      {error && <p className="mt-1 text-xs font-semibold text-rose-600">{error}</p>}
+
+      {markedIndexes.length > 0 && (
+        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs">
+          <p className="mb-1 font-bold text-slate-700">문제 정리 ({markedIndexes.length}장면)</p>
+          <ul className="space-y-0.5 text-slate-600">
+            {markedIndexes.map(index => (
+              <li key={index}>#{index + 1} — {marked[index] ? marked[index] : '지시 없음(더 나은 구성으로 다시)'}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <details open className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold text-slate-500">장면별 계획</summary>
+        <div className="mt-2 max-h-[420px] overflow-y-auto divide-y divide-slate-100 text-xs">
           {scenes.map(scene => (
-            <div key={scene.index} className="flex gap-2 py-1.5">
-              <span className="w-10 shrink-0 font-bold text-slate-700">#{scene.index + 1}</span>
-              <span className={`h-fit shrink-0 rounded-full border px-1.5 py-0.5 font-bold ${BACKGROUND_TONE[scene.background] || ''}`}>
-                {BACKGROUND_LABEL[scene.background] || scene.background}
-              </span>
-              <span className="text-slate-700">
-                {scene.overlay
-                  ? `${OVERLAY_LABEL[scene.overlay.type] || scene.overlay.type}${overlayText(scene.overlay) ? ` · ${overlayText(scene.overlay)}` : ''}`
-                  : '후편집 없음'}
-                {scene.reason ? <span className="text-slate-400"> — {scene.reason}</span> : null}
-              </span>
+            <div key={scene.index} className={`py-1.5 ${scene.index in marked ? 'bg-amber-50' : ''}`}>
+              <div className="flex gap-2">
+                <label className="flex w-14 shrink-0 cursor-pointer items-center gap-1 font-bold text-slate-700">
+                  <input type="checkbox" checked={scene.index in marked} onChange={() => toggle(scene.index)} />
+                  #{scene.index + 1}
+                </label>
+                <span className={`h-fit shrink-0 rounded-full border px-1.5 py-0.5 font-bold ${BACKGROUND_TONE[scene.background] || ''}`}>
+                  {BACKGROUND_LABEL[scene.background] || scene.background}
+                </span>
+                <span className="text-slate-700">
+                  {scene.overlay
+                    ? `${OVERLAY_LABEL[scene.overlay.type] || scene.overlay.type}${overlayText(scene.overlay) ? ` · ${overlayText(scene.overlay)}` : ''}`
+                    : '후편집 없음'}
+                  {scene.reason ? <span className="text-slate-400"> — {scene.reason}</span> : null}
+                  {scene.revised && (
+                    <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 font-bold text-amber-700">수정됨</span>
+                  )}
+                </span>
+              </div>
+              <p className="ml-16 mt-0.5 text-slate-400">{scene.narration}</p>
+              {notes[String(scene.index)] && !(scene.index in marked) && (
+                <p className="ml-16 mt-0.5 font-semibold text-amber-700">지시: {notes[String(scene.index)]}</p>
+              )}
+              {scene.index in marked && (
+                <input type="text" value={marked[scene.index]} maxLength={200}
+                  onChange={(e) => setMarked(prev => ({ ...prev, [scene.index]: e.target.value }))}
+                  placeholder="수정 지시 (예: 칠판으로 바꾸고 금리 상승 화살표를 보여 줘)"
+                  className="ml-16 mt-1 w-[calc(100%-4rem)] rounded border border-amber-300 px-2 py-1 text-xs" />
+              )}
             </div>
           ))}
         </div>

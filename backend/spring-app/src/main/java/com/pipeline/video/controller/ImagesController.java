@@ -48,6 +48,26 @@ public class ImagesController {
         return ResponseEntity.ok(imagesService.buildEditPlan(jobId));
     }
 
+    /** 문제로 표시한 장면만 수정 지시를 반영해 다시 계획한다(이미지는 만들지 않는다). */
+    @PostMapping("/plan/replan")
+    public ResponseEntity<Map<String, Object>> replanEditPlan(
+            @PathVariable Long jobId,
+            @RequestBody Map<String, Object> request) {
+        Object raw = request.get("items");
+        java.util.List<Map<String, Object>> items = new java.util.ArrayList<>();
+        if (raw instanceof java.util.List<?> list) {
+            for (Object entry : list) {
+                if (entry instanceof Map<?, ?> map) {
+                    Map<String, Object> item = new java.util.HashMap<>();
+                    item.put("index", map.get("index"));
+                    item.put("note", map.get("note") == null ? "" : map.get("note"));
+                    items.add(item);
+                }
+            }
+        }
+        return ResponseEntity.ok(fastApiClient.replanSlideEdit(jobId, items));
+    }
+
     /** 슬라이드형 편집 계획서(저장된 것을 읽는다). */
     @GetMapping("/plan")
     public ResponseEntity<Map<String, Object>> editPlan(@PathVariable Long jobId) {
