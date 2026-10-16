@@ -412,7 +412,7 @@ export function EditPlanSection({ plan, onReplan, busy }) {
           후편집 {Math.round((plan.quality.overlay_ratio || 0) * 100)}%(목표 55~75%) ·
           배경 평균 {plan.quality.mean_bg_run_seconds || 0}초 유지
           {(plan.quality.violations || []).length > 0
-            ? <span className="ml-1 font-bold text-rose-600">· 기준 미달: {(plan.quality.violations || []).join(', ')}</span>
+            ? <span className="ml-1 font-bold text-rose-600">· 기준 미달: {(plan.quality.violations || []).map(code => QUALITY_LABEL[code] || code).join(', ')}</span>
             : <span className="ml-1 font-bold text-emerald-700">· 기준 통과</span>}
           {plan.auto_repair_rounds ? <span className="ml-1 text-slate-600">(자동 보정 {plan.auto_repair_rounds}회)</span> : null}
         </p>
@@ -485,6 +485,11 @@ const SLOT_LABEL = {
   center: '화면 가운데(전체)', top: '위', bottom: '아래', left: '왼쪽', right: '오른쪽',
   upper_left: '왼쪽 위', upper_right: '오른쪽 위', lower_left: '왼쪽 아래', lower_right: '오른쪽 아래',
 }
+const QUALITY_LABEL = {
+  board_run_too_long: '회색 배경이 너무 길게 이어짐', footage_ratio_low: '스톡 비중 부족',
+  bg_switch_too_frequent: '배경이 너무 잦게 바뀜', overlay_ratio_out_of_range: '후편집 비율 범위 밖',
+  bare_stock_run_too_long: '후편집 없는 스톡이 12초 넘게 이어짐', stock_overlay_ratio_low: '스톡 위 후편집 비율 부족',
+}
 const ANIM_LABEL = { rise: '아래에서 올라오며', pop: '튀어나오며', draw: '그려지며', count: '숫자가 올라가며', grow: '막대가 자라며' }
 const KIND_TO_OVERLAY = {
   text: 'key_text', number: 'big_number', bars: 'stat_chart', list: 'bullet_list', rows: 'compare_numbers', flow: 'flow',
@@ -508,11 +513,18 @@ function SequenceTimetable({ sequence }) {
         요소 {sequence.elements.length}개{sequence.source === 'fallback_overlays' ? ' · 장면별 후편집으로 대체됨' : ''}
       </p>
       <ol className="space-y-1">
-        {sequence.elements.map(element => {
+        {sequence.elements.map((element, position) => {
           const lines = elementContentLines(element)
           const replaced = element.until < sequence.duration - 0.05
+          const newTopic = position === 0 || element.topic !== sequence.elements[position - 1].topic
           return (
-            <li key={element.id} className="flex gap-2">
+            <li key={element.id} className="flex flex-col gap-1">
+              {newTopic && (
+                <span className="mt-1 rounded bg-violet-100 px-2 py-0.5 font-bold text-violet-900">
+                  주제 {element.topic ?? 1} · {(base + element.at).toFixed(1)}초부터 (이 주제의 요소는 쌓이고, 주제가 바뀔 때만 화면이 바뀜)
+                </span>
+              )}
+              <div className="flex gap-2">
               <span className="w-14 shrink-0 font-mono font-bold text-violet-800">{(base + element.at).toFixed(1)}초</span>
               <span className="text-slate-900">
                 <b>{ELEMENT_KIND_LABEL[element.kind] || element.kind}</b>
@@ -522,9 +534,10 @@ function SequenceTimetable({ sequence }) {
                   <span key={k} className="block pl-3 text-slate-800">{line.trimStart()}</span>
                 ))}
                 <span className="block pl-3 text-slate-600">
-                  {replaced ? `${(base + element.until).toFixed(1)}초에 사라짐(같은 자리에 새 요소)` : '구간 끝까지 화면에 남음'}
+                  {replaced ? `${(base + element.until).toFixed(1)}초에 사라짐(주제가 바뀔 때 한꺼번에)` : '구간 끝까지 화면에 남음'}
                 </span>
               </span>
+              </div>
             </li>
           )
         })}

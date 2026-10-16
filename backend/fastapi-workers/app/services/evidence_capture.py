@@ -16,6 +16,7 @@ import os
 import socket
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -165,6 +166,17 @@ class EvidenceCaptureService:
     _lock = threading.RLock()
     _playwright = None
     _browser = None
+    _executor: ThreadPoolExecutor | None = None
+
+    @classmethod
+    def _browser_thread(cls) -> ThreadPoolExecutor:
+        """Playwright sync API는 브라우저를 만든 스레드에서만 쓸 수 있다.
+
+        요청 스레드(FastAPI 스레드풀)는 수시로 끝나므로, 브라우저를 만들고 쓰는 모든 일을 전용 스레드 하나에서 한다."""
+        with cls._lock:
+            if cls._executor is None:
+                cls._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright-capture")
+            return cls._executor
 
     @classmethod
     def _browser_instance(cls):
@@ -181,6 +193,18 @@ class EvidenceCaptureService:
 
     @classmethod
     def shutdown(cls) -> None:
+        executor = cls._executor
+        if executor is not None:
+            try:
+                executor.submit(cls._shutdown_browser).result(timeout=30)
+            finally:
+                executor.shutdown(wait=False)
+                cls._executor = None
+            return
+        cls._shutdown_browser()
+
+    @classmethod
+    def _shutdown_browser(cls) -> None:
         with cls._lock:
             if cls._browser is not None:
                 cls._browser.close()
@@ -200,6 +224,9 @@ class EvidenceCaptureService:
         route.continue_()
 
     def capture_dom(self, request: EvidenceCaptureRequest) -> ArticleCapture:
+        return self._browser_thread().submit(self._capture_dom_sync, request).result()
+
+    def _capture_dom_sync(self, request: EvidenceCaptureRequest) -> ArticleCapture:
         # Legacy callers may still send source_url alone.  New v2 callers send
         # ArticleSource and therefore enter the domestic-Korean source policy.
         source_url = request.source.url if request.source else request.source_url

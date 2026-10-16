@@ -51,7 +51,7 @@ _PLAN_SYSTEM_PROMPT = (
     "- 실제 장소·사람·사물이 문장의 중심이면 배경 영상을 살리고 key_text를 가볍게 얹는다.\n\n"
     "오버레이 종류(type):\n"
     '- "key_text": 그 구간의 핵심 주장·핵심 수치를 큼직하게 강조. {"text": 내레이션에 글자 그대로 있는 '
-    "4~28자 구절}\n"
+    "4~28자 구절 — 자막 문장을 그대로 되풀이하지 말고 핵심어(2~3단어, 16자 안팎)만 뽑는다}\n"
     '- "bullet_list": 내레이션이 2~4개 항목(이유·원인·조건)을 나열할 때. {"title": 18자 이내 제목(숫자 금지), '
     '"items": [내레이션에 글자 그대로 있는 24자 이내 구절 2~4개]}\n'
     '- "stat_chart": 같은 장면에서 둘 이상의 수치를 비교할 때. {"title": 18자 이내(숫자 금지), '
@@ -317,22 +317,46 @@ def render_stat_overlay(*, title: str, items: list[dict], output_path: str, canv
         return False
 
 
-def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int) -> list[str]:
-    """글자 단위로 줄바꿈하고 max_lines를 넘으면 마지막 줄을 말줄임표로 끝낸다."""
+def _greedy_wrap(draw: ImageDraw.ImageDraw, paragraph: str, font, max_width: float) -> list[str]:
     lines: list[str] = []
     current = ""
-    for char in str(text or "").strip():
-        if char == "\n":
+    for word in paragraph.split():
+        trial = f"{current} {word}".strip()
+        if current and draw.textlength(trial, font=font) > max_width:
             lines.append(current)
-            current = ""
-            continue
-        if draw.textlength(current + char, font=font) > max_width and current:
-            lines.append(current)
-            current = char.lstrip()
+            current = word
         else:
-            current += char
+            current = trial
+        # 한 단어가 폭보다 길 때만 글자 단위로 쪼갠다.
+        while draw.textlength(current, font=font) > max_width and len(current) > 1:
+            cut = len(current) - 1
+            while cut > 1 and draw.textlength(current[:cut], font=font) > max_width:
+                cut -= 1
+            lines.append(current[:cut])
+            current = current[cut:]
     if current:
         lines.append(current)
+    return lines
+
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int, max_lines: int) -> list[str]:
+    """단어(띄어쓰기) 단위로 줄바꿈하고 줄 길이를 고르게 맞춘다. max_lines를 넘으면 마지막 줄을 말줄임표로 끝낸다.
+
+    2026-10-16: 글자 단위 줄바꿈이 "겁니/다"처럼 단어 중간을 잘라 한 글자 줄을 만들었다."""
+    lines: list[str] = []
+    for paragraph in str(text or "").strip().splitlines() or [""]:
+        wrapped = _greedy_wrap(draw, paragraph, font, max_width)
+        if len(wrapped) > 1:
+            # 같은 줄 수를 유지하는 가장 좁은 폭으로 다시 감아 마지막 줄이 짧게 남는 것을 막는다.
+            low, high = 1.0, float(max_width)
+            for _ in range(14):
+                mid = (low + high) / 2
+                if len(_greedy_wrap(draw, paragraph, font, mid)) <= len(wrapped):
+                    high = mid
+                else:
+                    low = mid
+            wrapped = _greedy_wrap(draw, paragraph, font, high)
+        lines.extend(wrapped)
     if len(lines) > max_lines:
         lines = lines[:max_lines]
         lines[-1] = lines[-1].rstrip(" ,.…")[: max(1, len(lines[-1]) - 1)] + "…"

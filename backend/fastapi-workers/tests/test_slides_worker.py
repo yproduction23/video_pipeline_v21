@@ -568,3 +568,83 @@ def test_compare_numbers_layers_are_composed_one_after_another_with_staggered_st
     assert len(starts) == 3 and starts == sorted(starts) and len(set(starts)) == 3
     assert seen["composed"][0]["is_video"] is False and seen["composed"][1]["is_video"] is True
     assert len(out_scene["slide_layers"]["overlays"][0]["overlay_png"]) == 3
+
+
+def test_planned_article_card_without_a_capture_falls_back_to_a_key_phrase_overlay(monkeypatch, tmp_path):
+    """계획서(승인본)에는 기사 카드가 있는데 실행 시점에 기사 캡처가 없을 수 있다 — 계획서를 바꾸지 않고
+    원문 구절 강조로 대체하며 검수 표시를 남긴다(오버레이가 조용히 사라지지 않는다)."""
+    worker = SlidesWorker()
+    scene = {"content": "전자발찌 착용 중 범행을 저질렀습니다.", "start_seconds": 0, "end_seconds": 4}
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    _fake_composer(monkeypatch)
+    monkeypatch.setattr("app.workers.slides_worker.plan_slide_overlays",
+                        lambda briefs, **kw: {0: {"type": "article_card"}})
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    out_scene = result["scenes"][0]
+    assert out_scene["overlay_type"] == "key_text"
+    assert "article_card_without_capture" in out_scene["quality_flags"]
+
+
+def test_executing_with_a_stale_reviewed_plan_is_flagged_for_review(monkeypatch, tmp_path):
+    worker = SlidesWorker()
+    scene = {"content": "문장입니다.", "start_seconds": 0, "end_seconds": 4}
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    _fake_composer(monkeypatch)
+    monkeypatch.setattr("app.workers.slides_worker.load_plan", lambda job_id, data_dir: {"input_hash": "old"})
+    monkeypatch.setattr("app.workers.slides_worker.plan_matches", lambda plan, briefs: False)
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    assert any("계획서를 새로 만들어" in reason for reason in result["review_reasons"])
+
+
+def _stock_search_harness(monkeypatch, tmp_path, found_by_query, selector=lambda narration, fresh, **kw: 0):
+    """_render_pixabay_scene을 단독으로 돌린다. found_by_query: 검색어 → 후보 목록."""
+    searched = []
+
+    def fake_search(query, **kw):
+        searched.append(query)
+        return found_by_query.get(query, [])
+
+    monkeypatch.setattr("app.workers.slides_worker._throttled_search", fake_search)
+    monkeypatch.setattr("app.workers.slides_worker.select_best_candidate", selector)
+    monkeypatch.setattr("app.workers.slides_worker.download_clip", lambda url, path: Path(path).write_bytes(b"v"))
+    monkeypatch.setattr("app.workers.slides_worker._extract_first_frame", lambda v, p: Path(p).write_bytes(b"p") or True)
+    return searched
+
+
+def test_planned_stock_scene_falls_back_to_generic_queries_and_logs_every_search(monkeypatch, tmp_path):
+    """2026-10-16 20번 Job: 구체적인 검색어("confused investor looking at documents")가 못 찾으면 장면이 회색 배경으로
+    떨어졌는데 이유가 기록되지 않았다. 일반 검색어로 한 번 더 찾고, 시도한 검색어와 결과를 남긴다."""
+    candidate = {"pixabay_id": 5, "download_url": "https://example/v.mp4", "tags": "office"}
+    searched = _stock_search_harness(monkeypatch, tmp_path, {"business office": [candidate]})
+    out: dict = {}
+
+    ok = SlidesWorker()._render_pixabay_scene(
+        index=0, narration="불안한 투자자가 서류를 봅니다.", duration=4.0, job_dir=tmp_path, used_pixabay_ids=set(),
+        out=out, planned_queries=["confused investor looking at documents", "analyst reviewing financial report"],
+    )
+
+    assert ok is True and out["pixabay_id"] == 5
+    assert "business office" in searched
+    log = out["stock_search_log"]
+    assert [entry["found"] for entry in log][:2] == [0, 0] and log[-1]["selected"] is True
+
+
+def test_stock_miss_records_why_nothing_was_chosen(monkeypatch, tmp_path):
+    candidate = {"pixabay_id": 6, "download_url": "https://example/v.mp4", "tags": "x"}
+    _stock_search_harness(monkeypatch, tmp_path, {"city skyline": [candidate]}, selector=lambda n, f, **kw: None)
+    out: dict = {}
+
+    ok = SlidesWorker()._render_pixabay_scene(
+        index=0, narration="문장입니다.", duration=4.0, job_dir=tmp_path, used_pixabay_ids=set(), out=out,
+        planned_queries=["office"],
+    )
+
+    assert ok is False
+    assert out["stock_miss_reason"] == "candidates_rejected_by_selection"
+    assert any(entry["found"] > 0 and entry["selected"] is False for entry in out["stock_search_log"])

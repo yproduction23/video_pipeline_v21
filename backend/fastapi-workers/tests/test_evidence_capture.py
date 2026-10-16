@@ -35,7 +35,7 @@ def public_article_server(tmp_path):
 def test_dom_capture_preserves_korean_and_multi_line_bboxes(monkeypatch, tmp_path, public_article_server):
     pytest.importorskip("playwright")
     try:
-        EvidenceCaptureService._browser_instance()
+        EvidenceCaptureService._browser_thread().submit(EvidenceCaptureService._browser_instance).result()
     except Exception as exc:
         pytest.skip(f"Playwright Chromium is not installed: {exc}")
     monkeypatch.setattr(evidence_capture, "DATA_DIR", tmp_path)
@@ -63,7 +63,7 @@ def test_dom_capture_preserves_korean_and_multi_line_bboxes(monkeypatch, tmp_pat
 def test_dom_capture_skips_hidden_duplicate_and_measures_visible_quote(monkeypatch, tmp_path, public_article_server):
     pytest.importorskip("playwright")
     try:
-        EvidenceCaptureService._browser_instance()
+        EvidenceCaptureService._browser_thread().submit(EvidenceCaptureService._browser_instance).result()
     except Exception as exc:
         pytest.skip(f"Playwright Chromium is not installed: {exc}")
     monkeypatch.setattr(evidence_capture, "DATA_DIR", tmp_path)
@@ -123,3 +123,27 @@ def test_user_uploaded_capture_preserves_verified_coordinates(monkeypatch, tmp_p
     assert Path(result.annotation_preview_path).exists()
     with Image.open(result.local_path) as original, Image.open(result.annotation_preview_path) as preview:
         assert ImageChops.difference(original.convert("RGB"), preview.convert("RGB")).getbbox() is not None
+
+
+def test_dom_capture_always_runs_on_one_dedicated_thread(monkeypatch):
+    """Playwright sync 브라우저는 만든 스레드에서만 쓸 수 있다.
+
+    요청 스레드가 달라져도(끝난 스레드 포함) 캡처는 항상 같은 전용 스레드에서 실행돼야 한다.
+    2026-10-16 재현: 스레드가 바뀐 뒤 모든 기사 캡처가 "cannot switch to a different thread"로 거절돼 기사 카드가 한 장도 안 나왔다."""
+    seen = []
+    monkeypatch.setattr(
+        EvidenceCaptureService, "_capture_dom_sync",
+        lambda self, request: seen.append(threading.get_ident()) or "ok",
+    )
+    callers = []
+
+    def call():
+        callers.append(threading.get_ident())
+        assert EvidenceCaptureService().capture_dom(object()) == "ok"
+
+    for _ in range(3):
+        worker = threading.Thread(target=call)
+        worker.start(); worker.join()
+
+    assert len(set(seen)) == 1
+    assert seen[0] not in callers

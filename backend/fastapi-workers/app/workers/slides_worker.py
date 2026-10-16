@@ -81,6 +81,7 @@ _PIXABAY_THROTTLE_LOCK = threading.Lock()
 _pixabay_last_search = [0.0]
 # 장면당 시도할 최대 검색어 수(주 검색어 2형태 + 대체 검색어 2개).
 MAX_STOCK_QUERIES = 4
+_GENERIC_STOCK_QUERIES = ("business office", "city skyline")
 
 # 2026-10-16 운영자 요청(Gemini 비용 절감): 19번 Job은 57장면에 Gemini 112건을 썼다(46장면이 2~3회).
 # 같은 내레이션의 배경 층은 다시 만들지 않고 재사용한다. 단일 장면 다시 생성은 새로 만든다.
@@ -240,6 +241,8 @@ class SlidesWorker:
         # 편집 계획서(2026-10-16 운영자 결정): 배경과 후편집을 생성 전에 한 번에 계획·저장하고, 이후
         # 장면 생성은 계획서를 그대로 실행한다. 같은 내레이션·같은 계획 버전이면 저장된 계획서를 재사용한다.
         edit_plan = load_plan(job_id, DATA_DIR)
+        # 운영자가 확인한 계획서가 있는데 입력(내레이션·길이)이 달라 새로 만드는 경우는 검수 사유로 남긴다.
+        plan_replaced_after_review = bool(edit_plan) and not plan_matches(edit_plan, briefs) and not plan_only
         if not plan_matches(edit_plan, briefs):
             edit_plan = build_edit_plan(
                 briefs, job_id=job_id,
@@ -330,7 +333,11 @@ class SlidesWorker:
                         *semantic.get("failure_categories", []),
                     ]))
 
-        review_reasons = [
+        review_reasons = (
+            ["확인한 편집 계획서와 입력(내레이션·장면 길이)이 달라 계획서를 새로 만들어 실행했습니다 — 계획서를 다시 확인해 주세요."]
+            if plan_replaced_after_review else []
+        )
+        review_reasons += [
             f"장면 {scene['index']}: {scene.get('slide_generation_error')}"
             for scene in generated
             if scene.get("slide_generation_error")
@@ -437,6 +444,9 @@ class SlidesWorker:
                     out["image_path"] = str(board_path)
                     out["visual_type"] = "slide_board"
                     out["base_fallback"] = "stock_miss_to_board"
+                    out["quality_flags"] = list(dict.fromkeys([
+                        *out.get("quality_flags", []), f"stock_miss:{out.get('stock_miss_reason', 'unknown')}",
+                    ]))
                     if not overlay_plan:
                         overlay_plan = {
                             "type": "key_text", "text": base_plan.get("fallback_key_text")
@@ -586,6 +596,15 @@ class SlidesWorker:
         if not overlay_plan:
             return
         capture = scene.get("article_capture") or {}
+        if overlay_plan["type"] == "article_card" and not capture:
+            # 승인한 계획서에는 기사 카드가 있지만 실행 시점에 기사 캡처가 없을 수 있다(수집은 실행마다 달라진다).
+            # 계획서를 바꾸지 않고 원문 구절 강조로 대체하고, 검수 표시를 남겨 조용히 사라지지 않게 한다.
+            narration = str(scene.get("subtitle_text") or scene.get("content") or scene.get("text") or "")
+            overlay_plan = {
+                "type": "key_text", "text": fallback_key_phrase(narration), "icon": None, "explain": False,
+                "source": "article_card_without_capture",
+            }
+            out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "article_card_without_capture"]))
         kind = overlay_plan["type"]
         overlay_png = job_dir / f"scene_{index:03d}_overlay.png"
         spec: dict = {"type": kind, "source": "claude_overlay_plan"}
@@ -807,9 +826,16 @@ class SlidesWorker:
             if query and query.lower() not in {q.lower() for q in queries}:
                 queries.append(query)
         queries = queries[:MAX_STOCK_QUERIES]
+        if planned_queries:
+            # 구체적인 검색어가 모두 빗나가면 일반 검색어로 한 번 더 찾는다(레퍼런스의 스톡은 주제·분위기에 어울리는 일반 영상).
+            for generic in _GENERIC_STOCK_QUERIES:
+                if generic.lower() not in {q.lower() for q in queries}:
+                    queries.append(generic)
 
         seen_ids: set[int] = set()
         clip = None
+        search_log: list[dict] = []
+        out["stock_search_log"] = search_log
         for position, query in enumerate(queries):
             try:
                 found = _throttled_search(query, min_duration_seconds=int(min(duration, 3)))
@@ -823,6 +849,8 @@ class SlidesWorker:
                 if c["pixabay_id"] not in claimed and c["pixabay_id"] not in seen_ids
             ]
             seen_ids.update(c["pixabay_id"] for c in fresh)
+            entry = {"query": query, "found": len(found), "fresh": len(fresh), "selected": False}
+            search_log.append(entry)
             if not fresh:
                 continue
             # 계획서가 정한 스톡 장면은 레퍼런스처럼 주제·분위기에 어울리는 일반 영상이면 충분하다.
@@ -839,9 +867,16 @@ class SlidesWorker:
                     continue
                 used_pixabay_ids.add(candidate["pixabay_id"])
             clip = candidate
+            entry["selected"] = True
             out["stock_query"] = query
             break
         if clip is None:
+            if any(item["fresh"] for item in search_log):
+                out["stock_miss_reason"] = "candidates_rejected_by_selection"
+            elif any(item["found"] for item in search_log):
+                out["stock_miss_reason"] = "all_candidates_already_used"
+            else:
+                out["stock_miss_reason"] = "no_search_results"
             return False
         video_path = job_dir / f"scene_{index:03d}_stock.mp4"
         download_clip(clip["download_url"], str(video_path))

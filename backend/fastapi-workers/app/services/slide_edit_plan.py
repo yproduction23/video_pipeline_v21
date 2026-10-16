@@ -24,7 +24,7 @@ from app.services.slide_overlay import _PLAN_SYSTEM_PROMPT, validate_overlay_pla
 
 logger = logging.getLogger(__name__)
 
-PLAN_VERSION = "slide-edit-plan-v3"
+PLAN_VERSION = "slide-edit-plan-v4"
 # 2026-10-16 레퍼런스 영상 분석(5초 간격 프레임 전수 분류, 연구 영상 2종 + 벤치마크 1종):
 #   기준 영상(32분 경제 해설): 스톡 67% · 어두운 회색 배경+글자 29% · 칠판 2% · 출연자 2%,
 #   후편집이 붙은 시간 58%(강조 문구 22 · 목록 15 · 막대 8 · 카드 5 · 숫자 5), 배경 전환 12초 간격,
@@ -40,6 +40,10 @@ MAX_BOARD_RUN_SECONDS = 30
 MIN_MEAN_BG_RUN_SECONDS = 9.0
 # 후편집이 붙는 장면 비율의 허용 범위(레퍼런스 56~74%).
 OVERLAY_RATIO_RANGE = (0.45, 0.80)
+# 2026-10-16 운영자 요청: 20번 Job에서 스톡 영상만 후편집 없이 길게 이어지는 부분이 밋밋했다. 레퍼런스(스톡 장면의 41%에
+# 후편집)보다 더 촘촘하게, 스톡 장면의 60% 이상에 후편집을 얹고 후편집 없는 스톡이 12초(약 3장면) 넘게 이어지지 않게 한다.
+MIN_STOCK_OVERLAY_RATIO = 0.6
+MAX_BARE_STOCK_SECONDS = 12.0
 # 장당 Gemini 이미지 비용 추정(원장 기준 gemini_pro_request 1건).
 GEMINI_IMAGE_EST_KRW = 339
 BACKGROUNDS = {"board", "stock", "photo"}
@@ -68,8 +72,10 @@ _SYSTEM_PROMPT = (
     '- "photo": 스톡으로는 못 구하는 구체적 장면이 문장의 핵심일 때만(전체의 8% 이하, 드물게). '
     '"photo_brief"에 촬영 가능한 장소·인물·사물을 영어 한 문장으로. 화면·전광판·차트·간판·글자·숫자는 절대 '
     "언급하지 않는다.\n"
-    "- board 장면은 반드시 overlay를 가진다. stock 장면은 문장에 수치·주장·목록이 있을 때 overlay를 얹고 "
-    "(스톡 장면의 약 40%) 나머지는 overlay 없이 영상과 자막만 둔다.\n"
+    "- board 장면은 반드시 overlay를 가진다. stock 장면도 문장의 숫자·핵심 주장·목록·비교를 overlay로 얹는다(스톡 장면의 "
+    "60% 이상). 후편집 없이 영상과 자막만 나오는 스톡이 연속 3장면(약 12초)을 넘지 않게 한다. 기사 증거([article: …])가 "
+    "붙은 장면은 article_card를 우선 쓴다.\n"
+    "- key_text는 자막 문장을 그대로 되풀이하지 말고 핵심어(2~3단어, 16자 이내)만 뽑는다.\n"
     "- 후편집이 붙는 장면은 전체의 약 55~60%다(모든 장면에 붙이지 않는다). 연속 3장면 이상 같은 종류의 overlay를 "
     "반복하지 않는다. 종류 비중은 강조 문구(key_text) 약 40%, 목록(bullet_list) 25%, 막대(stat_chart)·"
     "수치 비교 15%, 큰 숫자(big_number) 10%, 흐름도(flow)·계산식 10% 정도.\n\n"
@@ -89,8 +95,9 @@ def _squash(text: str) -> str:
 def plan_input_hash(briefs: dict[int, dict]) -> str:
     """같은 내레이션·같은 계획 버전이면 같은 해시 — 계획서 재사용 기준."""
     payload = json.dumps(
-        [PLAN_VERSION, [[i, briefs[i].get("narration", ""), round(float(briefs[i].get("duration") or 0), 2),
-                         bool(briefs[i].get("has_article"))] for i in sorted(briefs)]],
+        # 기사 증거 유무(has_article)는 넣지 않는다: 수집이 실행마다 달라져 승인한 계획서가 조용히 바뀌었다.
+        [PLAN_VERSION, [[i, briefs[i].get("narration", ""), round(float(briefs[i].get("duration") or 0), 2)]
+                        for i in sorted(briefs)]],
         ensure_ascii=False,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
@@ -256,6 +263,23 @@ def plan_violations(plan: dict) -> dict:
             close_run()
             run = []
     close_run()
+    stock_scenes = [s for s in scenes if s["background"] == "stock"]
+    stock_overlay_ratio = sum(1 for s in stock_scenes if s.get("overlay")) / max(len(stock_scenes), 1)
+    bare_stock_runs: list[dict] = []
+    bare: list[dict] = []
+
+    def close_bare() -> None:
+        seconds = round(sum(s["duration"] for s in bare), 1)
+        if bare and seconds > MAX_BARE_STOCK_SECONDS:
+            bare_stock_runs.append({"scenes": [s["index"] for s in bare], "seconds": seconds})
+
+    for scene in scenes:
+        if scene["background"] == "stock" and not scene.get("overlay"):
+            bare.append(scene)
+        else:
+            close_bare()
+            bare = []
+    close_bare()
     overlay_ratio = sum(1 for s in scenes if s.get("overlay")) / max(len(scenes), 1)
     block_count = 1 + sum(1 for a, b in zip(scenes, scenes[1:]) if a["background"] != b["background"]) if scenes else 0
     mean_run_seconds = total / block_count if block_count else 0.0
@@ -268,10 +292,16 @@ def plan_violations(plan: dict) -> dict:
         violations.append("footage_ratio_low")
     if not (OVERLAY_RATIO_RANGE[0] <= overlay_ratio <= OVERLAY_RATIO_RANGE[1]):
         violations.append("overlay_ratio_out_of_range")
+    if bare_stock_runs:
+        violations.append("bare_stock_run_too_long")
+    if len(stock_scenes) >= 3 and stock_overlay_ratio < MIN_STOCK_OVERLAY_RATIO:
+        violations.append("stock_overlay_ratio_low")
     return {
         "violations": violations,
         "footage_ratio": round(footage_seconds / total, 3),
         "overlay_ratio": round(overlay_ratio, 3),
+        "stock_overlay_ratio": round(stock_overlay_ratio, 3),
+        "bare_stock_runs": bare_stock_runs,
         "mean_bg_run_seconds": round(mean_run_seconds, 1),
         "long_board_runs": board_runs,
     }

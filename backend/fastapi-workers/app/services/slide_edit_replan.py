@@ -13,10 +13,12 @@ import time
 
 from app.services.slide_edit_plan import (
     BACKGROUNDS,
+    MAX_BARE_STOCK_SECONDS,
     MAX_BOARD_RUN_SECONDS,
     MAX_PHOTO_SCENE_RATIO,
     MIN_FOOTAGE_RATIO,
     MIN_MEAN_BG_RUN_SECONDS,
+    MIN_STOCK_OVERLAY_RATIO,
     _SYSTEM_PROMPT,
     _call_llm,
     _clean_queries,
@@ -168,6 +170,11 @@ _REPAIR_FOOTAGE_NOTE = (
 )
 
 
+_REPAIR_STOCK_OVERLAY_NOTE = (
+    "이 장면은 스톡 영상(background는 stock 그대로, stock_queries 유지)인데 후편집이 없어 밋밋하다. 문장의 숫자·핵심 주장·"
+    "목록·비교·막대 중 하나를 overlay로 얹는다(기사 증거가 있으면 article_card). 숫자가 없으면 핵심어 key_text(16자 이내)를 쓴다."
+)
+
 _REPAIR_MERGE_NOTE = (
     "앞뒤가 스톡 영상이라 이 장면만 칠판으로 끼어 배경이 너무 잦게 바뀐다(레퍼런스는 평균 12초 이상 유지). 이 장면도 "
     "같은 흐름의 스톡 영상(stock_queries 2개)으로 이어 붙인다. 후편집은 문장에 수치·주장이 있으면 영상 위에 얹는다."
@@ -221,6 +228,25 @@ def repair_targets(plan: dict) -> list[dict]:
                 break
             marked[scene["index"]] = _REPAIR_MERGE_NOTE
             block_total -= 2  # 양쪽 스톡 덩어리가 하나로 합쳐진다
+    # 후편집 없이 스톡만 길게 이어지거나(12초 초과) 스톡 위 후편집 비율이 낮으면, 배경은 그대로 두고 후편집만 얹을 장면을 고른다.
+    bare_scenes = [s for s in plan["scenes"] if s["background"] == "stock" and not s.get("overlay")]
+    for run in quality.get("bare_stock_runs", []):
+        acc = 0.0
+        for index in run["scenes"]:
+            acc += scenes[index]["duration"]
+            if acc > MAX_BARE_STOCK_SECONDS and index not in marked:
+                marked[index] = _REPAIR_STOCK_OVERLAY_NOTE
+                acc = 0.0
+    stock_scenes = [s for s in plan["scenes"] if s["background"] == "stock"]
+    if len(stock_scenes) >= 3:
+        have = sum(1 for s in stock_scenes if s.get("overlay") or s["index"] in marked)
+        # 남은 빈 스톡 장면 중 하나 건너 하나씩 골라 비율 하한을 채운다(연속해서 몰리지 않게).
+        for scene in [s for s in bare_scenes if s["index"] not in marked][::2] + \
+                [s for s in bare_scenes if s["index"] not in marked][1::2]:
+            if have / len(stock_scenes) >= MIN_STOCK_OVERLAY_RATIO:
+                break
+            marked[scene["index"]] = _REPAIR_STOCK_OVERLAY_NOTE
+            have += 1
     return [{"index": i, "note": note} for i, note in sorted(marked.items())]
 
 

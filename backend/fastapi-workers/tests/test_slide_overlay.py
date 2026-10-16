@@ -294,3 +294,32 @@ def test_layered_renderers_produce_staggered_layers(tmp_path):
     assert len(flow_paths) == 2
     big = render_big_number_overlay(value="8,343", label="건수", output_path=str(tmp_path / "big.png"))
     assert big and _is_full_canvas_rgba(big[0])
+
+
+def test_wrap_breaks_at_word_boundaries_and_never_leaves_a_lone_syllable():
+    """2026-10-16 재현: 글자 단위 줄바꿈이 "겁니/다", "마/무리"처럼 단어 중간을 잘랐다."""
+    from PIL import ImageDraw, ImageFont
+
+    from app.services.slide_overlay import _wrap_text
+
+    font = ImageFont.truetype("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf", 52)
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    for text in ("외국인 이탈이 핵심 변수였던 겁니다", "삼성전자의 자사주 매입은 이미 마무리", "자사주 매입이 끝났기 때문이라는 설명"):
+        width = int(draw.textlength(text, font=font) * 0.62)
+        lines = _wrap_text(draw, text, font, width, 3)
+        assert " ".join(lines) == text  # 단어를 쪼개지 않는다
+        assert all(draw.textlength(line, font=font) <= width + 1 for line in lines)
+        if len(lines) > 1:
+            assert min(len(line) for line in lines) >= 3  # 한 글자 줄이 없다
+
+
+def test_wrap_still_splits_a_single_overlong_word():
+    from PIL import ImageDraw, ImageFont
+
+    from app.services.slide_overlay import _wrap_text
+
+    font = ImageFont.truetype("/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf", 52)
+    draw = ImageDraw.Draw(Image.new("RGB", (10, 10)))
+    lines = _wrap_text(draw, "삼성전자하이닉스네이버카카오", font, 300, 3)
+
+    assert len(lines) > 1 and all(draw.textlength(line, font=font) <= 301 for line in lines)

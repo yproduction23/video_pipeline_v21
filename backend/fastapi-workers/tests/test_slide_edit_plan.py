@@ -333,3 +333,15 @@ def test_board_scenes_in_a_sequence_render_through_the_sequence_and_keep_other_p
     assert first[0]["overlay_type"] == "sequence"
     assert first[0]["slide_layers"]["overlays"][0]["sequence_id"] == 1
     assert result["scenes"][5]["visual_type"] in {"slide_board", "slide_key_text"}  # 스톡 미적중 → 회색 배경 대체
+
+
+def test_plan_is_reused_even_when_article_evidence_availability_changes(tmp_path):
+    """2026-10-16 20번 Job 재현: 기사 증거 수집이 실행마다 성공·실패가 달라(has_article) 승인한 계획서가
+    해시 불일치로 조용히 새 계획서로 바뀌었다. 기사 유무는 계획서 재사용 기준에 넣지 않는다."""
+    with_article = _briefs("첫 문장입니다.", "둘째 문장입니다.")
+    with_article[1]["has_article"] = True
+    without_article = _briefs("첫 문장입니다.", "둘째 문장입니다.")
+    plan = assemble_plan(with_article, [], job_id=7)
+
+    assert plan_input_hash(with_article) == plan_input_hash(without_article)
+    assert plan_matches(plan, without_article) is True

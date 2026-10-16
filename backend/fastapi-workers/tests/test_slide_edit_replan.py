@@ -95,6 +95,7 @@ def test_marked_scene_can_become_stock_and_segments_and_summary_refresh():
 
 from app.services.slide_edit_plan import (  # noqa: E402
     MAX_BOARD_RUN_SECONDS,
+    MAX_BARE_STOCK_SECONDS,
     MIN_FOOTAGE_RATIO,
     plan_violations,
 )
@@ -177,3 +178,55 @@ def test_unrepairable_violation_stays_visible_in_the_plan_quality():
 
     assert "board_run_too_long" in plan["quality"]["violations"]
     assert plan["auto_repair_rounds"] == 0
+
+
+# ---- 스톡 영상 위 후편집 (2026-10-16 운영자 요청: 후편집 없이 스톡만 길게 이어지는 부분을 고친다) ----
+
+def _stock_plan(overlay_pattern, duration=4.0):
+    """overlay_pattern: 장면마다 후편집이 있으면 True. 모두 스톡 배경."""
+    briefs = {i: {"narration": f"{i}번 장면의 주장 문장입니다 충분히 깁니다.", "context": "", "duration": duration}
+              for i in range(len(overlay_pattern))}
+    entries = []
+    for i, has_overlay in enumerate(overlay_pattern):
+        entry = {"index": i, "background": "stock", "stock_queries": ["office", "city"]}
+        if has_overlay:
+            entry["overlay"] = {"type": "key_text", "text": f"{i}번 장면의 주장 문장입니다"}
+        entries.append(entry)
+    return assemble_plan(briefs, entries, job_id=1)
+
+
+def test_a_long_run_of_bare_stock_is_a_violation():
+    plan = _stock_plan([False, False, False, False, True, True])  # 16초 동안 후편집 없는 스톡
+
+    quality = plan_violations(plan)
+
+    assert "bare_stock_run_too_long" in quality["violations"]
+    assert quality["bare_stock_runs"][0]["scenes"] == [0, 1, 2, 3]
+
+
+def test_a_low_share_of_stock_scenes_with_overlays_is_a_violation():
+    plan = _stock_plan([True, False, False, False, False, False, False, False, False, True])
+
+    assert "stock_overlay_ratio_low" in plan_violations(plan)["violations"]
+
+
+def test_stock_with_regular_overlays_passes_both_stock_overlay_checks():
+    plan = _stock_plan([True, False, True, True, False, True, True, False, True, True])
+
+    violations = plan_violations(plan)["violations"]
+
+    assert "bare_stock_run_too_long" not in violations and "stock_overlay_ratio_low" not in violations
+
+
+def test_repair_marks_bare_stock_scenes_to_get_overlays_without_changing_their_background():
+    plan = _stock_plan([False] * 8)
+
+    items = repair_targets(plan)
+
+    marked = {i["index"] for i in items}
+    run, longest = 0.0, 0.0
+    for scene in plan["scenes"]:
+        run = 0.0 if scene["index"] in marked else run + scene["duration"]
+        longest = max(longest, run)
+    assert longest <= MAX_BARE_STOCK_SECONDS
+    assert all("후편집" in i["note"] and "stock" in i["note"] for i in items)
