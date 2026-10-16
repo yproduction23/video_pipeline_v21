@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +65,14 @@ class NarrationHashMismatch(RuntimeError):
 class EvidencePlannerResult:
     scenes: list[dict[str, Any]]
     audit: dict[str, Any]
+
+
+# 장면별 증거 저장소(내레이션 해시 기준). 같은 내레이션이면 검색·캡처를 다시 하지 않는다.
+_STORE_VERSION = "scene-evidence-store-v1"
+UNRESOLVED_RETRY_SECONDS = 6 * 3600
+_STORED_SCENE_FIELDS = (
+    "visual_kind", "visual_type", "article_capture", "emphasis_plan", "key_phrase", "source_credit", "evidence_match",
+)
 
 
 def narration_text(scene: dict[str, Any]) -> str:
@@ -361,9 +370,28 @@ class ArticleEvidencePlanner:
             self._persist_audit(job_id, audit)
             return EvidencePlannerResult(output, audit)
 
-        candidates: list[tuple[float, int, int]] = []
+        # 저장된 결과 재사용: 같은 내레이션이면 검색·캡처를 다시 하지 않는다(실행마다 3~4분이 들고 결과도 달라졌다).
+        store = self._load_store(job_id)
+        used_scenes: set[int] = set()
+        unresolved_now: set[int] = set()
         for scene_index, scene in enumerate(output):
             if scene.get("article_capture"):
+                continue
+            key = narration_hash(scene)
+            saved = (store["selected"].get(key) or {})
+            fields = saved.get("fields") or {}
+            capture_path = str((fields.get("article_capture") or {}).get("local_path") or "")
+            if fields and capture_path and Path(capture_path).is_file():
+                scene.update(copy.deepcopy(fields))
+                scene.setdefault("verified_facts", verified_facts)
+                used_scenes.add(scene_index)
+                audit["selected"].append({**(scene.get("evidence_match") or {}), "reused": True})
+            elif time.time() - float(store["unresolved"].get(key, 0)) < UNRESOLVED_RETRY_SECONDS:
+                unresolved_now.add(scene_index)
+
+        candidates: list[tuple[float, int, int]] = []
+        for scene_index, scene in enumerate(output):
+            if scene.get("article_capture") or scene_index in used_scenes or scene_index in unresolved_now:
                 continue
             for fact_index, fact in enumerate(verified_facts):
                 score = _scene_fact_score(scene, fact, fact_index)
@@ -371,8 +399,8 @@ class ArticleEvidencePlanner:
                     candidates.append((score, scene_index, fact_index))
         candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
 
-        used_scenes: set[int] = set()
         max_scenes = max(0, int(runtime_config.value("evidence_max_scenes")))
+        tried: set[int] = set()
         for evidence_score, scene_index, fact_index in candidates:
             if len(used_scenes) >= max_scenes:
                 break
@@ -381,6 +409,7 @@ class ArticleEvidencePlanner:
             scene = output[scene_index]
             fact = verified_facts[fact_index]
             result = self._resolve_scene(job_id, scene, fact, fact_index, evidence_score)
+            tried.add(scene_index)
             if result is None:
                 audit["skipped"].append({
                     "scene_id": str(scene.get("scene_id") or scene_index),
@@ -401,12 +430,20 @@ class ArticleEvidencePlanner:
             scene.setdefault("verified_facts", verified_facts)
             used_scenes.add(scene_index)
             audit["selected"].append(selected_audit)
+            store["selected"][narration_hash(scene)] = {
+                "saved_at": time.time(), "fact_index": fact_index,
+                "fields": {key: copy.deepcopy(scene[key]) for key in _STORED_SCENE_FIELDS if key in scene},
+            }
 
         for index, scene in enumerate(output):
             scene_id = str(scene.get("scene_id") or index)
             after = narration_hash(scene)
             if hashes_before[scene_id] != after:
                 raise NarrationHashMismatch(f"NARRATION_HASH_MISMATCH: scene={scene_id}")
+        # 시도했지만 검증된 기사를 못 찾은 장면은 한동안 다시 검색하지 않는다.
+        for scene_index in tried - used_scenes:
+            store["unresolved"][narration_hash(output[scene_index])] = time.time()
+        self._save_store(job_id, store)
         audit["narration_hashes"] = hashes_before
         audit["selected_count"] = len(audit["selected"])
         self._persist_audit(job_id, audit)
@@ -586,6 +623,28 @@ class ArticleEvidencePlanner:
             return redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_timeout=1)
         except Exception:
             return None
+
+    def _store_path(self, job_id: int) -> Path:
+        return self.audit_dir / "jobs" / str(job_id) / "evidence" / "scene_evidence_store.json"
+
+    def _load_store(self, job_id: int) -> dict[str, dict]:
+        try:
+            data = json.loads(self._store_path(job_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not isinstance(data, dict) or data.get("version") != _STORE_VERSION:
+            data = {}
+        return {"selected": dict(data.get("selected") or {}), "unresolved": dict(data.get("unresolved") or {})}
+
+    def _save_store(self, job_id: int, store: dict[str, dict]) -> None:
+        target = self._store_path(job_id)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temp = target.with_suffix(".json.tmp")
+            temp.write_text(json.dumps({"version": _STORE_VERSION, **store}, ensure_ascii=False), encoding="utf-8")
+            os.replace(temp, target)
+        except OSError as exc:  # 저장 실패가 이미지 단계를 막지 않는다(다음 실행에서 다시 수집할 뿐이다)
+            logger.warning("scene evidence store save failed: %s", exc)
 
     def _persist_audit(self, job_id: int, audit: dict[str, Any]) -> None:
         target = self.audit_dir / "jobs" / str(job_id) / "evidence" / "evidence_plan.json"

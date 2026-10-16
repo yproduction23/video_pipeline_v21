@@ -281,3 +281,91 @@ def test_tokens_drops_fragments_glued_to_a_preceding_digit():
     assert "분경" not in tokens
     assert "인천시" in tokens
     assert "홈플러스" in tokens
+
+
+# ---- 장면별 기사 증거 저장·재사용 (2026-10-16 운영자 질문: 대본 단계에서 이미 수집했는데 왜 또 수집하나) ----
+# 이미지 단계는 실행(계획서 만들기·씬별 실행·문제장면 재생성)마다 같은 검색과 캡처를 3~4분씩 반복했고, 결과가 매번 달라
+# 승인한 계획서의 기사 카드가 사라지기도 했다. 같은 내레이션이면 저장된 결과를 재사용한다.
+
+class CountingDiscovery(FakeDiscovery):
+    def __init__(self):
+        self.calls = 0
+
+    def discover(self, query, terms, limit):
+        self.calls += 1
+        return super().discover(query, terms, limit)
+
+
+class FileCapture(FakeCapture):
+    def __init__(self, directory):
+        self.directory = directory
+        self.calls = 0
+
+    def capture_dom(self, request):
+        self.calls += 1
+        path = Path(self.directory) / f"article_{self.calls}.png"
+        path.write_bytes(b"png")
+        capture = super().capture_dom(request)
+        capture.local_path = str(path)
+        return capture
+
+
+_FACT = {"fact": "코스피가 반도체 투톱 상승으로 12.5% 올랐다.", "figure": "12.5%"}
+_SENTENCES = ["한국거래소에 따르면 코스피가 반도체 투톱 상승으로 12.5% 올랐다."]
+
+
+def _counting_planner(tmp_path, sentences=_SENTENCES):
+    discovery = CountingDiscovery()
+    capture = FileCapture(tmp_path)
+    planner = ArticleEvidencePlanner(
+        discovery=discovery, capture=capture, sentence_resolver=FakeResolver(sentences),
+        audit_dir=tmp_path, llm_call=_default_llm_call,
+    )
+    planner._redis = staticmethod(lambda: None)
+    return planner, discovery, capture
+
+
+def _scene(text="코스피가 반도체 투톱 상승으로 12.5퍼센트 올랐습니다."):
+    return {"scene_id": "scene-3", "phase": "twist", "content": text, "source_refs": ["facts[0]"]}
+
+
+def test_saved_article_evidence_is_reused_without_searching_or_capturing_again(tmp_path):
+    first, discovery, capture = _counting_planner(tmp_path)
+    first_result = first.attach(job_id=90, scenes=[_scene()], verified_facts=[_FACT])
+    second, discovery2, capture2 = _counting_planner(tmp_path)
+
+    second_result = second.attach(job_id=90, scenes=[_scene()], verified_facts=[_FACT])
+
+    assert capture.calls == 1 and discovery2.calls == 0 and capture2.calls == 0
+    reused = second_result.scenes[0]
+    assert reused["article_capture"] == first_result.scenes[0]["article_capture"]
+    assert reused["visual_kind"] == "article_scene" and reused["emphasis_plan"]
+    assert second_result.audit["selected_count"] == 1
+    assert second_result.audit["selected"][0]["reused"] is True
+
+
+def test_changed_narration_or_missing_image_file_collects_again(tmp_path):
+    first, _, _ = _counting_planner(tmp_path)
+    first.attach(job_id=91, scenes=[_scene()], verified_facts=[_FACT])
+
+    changed, discovery_changed, _ = _counting_planner(tmp_path)
+    changed.attach(job_id=91, scenes=[_scene("코스피가 반도체 투톱 상승으로 12.5퍼센트 크게 올랐습니다.")], verified_facts=[_FACT])
+    assert discovery_changed.calls >= 1  # 내레이션이 바뀐 장면은 다시 수집한다
+
+    for image in Path(tmp_path).glob("article_*.png"):
+        image.unlink()
+    missing, discovery_missing, _ = _counting_planner(tmp_path)
+    missing.attach(job_id=91, scenes=[_scene()], verified_facts=[_FACT])
+    assert discovery_missing.calls >= 1  # 캡처 이미지가 사라졌으면 다시 수집한다
+
+
+def test_scenes_with_no_verified_article_are_not_searched_again_right_away(tmp_path):
+    first, discovery, _ = _counting_planner(tmp_path, ["전혀 다른 회사의 매출이 3% 감소했다."])
+    first.attach(job_id=92, scenes=[_scene()], verified_facts=[_FACT])
+    assert discovery.calls >= 1
+
+    second, discovery2, _ = _counting_planner(tmp_path, ["전혀 다른 회사의 매출이 3% 감소했다."])
+    result = second.attach(job_id=92, scenes=[_scene()], verified_facts=[_FACT])
+
+    assert discovery2.calls == 0
+    assert "article_capture" not in result.scenes[0]
