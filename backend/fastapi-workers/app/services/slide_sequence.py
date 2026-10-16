@@ -23,7 +23,7 @@ from typing import Callable
 from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
-from app.services.slide_overlay import _FONT_BOLD, _font, validate_overlay_plan
+from app.services.slide_overlay import _FONT_BOLD, _font, spell_like_narration as _spell_like_narration, validate_overlay_plan
 
 logger = logging.getLogger(__name__)
 
@@ -167,19 +167,6 @@ def _anchor_time(scene: dict, scene_start: float, anchor: str) -> float:
         ratio = position / max(len(narration), 1)
     offset = min(max(ratio * scene["duration"], 0.15), max(scene["duration"] - 0.6, 0.15))
     return round(scene_start + offset, 2)
-
-
-def _spell_like_narration(value, narration: str):
-    """내레이션이 "5.3퍼센트"라고 적었는데 Claude가 "5.3%"로 옮긴 경우의 표기만 내레이션에 맞춘다(값은 바꾸지 않는다)."""
-    if "퍼센트" not in narration or "%" in narration:
-        return value
-    if isinstance(value, str):
-        return value.replace("%", "퍼센트")
-    if isinstance(value, list):
-        return [_spell_like_narration(item, narration) for item in value]
-    if isinstance(value, dict):
-        return {key: _spell_like_narration(item, narration) for key, item in value.items()}
-    return value
 
 
 def _validate_content(kind: str, content: dict, scene_index: int, scenes: dict[int, dict]) -> dict | None:

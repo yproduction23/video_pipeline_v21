@@ -150,6 +150,19 @@ def _validate_equation(entry: dict, narration: str) -> dict | None:
     return {"label": label, "left": left, "ops": ops, "result": result}
 
 
+def spell_like_narration(value, narration: str):
+    """내레이션이 "5.3퍼센트"라고 적었는데 Claude가 "5.3%"로 옮긴 경우의 표기만 내레이션에 맞춘다(값은 바꾸지 않는다)."""
+    if "퍼센트" not in narration or "%" in narration:
+        return value
+    if isinstance(value, str):
+        return value.replace("%", "퍼센트")
+    if isinstance(value, list):
+        return [spell_like_narration(item, narration) for item in value]
+    if isinstance(value, dict):
+        return {key: spell_like_narration(item, narration) for key, item in value.items()}
+    return value
+
+
 def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[int, dict]:
     """Claude 계획을 결정론적으로 검증한다. 통과 못 한 오버레이는 버리고 그 장면은 배경만 쓴다.
     briefs[index] = {"narration": str, "has_article": bool, "has_numeric_series": bool}"""
@@ -167,6 +180,7 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
         narration = str(brief.get("narration") or "")
         # 수치·계산 오버레이는 직전 두 장면에서 이미 말한 수치도 근거로 허용한다(원문 글자 일치는 그대로 요구).
         numeric_ground = f"{brief.get('context') or ''} {narration}".strip()
+        entry = spell_like_narration(entry, numeric_ground)
         kind = str(entry.get("type") or "").strip()
         if kind in _DIAGRAM_KINDS and entry.get("explain") is None:
             # 화면을 인포그래픽이 덮는 종류는 배경을 새로 만들 이유가 없다(명시적 false만 예외).

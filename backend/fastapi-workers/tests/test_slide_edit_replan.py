@@ -230,3 +230,23 @@ def test_repair_marks_bare_stock_scenes_to_get_overlays_without_changing_their_b
         longest = max(longest, run)
     assert longest <= MAX_BARE_STOCK_SECONDS
     assert all("후편집" in i["note"] and "stock" in i["note"] for i in items)
+
+
+def test_replan_asks_once_more_when_an_overlay_is_rejected_for_not_copying_the_narration():
+    """2026-10-16 재현: 스톡 위 후편집 13장면이 모두 내레이션을 바꿔 쓴 문구라 거절돼 보정이 아무 효과가 없었다.
+    거절된 장면만 거절 이유와 함께 한 번 더 요청한다."""
+    briefs = {0: {"narration": "위험회피 심리가 시장 전반으로 빠르게 퍼졌습니다.", "context": "", "duration": 4.0}}
+    plan = assemble_plan(briefs, [{"index": 0, "background": "stock", "stock_queries": ["office", "city"]}], job_id=1)
+    calls = []
+
+    def llm(system, messages, max_tokens):
+        calls.append(messages[0]["content"])
+        text = "위험회피 심리 확산" if len(calls) == 1 else "위험회피 심리가"
+        return json.dumps({"scenes": [{"index": 0, "background": "stock", "stock_queries": ["office", "city"],
+                                       "overlay": {"type": "key_text", "text": text}}]}, ensure_ascii=False)
+
+    updated = replan_scenes(plan, [{"index": 0, "note": "후편집을 얹는다"}], llm_call=llm, source="auto")
+
+    assert len(calls) == 2 and "글자 그대로" in calls[1] and "위험회피 심리 확산" in calls[1]
+    assert updated["scenes"][0]["background"] == "stock"
+    assert updated["scenes"][0]["overlay"]["text"] == "위험회피 심리가"

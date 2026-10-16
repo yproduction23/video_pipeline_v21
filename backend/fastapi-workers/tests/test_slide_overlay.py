@@ -323,3 +323,12 @@ def test_wrap_still_splits_a_single_overlong_word():
     lines = _wrap_text(draw, "삼성전자하이닉스네이버카카오", font, 300, 3)
 
     assert len(lines) > 1 and all(draw.textlength(line, font=font) <= 301 for line in lines)
+
+
+def test_percent_sign_is_spelled_like_the_narration_before_verbatim_validation():
+    """2026-10-16 재현: Claude가 내레이션의 "7.57퍼센트"를 "7.57%"로 옮겨 후편집이 통째로 거절됐다."""
+    briefs = {0: {"narration": "코스피는 7.57퍼센트 폭락했죠."}}
+
+    plan = validate_overlay_plan([{"index": 0, "type": "key_text", "text": "7.57% 폭락했죠"}], briefs)
+
+    assert plan[0]["text"] == "7.57퍼센트 폭락했죠"
