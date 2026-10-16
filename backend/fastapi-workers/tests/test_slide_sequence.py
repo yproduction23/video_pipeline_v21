@@ -201,3 +201,11 @@ def test_design_stays_simple_at_most_three_elements_visible_and_two_seconds_on_s
     for earlier, later in zip(seq["elements"], seq["elements"][1:]):
         if earlier["until"] <= later["at"] + 1e-6 and earlier["slot"] == later["slot"]:
             assert later["at"] - earlier["at"] >= 2.0 - 1e-6  # 교체는 최소 2초 뒤
+
+
+def test_text_sprite_handles_text_with_line_breaks():
+    from app.services.slide_sequence import _text_sprite
+
+    sprite = _text_sprite("첫째 줄\n둘째 줄", 60, (255, 255, 255))
+
+    assert sprite.height > _text_sprite("첫째 줄", 60, (255, 255, 255)).height  # 두 줄로 그려진다

@@ -376,15 +376,18 @@ def _ease_out(p: float) -> float:
 def _text_sprite(text: str, size: int, color: tuple, *, stroke: int = 0, max_width: int = 1500) -> Image.Image:
     font = _font(_FONT_BOLD, size)
     probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
-    words, lines, current = str(text).split(" "), [], ""
-    for word in words:
-        trial = f"{current} {word}".strip()
-        if current and probe.textlength(trial, font=font) > max_width:
-            lines.append(current)
-            current = word
-        else:
-            current = trial
-    lines.append(current)
+    lines = []
+    # 원문에 줄바꿈이 있으면 그 줄을 먼저 나누고, 각 줄 안에서만 폭에 맞춰 단어 단위로 감는다.
+    for paragraph in str(text).splitlines() or [""]:
+        current = ""
+        for word in paragraph.split(" "):
+            trial = f"{current} {word}".strip()
+            if current and probe.textlength(trial, font=font) > max_width:
+                lines.append(current)
+                current = word
+            else:
+                current = trial
+        lines.append(current)
     line_h = int(size * 1.25)
     width = int(max(probe.textlength(line, font=font) for line in lines)) + 40 + stroke * 2
     sprite = Image.new("RGBA", (width, line_h * len(lines) + 30), (0, 0, 0, 0))
