@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any, Callable
 
+logger = logging.getLogger(__name__)
 
 _HOOK_TYPES = {"number_context", "belief_reversal", "time_contrast", "hidden_context", "direct_question", "human_stake"}
 
@@ -22,7 +24,7 @@ def _json_object(raw: str) -> dict[str, Any]:
 
 HIGHLIGHT_ROLE = "하이라이트"
 SLIDE_STRUCTURE = "highlight_gi_seung_jeon_gyeol"
-_SLIDE_MAX_BEATS = 7
+_SLIDE_MAX_BEATS = 9
 
 
 def _is_slide(visual_mode: str | None) -> bool:
@@ -116,7 +118,9 @@ def plan_narrative(
             f'\n이 영상은 "{HIGHLIGHT_ROLE} → 기 → 승 → 전 → 결" 구조입니다. story_beats의 첫 비트 role은 반드시 '
             f'"{HIGHLIGHT_ROLE}"로 하고, 영상 전체에서 시청자가 얻게 될 핵심 결과·반전 1~3개를 담은 사실 ID를 배정하세요'
             '(질문만 던지고 끝나는 도입이 아니라 결론의 방향을 미리 보여주는 구간). 이어지는 비트는 기승전결의 흐름에 맞는 역할로 '
-            '만들되 소재에 맞게 합치거나 줄일 수 있습니다. 하이라이트에서 쓴 사실은 본론에서 근거·원인이라는 새 역할로 다시 쓸 수 있습니다.'
+            '만들되 소재에 맞게 합치거나 줄일 수 있습니다. 하이라이트에서 쓴 사실은 본론에서 근거·원인이라는 새 역할로 다시 쓸 수 있습니다. '
+            'benchmark_points.outline이 있으면 그것이 벤치마크 영상의 실제 구성입니다. 본론 비트의 수·순서·역할·비중(share_pct)을 '
+            'outline.sections와 최대한 같게 맞추되, outline의 주장·수치는 사실이 아니므로 fact_ids는 제공된 검증 사실에서만 배정하세요.'
         )
     system = f"""당신은 한국 경제 영상의 내러티브 기획자입니다.
 다른 창작자의 문장을 그대로 복제하지 마세요. 훅의 유형·구조·리듬은 참고할 수 있습니다. 제공 사실 밖의 수치, 인과, 예측을 만들지 마세요.
@@ -138,15 +142,18 @@ JSON 객체만 반환하세요."""
   "hook_type":"number_context|belief_reversal|time_contrast|hidden_context|direct_question|human_stake 중 하나",
   "selection_reason":"이 소재에 이 훅이 자연스러운 이유",
   "tension":"이 영상을 끝까지 보게 만드는 긴장·질문 한 문장",
-  "story_beats":[{{"role":"자유로운 역할명","fact_ids":["F1"],"transition_goal":"앞 문장과 어떻게 이어지는지"}}],
+  "story_beats":[{{"role":"자유로운 역할명","fact_ids":["F1"],"transition_goal":"앞 문장과 어떻게 이어지는지(80자 이내)"}}],
   "checkpoint_fact_ids":["F1"],
   "transition_rules":["질문 직후에는 근거로 답한다"],
   "avoid":["같은 수치를 새 역할 없이 반복"]
 }}
-story_beats는 {"4~7" if slide else "3~6"}개로 만들고 역할명은 내용에 맞게 정하세요. fact_ids는 제공 ID만 사용하세요.
+story_beats는 {"4~9" if slide else "3~6"}개로 만들고 역할명은 내용에 맞게 정하세요. fact_ids는 제공 ID만 사용하세요.
 마지막 비트의 transition_goal에는 tension을 어떻게 해소하는지 명시하세요."""
-    raw = llm_call(system, [{"role": "user", "content": prompt}], 1400)
+    # 슬라이드형은 비트가 많고 설명이 길어져 1,400토큰에서 JSON이 잘려 조용히 폴백된 적이 있다(20번 Job).
+    raw = llm_call(system, [{"role": "user", "content": prompt}], 3000 if slide else 1400)
     plan = _json_object(raw)
+    if not plan:
+        logger.warning("내러티브 플랜 응답을 JSON으로 읽지 못해 폴백 플랜 사용(응답 %d자, 잘림 가능)", len(raw or ""))
     valid_ids = {row["id"] for row in indexed_facts}
     beats = plan.get("story_beats")
     max_beats = _SLIDE_MAX_BEATS if slide else 6

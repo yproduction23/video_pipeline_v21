@@ -50,6 +50,7 @@ from app.utils.image_text_contract import contains_financial_number, prompt_text
 from app.workers.news_keyword_extractor import NewsKeywordExtractor
 from app.utils.keyword_aliases import normalise_terms
 from app.utils.script_delivery import annotate_sections, default_style_mix, pace_sections_for_runtime, validate_delivery
+from app.services.discovery.benchmark_outline import outline_search_queries
 from app.utils.narrative_planner import HIGHLIGHT_ROLE, fallback_plan, plan_narrative
 
 # 슬라이드형 하이라이트 구간의 목표 문장 수(프롬프트 지시). 검증은 ±1문장을 허용한다.
@@ -288,6 +289,75 @@ def _collect_keyword_news(terms: list[str], content_nature: Optional[str] = None
             ", ".join(_topic_terms_for_evidence(terms)),
         )
     return rows[:12]
+
+
+OUTLINE_NEWS_PER_QUERY = 4
+OUTLINE_NEWS_CAP = 24
+
+
+def _ensure_benchmark_outline(benchmark_analysis, source_videos, llm_call) -> Optional[dict]:
+    """벤치마크 분석에 구성(outline)이 없으면 원본 영상 자막에서 만들어 붙인다. 실패하면 원본 그대로."""
+    if not isinstance(benchmark_analysis, dict) or benchmark_analysis.get("outline"):
+        return benchmark_analysis
+    video = next(
+        (v for v in source_videos or [] if isinstance(v, dict) and (v.get("videoId") or v.get("video_id"))),
+        None,
+    )
+    if not video:
+        return benchmark_analysis
+    try:
+        from app.services.discovery.benchmark_outline import extract_outline
+        from app.services.discovery.transcript import FULL_MAX_CHARS, fetch_transcript
+
+        transcript = fetch_transcript(video.get("videoId") or video.get("video_id"), max_chars=FULL_MAX_CHARS)
+        outline = extract_outline(llm_call, video, transcript)
+    except Exception as exc:
+        logger.warning("벤치마크 구성(outline) 보강 실패, 기존 분석 사용: %s", exc)
+        return benchmark_analysis
+    return {**benchmark_analysis, "outline": outline} if outline else benchmark_analysis
+
+
+def _collect_outline_news(
+    queries: list[str], content_nature: Optional[str] = None,
+) -> list[dict]:
+    """벤치마크 구성의 구간별 검색어로 근거 뉴스를 추가 수집한다(최대 OUTLINE_NEWS_CAP건).
+
+    기본 수집(_collect_keyword_news)과 같은 언론사 필터·기간을 쓴다. 검색 실패는 해당 검색어만 건너뛴다."""
+    if not queries:
+        return []
+    extractor = NewsKeywordExtractor()
+    outlet_filter = _cn.normalize_nature(content_nature) == _cn.FACTUAL
+    rows: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for query in queries:
+        try:
+            articles = list(extractor.search_recent_news(
+                query, max_age_hours=24 * 7, limit=OUTLINE_NEWS_PER_QUERY, outlet_filter=outlet_filter,
+            ))
+        except Exception as exc:
+            logger.warning("구성 검색어 뉴스 조회 실패(건너뜀): %s (%s)", query, type(exc).__name__)
+            continue
+        for article in articles:
+            identity = (str(article.get("title", "")), str(article.get("url", "")))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            rows.append({**article, "matched_keyword": query})
+            if len(rows) >= OUTLINE_NEWS_CAP:
+                return rows
+    return rows
+
+
+def _merge_news_rows(base: list[dict], extra: list[dict]) -> list[dict]:
+    """기존 뉴스 뒤에 중복(제목+URL)을 뺀 추가 뉴스를 붙인다."""
+    merged = list(base or [])
+    seen = {(str(row.get("title", "")), str(row.get("url", ""))) for row in merged}
+    for row in extra or []:
+        identity = (str(row.get("title", "")), str(row.get("url", "")))
+        if identity not in seen:
+            seen.add(identity)
+            merged.append(row)
+    return merged
 
 
 def _candidate_evidence_context(
@@ -1547,6 +1617,27 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
             keyword_news = candidate_context["merged_news"]
             source_videos = candidate_context["source_videos"]
             benchmark_analysis = candidate_context["benchmark_analysis"]
+            if (visual_mode or "").upper() == "SLIDE":
+                # 구성(outline)이 없는 과거 분석(이 기능 이전에 만든 Job)도 같은 경계에서 따라가게 한다.
+                benchmark_analysis = _ensure_benchmark_outline(
+                    benchmark_analysis, source_videos,
+                    lambda system, user, max_tokens: self._call_llm_with_fallback(
+                        system, [{"role": "user", "content": user}], max_tokens=max_tokens,
+                    ),
+                )
+                # 벤치마크 구성(outline)의 구간별 검증 검색어로 뉴스를 더 모은다. 12건 상한의 기본
+                # 수집만으로는 5분 분량의 검증 사실이 모자라 재작성 루프가 헛돌았다(20번 Job).
+                outline_news = _collect_outline_news(
+                    outline_search_queries(benchmark_analysis), content_nature=nature,
+                )
+                keyword_news = _merge_news_rows(keyword_news, outline_news)
+                logger.info(
+                    "벤치마크 구성 기반 근거 보강: 검색어=%s개, 추가 뉴스=%s건, 총 뉴스=%s건",
+                    len(outline_search_queries(benchmark_analysis)), len(outline_news), len(keyword_news),
+                )
+            elif isinstance(benchmark_analysis, dict) and "outline" in benchmark_analysis:
+                # 캐릭터형(기존 경로)은 벤치마크 구성을 쓰지 않는다 — 훅 유형 참고만 유지한다.
+                benchmark_analysis = {k: v for k, v in benchmark_analysis.items() if k != "outline"}
             if nature == _cn.STORY:
                 benchmark_analysis, source_videos = _cn.sanitize_story_inputs(benchmark_analysis, source_videos)
             if isinstance(candidate_evidence, dict):
@@ -2053,7 +2144,10 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                     "내용의 톤·소재를 다루는 관점·정보 공개 순서와 전개 흐름을 이 벤치마크와 최대한 비슷하게 맞추세요 — "
                     "길이(시간)까지 똑같이 맞출 필요는 없습니다. "
                     "단, 저작권 때문에 다른 영상의 문장을 그대로 또는 거의 그대로 옮겨 쓰지는 마세요(표현은 새로 쓰되 결·구조·흐름은 맞춥니다). "
-                    "영상 제목·조회수는 사실 근거가 아닙니다.\n"
+                    "영상 제목·조회수는 사실 근거가 아닙니다. "
+                    "<benchmark_points>에 outline이 있으면 그 sections의 순서·역할·비중(share_pct)대로 본론 구간을 구성하고 "
+                    "각 구간의 claim_type(수치 제시·원인 분석·반론 등)에 맞는 전개를 쓰세요. outline의 주장은 사실이 아니므로 "
+                    "수치와 인과는 반드시 <verified_facts>에서만 가져옵니다.\n"
                 )
             else:
                 benchmark_rule = (
@@ -2139,7 +2233,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                     if s_match: meta_shorts = s_match.group(1).strip()
 
                 if _dialogue_outside_length_contract(script_body, target_chars, length_contract):
-                    script_body = self._rewrite_dialogue_to_target(script_body, target_chars)
+                    script_body = self._rewrite_dialogue_keeping_highlight(script_body, target_chars)
 
                 if _dialogue_outside_length_contract(script_body, target_chars, length_contract):
                     # Job 52는 이 경고를 통과한 뒤 5분 요청이 3분 25초로 끝났다.
@@ -2181,7 +2275,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 except ValueError:
                     # 문장 수가 부족하거나 문장이 길면 같은 사실 범위에서만
                     # 재편집한다. 레거시 mock으로 대체하지 않는다.
-                    script_body = self._rewrite_dialogue_to_target(script_body, target_chars)
+                    script_body = self._rewrite_dialogue_keeping_highlight(script_body, target_chars)
                     sections = _split_sections_for_visual_pacing(_parse_sections(
                         script_body,
                         evidence={"verified_facts": verified_facts, "market_snapshot": market_data},
@@ -2255,6 +2349,19 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
                 "shorts_script": "Mock 대본은 쇼츠 자동 생성에 사용하지 않습니다.",
             },
         }
+
+    def _rewrite_dialogue_keeping_highlight(self, script_body: str, target_chars: int) -> str:
+        """슬라이드형: 분량 보정 재작성이 `## 하이라이트` 섹션을 평문 장면으로 풀어 버리지 않게 한다.
+
+        2026-10-16 20번 Job 재현: 초안에는 하이라이트 섹션이 있었지만 재작성 루프가 전체를 "장면 NNN"
+        문장 배열로 다시 만들며 사라졌다. 하이라이트는 그대로 두고 본론만 (목표 - 하이라이트 분량)으로
+        보정한 뒤 앞에 다시 붙인다. 하이라이트가 없으면 기존 재작성 그대로다."""
+        head, rest = _split_highlight_blocks(script_body)
+        if not head.strip() or not rest.strip():
+            return self._rewrite_dialogue_to_target(script_body, target_chars)
+        highlight_chars = _dialogue_char_count(head)
+        rewritten = self._rewrite_dialogue_to_target(rest, max(1, target_chars - highlight_chars))
+        return head.rstrip() + "\n\n" + rewritten.lstrip()
 
     def _rewrite_dialogue_to_target(self, script_body: str, target_chars: int) -> str:
         """검증된 원문만 바탕으로 5~6초 장면용 완결 문장을 다시 만든다.
@@ -2901,6 +3008,25 @@ def _structured_script_from_dialogue_lines(lines: list[str]) -> str:
             "[감정]\nneutral"
         )
     return "\n\n".join(blocks)
+
+
+def _split_highlight_blocks(script_body: str) -> tuple[str, str]:
+    """맨 앞의 연속된 `## 하이라이트` 블록과 나머지 본론으로 나눈다. 하이라이트가 없으면 ("", 원문)."""
+    parts = re.split(r"(?m)^(?=##\s)", script_body or "")
+    head: list[str] = []
+    cut = 0
+    for position, part in enumerate(parts):
+        title = re.match(r"##\s*([^\n]*)", part)
+        if title and HIGHLIGHT_ROLE in title.group(1):
+            head.append(part)
+            cut = position + 1
+        elif position == 0 and not part.strip():
+            cut = 1
+        else:
+            break
+    if not head:
+        return "", script_body or ""
+    return "".join(head), "".join(parts[cut:])
 
 
 def _dialogue_char_count(script_body: str) -> int:

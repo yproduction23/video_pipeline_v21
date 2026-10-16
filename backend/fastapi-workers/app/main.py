@@ -683,8 +683,24 @@ def benchmark_analyze(request: BenchmarkAnalyzeRequest):
     try:
         from app.services.discovery.transcript import fetch_transcript
 
-        transcript = fetch_transcript(request.video.get("videoId"))
-        return benchmark_analysis.analyze_benchmark(benchmark_analysis.claude_llm_call, request.video, transcript)
+        video_id = request.video.get("videoId")
+        transcript = fetch_transcript(video_id)
+        analysis = benchmark_analysis.analyze_benchmark(benchmark_analysis.claude_llm_call, request.video, transcript)
+        # 슬라이드형 대본이 벤치마크와 같은 구성·비중을 따르도록 자막 전체의 구성(outline)을 추가한다.
+        # 실패해도 기존 분석 결과는 그대로 돌려준다.
+        try:
+            from app.services.discovery import benchmark_outline
+            from app.services.discovery.transcript import FULL_MAX_CHARS
+
+            outline = benchmark_outline.extract_outline(
+                benchmark_analysis.claude_llm_call, request.video,
+                fetch_transcript(video_id, max_chars=FULL_MAX_CHARS),
+            )
+            if outline:
+                analysis["outline"] = outline
+        except Exception as outline_exc:
+            logger.warning("벤치마크 구성(outline) 추출 실패, 기존 분석만 사용: %s", outline_exc)
+        return analysis
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"벤치마크 분석 실패: {exc}") from exc
 

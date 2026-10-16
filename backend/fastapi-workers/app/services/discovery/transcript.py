@@ -14,6 +14,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 MAX_CHARS = 6000
+# 구성(outline) 추출용 전체 자막 상한. 32분 영상도 앞 25%만 보던 문제(2026-10-16)를 막는다.
+FULL_MAX_CHARS = 60_000
 _NOISE = re.compile(r"\[[^\]]{1,10}\]|>>+")
 
 
@@ -33,10 +35,11 @@ def _fetch(video_id: str) -> Optional[str]:
     except Exception as exc:  # 자막 없음·비공개·차단·라이브러리 미설치 모두 동일하게 처리
         logger.info("자막 수집 실패(무시): video_id=%s, %s", video_id, type(exc).__name__)
         return None
-    return text[:MAX_CHARS] if text else None
+    return text[:FULL_MAX_CHARS] if text else None
 
 
-def fetch_transcript(video_id: Optional[str]) -> Optional[str]:
-    """자막 텍스트(최대 6000자)를 반환한다. 없거나 실패하면 None."""
+def fetch_transcript(video_id: Optional[str], max_chars: int = MAX_CHARS) -> Optional[str]:
+    """자막 텍스트를 max_chars(기본 6000자)까지 반환한다. 없거나 실패하면 None."""
     video_id = str(video_id or "").strip()
-    return _fetch(video_id) if video_id else None
+    text = _fetch(video_id) if video_id else None
+    return text[:max_chars] if text else None

@@ -166,3 +166,49 @@ def test_slide_prompt_asks_for_highlight_section_and_keeps_disclaimer_off_the_na
 def test_character_prompt_has_no_highlight_rule(monkeypatch):
     assert "## 하이라이트" not in _capture_prompt(monkeypatch, "CHARACTER")
     assert "## 하이라이트" not in _capture_prompt(monkeypatch, None)
+
+
+def test_split_highlight_blocks_separates_leading_highlight_from_body():
+    from app.workers.script_worker import _split_highlight_blocks
+
+    head, rest = _split_highlight_blocks(_body("하이라이트"))
+
+    assert head.startswith("## 하이라이트") and "## 기" not in head
+    assert rest.startswith("## 기") and "## 승" in rest
+
+
+def test_split_highlight_blocks_returns_nothing_for_plain_scripts():
+    from app.workers.script_worker import _split_highlight_blocks
+
+    body = _body("장면 001")
+
+    assert _split_highlight_blocks(body) == ("", body)
+
+
+def test_length_rewrite_keeps_the_highlight_and_only_rewrites_the_body(monkeypatch):
+    worker = ScriptWorker()
+    seen = {}
+
+    def fake_rewrite(script_body, target_chars):
+        seen["body"], seen["target"] = script_body, target_chars
+        return "## 장면 001\n[대사]\n보정된 본론입니다.\n"
+
+    monkeypatch.setattr(worker, "_rewrite_dialogue_to_target", fake_rewrite)
+    source = _body("하이라이트")
+
+    result = worker._rewrite_dialogue_keeping_highlight(source, 2000)
+
+    assert result.startswith("## 하이라이트")
+    assert "결론부터 말합니다." in result and "보정된 본론입니다." in result
+    assert "## 하이라이트" not in seen["body"]
+    assert seen["target"] < 2000  # 하이라이트 분량만큼 본론 목표를 줄인다
+
+
+def test_length_rewrite_is_unchanged_without_a_highlight(monkeypatch):
+    worker = ScriptWorker()
+    calls = []
+    monkeypatch.setattr(worker, "_rewrite_dialogue_to_target", lambda body, target: calls.append((body, target)) or "x")
+    body = _body("장면 001")
+
+    assert worker._rewrite_dialogue_keeping_highlight(body, 2000) == "x"
+    assert calls == [(body, 2000)]
