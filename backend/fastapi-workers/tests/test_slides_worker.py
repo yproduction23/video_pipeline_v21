@@ -545,7 +545,7 @@ def test_explain_scene_uses_the_board_instead_of_looking_for_stock(monkeypatch, 
     assert searched == []
     assert out_scene["overlay_type"] == "equation" and out_scene["visual_type"] == "slide_equation"
     assert out_scene["slide_layers"]["base"]["type"] == "slide_board"
-    assert seen["composed"][0]["base"].endswith("board_background_v3.png")
+    assert seen["composed"][0]["base"].endswith("board_background_v4.png")
     assert out_scene["slide_layers"]["overlays"][0]["icon"] == "money_stack"
 
 

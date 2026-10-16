@@ -292,6 +292,17 @@ export function EditPlanSection({ plan, onReplan, busy }) {
           후편집 {summary.overlay_scenes || 0}장면 · 예상 Gemini ₩{(summary.gemini_krw_expected || 0).toLocaleString()}
         </span>
       </summary>
+      {plan.quality && (
+        <p className="mt-1 text-xs text-slate-500">
+          레퍼런스 기준 점검 · 스톡 비중 {Math.round((plan.quality.footage_ratio || 0) * 100)}%(목표 약 2/3) ·
+          후편집 {Math.round((plan.quality.overlay_ratio || 0) * 100)}%(목표 55~75%) ·
+          배경 평균 {plan.quality.mean_bg_run_seconds || 0}초 유지
+          {(plan.quality.violations || []).length > 0
+            ? <span className="ml-1 font-bold text-rose-600">· 기준 미달: {(plan.quality.violations || []).join(', ')}</span>
+            : <span className="ml-1 font-bold text-emerald-600">· 기준 통과</span>}
+          {plan.auto_repair_rounds ? <span className="ml-1 text-slate-400">(자동 보정 {plan.auto_repair_rounds}회)</span> : null}
+        </p>
+      )}
       <div className="mt-2 space-y-1.5">
         {(plan.segments || []).map(segment => (
           <div key={segment.id} className="flex flex-wrap items-center gap-2 text-xs">

@@ -59,20 +59,22 @@ def test_valid_overlay_is_kept_and_marked_explain_only_on_board():
     assert second["fallback_key_text"]
 
 
-def test_footage_share_is_capped_and_extra_scenes_move_to_the_board():
-    briefs = _briefs(*[f"장면 {i}번 문장입니다 충분히 길게." for i in range(10)])
-    entries = [{"index": i, "background": "photo", "photo_brief": "city street"} for i in range(10)]
+def test_paid_photo_share_is_capped_but_stock_is_not():
+    briefs = _briefs(*[f"장면 {i}번 문장입니다 충분히 길게." for i in range(50)])
+    entries = [{"index": i, "background": "photo", "photo_brief": "city street"} for i in range(25)]
+    entries += [{"index": i, "background": "stock", "stock_queries": ["city skyline", "office"]} for i in range(25, 50)]
 
     plan = assemble_plan(briefs, entries, job_id=1, highlight_end_index=1)
 
     kept = [s["index"] for s in plan["scenes"] if s["background"] == "photo"]
-    assert len(kept) == 3  # 10장면 × 30%
+    assert len(kept) == 4  # 50장면 x 8%: 유료 Gemini 사진만 제한
     assert {0, 1} <= set(kept)  # 하이라이트 구간은 지킨다
+    assert plan["summary"]["stock"] == 25  # 스톡은 비용이 없어 상한이 없다
     assert plan["summary"]["demoted_to_board"] and all(
         plan["scenes"][i]["background"] == "board" and plan["scenes"][i]["overlay"] for i in plan["summary"]["demoted_to_board"]
     )
-    assert plan["summary"]["gemini_images_expected"] == 3
-    assert plan["summary"]["gemini_krw_expected"] == 3 * GEMINI_IMAGE_EST_KRW
+    assert plan["summary"]["gemini_images_expected"] == 4
+    assert plan["summary"]["gemini_krw_expected"] == 4 * GEMINI_IMAGE_EST_KRW
 
 
 def test_unknown_background_defaults_to_the_board_and_segments_group_runs():
@@ -146,7 +148,7 @@ def worker_env(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr("app.workers.slides_worker.search_candidates", fake_search)
-    monkeypatch.setattr("app.workers.slides_worker.select_best_candidate", lambda n, c: None)
+    monkeypatch.setattr("app.workers.slides_worker.select_best_candidate", lambda n, c, **kw: None)
 
     def fake_bg(prompt_en, output_path, *, job_id, scene_key):
         calls["gemini"].append(prompt_en)

@@ -124,3 +124,30 @@ def test_candidate_selection_prompt_rejects_mood_only_matches():
 
     assert "분위기" in _CANDIDATE_SELECTION_SYSTEM_PROMPT
     assert "null" in _CANDIDATE_SELECTION_SYSTEM_PROMPT.lower()
+
+
+def test_relaxed_selection_uses_the_generic_stock_prompt_and_accepts_mood_matches():
+    seen = {}
+
+    def fake_llm(system, messages, max_tokens):
+        seen["system"] = system
+        return '{"index": 1}'
+
+    chosen = select_best_candidate(
+        "금리가 오르자 시장이 흔들렸습니다.", [{"tags": "forest"}, {"tags": "bank building, city"}],
+        llm_call=fake_llm, relaxed=True,
+    )
+
+    assert chosen == 1
+    assert "상징적인 일반 스톡 영상" in seen["system"] and "정확히 같은 장면일 필요는 없다" in seen["system"]
+
+
+def test_strict_selection_keeps_the_original_prompt():
+    seen = {}
+
+    def fake_llm(system, messages, max_tokens):
+        seen["system"] = system
+        return '{"index": null}'
+
+    assert select_best_candidate("문장입니다.", [{"tags": "x"}], llm_call=fake_llm) is None
+    assert "엄격 기준" in seen["system"]

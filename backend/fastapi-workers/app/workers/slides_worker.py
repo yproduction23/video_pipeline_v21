@@ -39,9 +39,8 @@ from app import runtime_config
 from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
-from app.services.slide_edit_plan import (
-    build_edit_plan, fallback_key_phrase, load_plan, plan_matches, save_plan,
-)
+from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
+from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
     DISCLAIMER_SECONDS,
@@ -401,7 +400,7 @@ class SlidesWorker:
         # 단, Claude가 "설명 장면"(explain)으로 계획한 장면은 배경 영상을 찾지 않고 일관된
         # 칠판 배경 위에 인포그래픽을 크게 보여준다(레퍼런스 영상의 방식, 비용·시간도 줄어든다).
         try:
-            board_path = job_dir / "board_background_v3.png"
+            board_path = job_dir / "board_background_v4.png"
             planned_background = (base_plan or {}).get("background")
             if planned_background == "board" or (
                 not base_plan and overlay_plan and overlay_plan.get("explain")
@@ -557,10 +556,15 @@ class SlidesWorker:
         kind = overlay_plan["type"]
         overlay_png = job_dir / f"scene_{index:03d}_overlay.png"
         spec: dict = {"type": kind, "source": "claude_overlay_plan"}
+        # 영상 위에 얹는 데이터 카드·목록은 배경을 어둡게 눌러 읽히게 한다(레퍼런스 분석, 스톡 장면의 41%).
+        dim_base = kind != "article_card" and out.get("visual_type") in {
+            "slide_stock_video", "slide_ai_background", "slide_kling_video",
+        }
 
         if kind == "key_text":
             if not render_key_text_overlay(
                 text=overlay_plan["text"], icon=overlay_plan.get("icon"), output_path=str(overlay_png),
+                style="board" if overlay_plan.get("explain") else "footage",
             ):
                 raise RuntimeError("강조 텍스트 렌더링 실패")
             spec.update(text=overlay_plan["text"], icon=overlay_plan.get("icon"))
@@ -594,6 +598,7 @@ class SlidesWorker:
                     index=index, duration=duration, job_dir=job_dir, out=out,
                     overlay_png=Path(layer), suffix=f"composed{k}",
                     start_offset=min(0.35 + k * step, last_start),
+                    dim_base=dim_base and k == 0,  # 이후 층은 이미 눌린 클립 위에 쌓인다
                 )
             spec["overlay_png"] = [str(layer) for layer in layers]
             out["slide_layers"]["overlays"].append(spec)
@@ -650,7 +655,7 @@ class SlidesWorker:
             raise RuntimeError(f"알 수 없는 오버레이 종류: {kind}")
 
         self._compose_into_clip(index=index, duration=duration, job_dir=job_dir, out=out,
-                                overlay_png=overlay_png, suffix="composed")
+                                overlay_png=overlay_png, suffix="composed", dim_base=dim_base)
         spec["overlay_png"] = str(overlay_png)
         out["slide_layers"]["overlays"].append(spec)
         out["overlay_type"] = kind
@@ -714,7 +719,7 @@ class SlidesWorker:
         self, *, index: int, duration: float, job_dir: Path, out: dict, overlay_png: Path,
         suffix: str, start_offset: float = 0.35, hold_seconds: float | None = None,
         fade_in_seconds: float = 0.35, fade_out_seconds: float = 0.3, hold_to_end: bool = False,
-        motion: str = "rise",
+        motion: str = "rise", dim_base: bool = False,
     ) -> None:
         """현재 배경(영상 또는 이미지) 위에 오버레이를 시간에 맞춰 얹은 클립으로 장면을 갱신한다."""
         base_video = out.get("stock_video_path")
@@ -728,6 +733,7 @@ class SlidesWorker:
             duration=duration, base_is_video=bool(base_video), start_offset=start_offset,
             hold_seconds=hold_seconds, fade_in_seconds=fade_in_seconds,
             fade_out_seconds=fade_out_seconds, hold_to_end=hold_to_end, motion=motion,
+            dim_base=dim_base,
         ):
             raise RuntimeError("오버레이 합성 실패")
         out["stock_video_path"] = str(clip_path)
@@ -786,7 +792,11 @@ class SlidesWorker:
             seen_ids.update(c["pixabay_id"] for c in fresh)
             if not fresh:
                 continue
-            best_index = select_best_candidate(narration, fresh)
+            # 계획서가 정한 스톡 장면은 레퍼런스처럼 주제·분위기에 어울리는 일반 영상이면 충분하다.
+            best_index = (
+                select_best_candidate(narration, fresh, relaxed=True) if planned_queries
+                else select_best_candidate(narration, fresh)
+            )
             if best_index is None:
                 continue
             candidate = fresh[best_index]

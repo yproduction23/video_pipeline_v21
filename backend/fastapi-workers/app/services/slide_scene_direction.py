@@ -103,7 +103,19 @@ _CANDIDATE_SELECTION_SYSTEM_PROMPT = (
 )
 
 
-def select_best_candidate(narration: str, candidates: list[dict], *, llm_call=None) -> int | None:
+_RELAXED_SELECTION_SYSTEM_PROMPT = (
+    "너는 한국 경제 해설 유튜브의 자료영상 선택 담당자다. 이 채널은 문장 내용을 글자 그대로 보여 주는 영상이 아니라, "
+    "주제·분위기에 어울리는 상징적인 일반 스톡 영상(계산기, 국기, 빌딩 숲, 고민하는 사람, 서류, 항구, 도시 야경 등)을 "
+    "화면 대부분에 깐다(레퍼런스 영상 분석: 화면의 약 2/3). 내레이션 한 문장과 후보 영상의 태그 목록을 받는다. "
+    "기준: 1) 문장의 주제·분위기·상황과 어울리면 고른다. 정확히 같은 장면일 필요는 없다(예: 금리 이야기 → 은행·빌딩·계산기, "
+    "불안 → 근심하는 사람). 2) 문장과 반대되는 분위기, 폭력·노출 등 부적절한 영상, 글자·로고·광고판이 큰 영상, "
+    "특정 상표가 주인공인 영상은 제외한다. 3) 어울리는 후보가 하나라도 있으면 가장 어울리는 번호를 고른다. "
+    "정말 하나도 없을 때만 null. 4) {\"index\": 숫자 또는 null} 형태의 JSON만 반환한다."
+)
+
+def select_best_candidate(
+    narration: str, candidates: list[dict], *, llm_call=None, relaxed: bool = False,
+) -> int | None:
     """후보 영상 목록 중 내레이션 맥락에 실제로 맞는 것의 색인을 Claude에게
     판단시킨다. 2026-10-14 사용자 재현: 검색어-태그 단어 겹침 개수로는
     "bonsai/japanese"가 "ankle monitor GPS"와 전혀 안 겹치는데도 통과되거나,
@@ -121,7 +133,8 @@ def select_best_candidate(narration: str, candidates: list[dict], *, llm_call=No
         '{"index": 숫자 또는 null} 형태의 JSON만 반환해라.'
     )
     try:
-        raw = _call_llm(_CANDIDATE_SELECTION_SYSTEM_PROMPT, prompt, llm_call=llm_call)
+        system = _RELAXED_SELECTION_SYSTEM_PROMPT if relaxed else _CANDIDATE_SELECTION_SYSTEM_PROMPT
+        raw = _call_llm(system, prompt, llm_call=llm_call)
         cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
         match = re.search(r"\{[\s\S]*\}", cleaned)
         data = json.loads(match.group(0) if match else cleaned)

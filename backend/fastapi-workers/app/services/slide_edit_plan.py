@@ -24,9 +24,22 @@ from app.services.slide_overlay import _PLAN_SYSTEM_PROMPT, validate_overlay_pla
 
 logger = logging.getLogger(__name__)
 
-PLAN_VERSION = "slide-edit-plan-v1"
-# 스톡 영상 + 사진 장면의 상한(전체 장면 대비). 나머지는 칠판 모션그래픽이다.
-MAX_PHOTO_SCENE_RATIO = 0.30
+PLAN_VERSION = "slide-edit-plan-v2"
+# 2026-10-16 레퍼런스 영상 분석(5초 간격 프레임 전수 분류, 연구 영상 2종 + 벤치마크 1종):
+#   기준 영상(32분 경제 해설): 스톡 67% · 어두운 회색 배경+글자 29% · 칠판 2% · 출연자 2%,
+#   후편집이 붙은 시간 58%(강조 문구 22 · 목록 15 · 막대 8 · 카드 5 · 숫자 5), 배경 전환 12초 간격,
+#   스톡 평균 17초 연속(최대 90초), 회색 배경 평균 8초(최대 30초). 데이터 카드는 어둡게 눌린 스톡 위에 얹힌다.
+# v1은 칠판 97%로 계획해 이 분포와 어긋났다(칠판 17~71씬 234초 연속) — 폐기한다.
+# 사진(Gemini, 유료)은 소량만 쓴다.
+MAX_PHOTO_SCENE_RATIO = 0.08
+# 스톡+사진 장면의 하한(시간 기준). 레퍼런스는 약 2/3다.
+MIN_FOOTAGE_RATIO = 0.55
+# 어두운 배경이 이어질 수 있는 최대 길이(초). 레퍼런스 기준 영상의 최대 30초.
+MAX_BOARD_RUN_SECONDS = 30
+# 배경 한 덩어리의 평균 길이 하한(초). 레퍼런스는 평균 12~19초마다 바뀐다. 이보다 잦으면 산만하다.
+MIN_MEAN_BG_RUN_SECONDS = 9.0
+# 후편집이 붙는 장면 비율의 허용 범위(레퍼런스 56~74%).
+OVERLAY_RATIO_RANGE = (0.45, 0.80)
 # 장당 Gemini 이미지 비용 추정(원장 기준 gemini_pro_request 1건).
 GEMINI_IMAGE_EST_KRW = 339
 BACKGROUNDS = {"board", "stock", "photo"}
@@ -36,22 +49,30 @@ _TYPE_GUIDE_END = _PLAN_SYSTEM_PROMPT.index("절대 규칙:")
 _TYPE_GUIDE = _PLAN_SYSTEM_PROMPT[_TYPE_GUIDE_START:_TYPE_GUIDE_END]
 
 _SYSTEM_PROMPT = (
-    "너는 한국 경제 해설 유튜브의 모션그래픽 편집 디렉터다. 승인 내레이션 전체(번호, 길이, 문장)를 읽고 장면마다 "
-    "'배경'과 '후편집'을 한 번에 계획한다. 이 채널의 레퍼런스 영상은 대부분의 시간을 어두운 칠판 위에 텍스트·"
-    "아이콘·도식·숫자가 가볍게 나타나는 모션그래픽으로 보여 주고, 스톡 영상이나 사진은 구체적인 현장이 꼭 "
-    "필요한 구간에서만 짧게 쓴다.\n\n"
+    "너는 한국 경제 해설 유튜브의 영상 편집 디렉터다. 승인 내레이션 전체(번호, 길이, 문장)를 읽고 장면마다 "
+    "'배경'과 '후편집'을 한 번에 계획한다.\n\n"
+    "이 채널의 레퍼런스 영상(32분 경제 해설, 프레임을 5초마다 전수 분류한 결과)의 실제 구성:\n"
+    "- 화면의 약 2/3(67%)가 스톡 영상이다. 문장 내용을 글자 그대로 보여 주는 영상이 아니라 주제·분위기에 어울리는 "
+    "상징적인 일반 영상(계산기, 국기, 빌딩 숲, 고민하는 사람, 서류, 항구, 도시 야경 등)이다.\n"
+    "- 약 1/4(29%)은 어두운 회색 배경 위에 큰 문구·숫자·도식만 나오는 장면이고, 초록 칠판 챕터 카드는 2% 정도다.\n"
+    "- 후편집(강조 문구·목록·막대 그래프·카드·큰 숫자)은 전체 시간의 약 58%에 붙고 나머지 약 40%는 자막만 나온다. "
+    "데이터 카드·목록은 어둡게 눌린 스톡 영상 위에 얹히는 경우가 많다(스톡 장면의 41%).\n"
+    "- 배경은 평균 12초(약 3장면)마다 바뀐다. 스톡은 평균 17초(3~4장면) 이어지고, 회색 배경은 평균 8초, "
+    "최대 30초(7장면 이내)까지만 이어진 뒤 스톡이 끼어든다. 회색 배경이 길게 이어지면 지루하다.\n\n"
     "배경(background):\n"
-    '- "board": 어두운 칠판. 기본값이다. 주장·원인·수치·용어·질문·전망·정리 등 대부분의 장면.\n'
-    '- "stock": 실제 촬영 영상이 의미를 더하는 구체적인 장소·행동(출근길, 공장, 거래소 건물 외관 등). '
-    '"stock_queries"에 스톡 사이트에서 찾을 영어 검색어 2개(구체적 피사체, 화면·그래프·숫자 금지).\n'
-    '- "photo": 스톡으로는 못 구하는 구체적 장면이 문장의 핵심일 때만(드물게). "photo_brief"에 촬영 가능한 '
-    "장소·인물·사물을 영어 한 문장으로. 화면·전광판·차트·간판·글자·숫자는 절대 언급하지 않는다.\n"
-    "- stock과 photo를 합쳐 전체 장면의 약 30% 이하로 쓴다. 비슷한 배경이 이어지면 한 구간으로 묶어 같은 "
-    "배경을 연속 사용해도 된다.\n"
-    "- board 장면은 반드시 overlay를 가진다(key_text 이상). 주장 문장에는 핵심 구절과 맞는 icon을 붙인다.\n"
-    "- 연속 3장면 이상 같은 종류의 overlay를 반복하지 않는다. 숫자가 있으면 big_number·compare_numbers·"
-    "stat_chart를, 인과·순서는 flow를, 나열은 bullet_list를, 계산은 equation을 우선 쓴다.\n"
-    "- stock/photo 장면에는 가벼운 key_text만 얹는다(도식은 board에서).\n\n"
+    '- "stock": 기본값에 가까운 주력 배경(전체 시간의 약 60~70%). "stock_queries"에 스톡 사이트에서 찾을 '
+    "영어 검색어 2개(촬영 가능한 구체적 피사체나 상징적 소재, 화면·그래프·숫자·글자 금지). 내용이 추상적이어도 "
+    "주제에 어울리는 상징 영상(예: 금리 → 은행 건물, 불안 → 근심하는 사람)을 고른다.\n"
+    '- "board": 어두운 회색 배경. 문구·숫자·도식 자체가 주인공인 장면(핵심 주장, 큰 숫자, 비교, 인과 흐름, 정리). '
+    "전체의 약 25~30%이고 연속 7장면(30초)을 넘기지 않는다.\n"
+    '- "photo": 스톡으로는 못 구하는 구체적 장면이 문장의 핵심일 때만(전체의 8% 이하, 드물게). '
+    '"photo_brief"에 촬영 가능한 장소·인물·사물을 영어 한 문장으로. 화면·전광판·차트·간판·글자·숫자는 절대 '
+    "언급하지 않는다.\n"
+    "- board 장면은 반드시 overlay를 가진다. stock 장면은 문장에 수치·주장·목록이 있을 때 overlay를 얹고 "
+    "(스톡 장면의 약 40%) 나머지는 overlay 없이 영상과 자막만 둔다.\n"
+    "- 후편집이 붙는 장면은 전체의 약 55~60%다(모든 장면에 붙이지 않는다). 연속 3장면 이상 같은 종류의 overlay를 "
+    "반복하지 않는다. 종류 비중은 강조 문구(key_text) 약 40%, 목록(bullet_list) 25%, 막대(stat_chart)·"
+    "수치 비교 15%, 큰 숫자(big_number) 10%, 흐름도(flow)·계산식 10% 정도.\n\n"
     + _TYPE_GUIDE +
     "절대 규칙: 모든 text·items·value_text·left·result는 그 장면 내레이션(또는 직전 두 장면)에 적힌 글자를 "
     "그대로 옮긴다. 숫자를 계산·반올림·추정·새로 만들지 않는다.\n"
@@ -169,16 +190,17 @@ def assemble_plan(
             "reason": str(entry.get("reason") or "").strip()[:60],
         })
 
-    # 3) 사진·스톡 상한: 초과분은 칠판으로 내린다(뒤쪽 사진부터, 하이라이트 구간은 지킨다).
+    # 3) 사진(유료 Gemini) 상한: 초과분은 칠판으로 내린다(하이라이트 구간은 지킨다). 스톡은 비용이 없어 상한이 없고,
+    #    대신 칠판 연속 길이와 스톡 하한은 plan_violations()가 검사해 부분 재계획으로 바로잡는다.
     limit = max(1, int(len(scenes) * MAX_PHOTO_SCENE_RATIO))  # 아주 짧은 영상도 사진 1장은 허용
-    footage = [s for s in scenes if s["background"] != "board"]
+    photos = [s for s in scenes if s["background"] == "photo"]
     demoted: list[int] = []
-    if len(footage) > limit:
+    if len(photos) > limit:
         def keep_priority(scene: dict) -> tuple:
             in_highlight = highlight_end_index is not None and scene["index"] <= highlight_end_index
-            return (0 if in_highlight else 1, 0 if scene["background"] == "stock" else 1, scene["index"])
+            return (0 if in_highlight else 1, scene["index"])
 
-        for scene in sorted(footage, key=keep_priority)[limit:]:
+        for scene in sorted(photos, key=keep_priority)[limit:]:
             scene.update(background="board", stock_queries=[], photo_brief="")
             demoted.append(scene["index"])
 
@@ -212,6 +234,49 @@ def assemble_plan(
     return plan
 
 
+def plan_violations(plan: dict) -> dict:
+    """레퍼런스 분석 기준(스톡 비중, 칠판 연속 길이, 후편집 비율)에 맞는지 검사한다.
+
+    위반은 조용히 넘기지 않고 계획서에 남기며, 자동 보정(부분 재계획)과 화면 표시의 기준이 된다."""
+    scenes = plan.get("scenes", [])
+    total = sum(s["duration"] for s in scenes) or 1.0
+    footage_seconds = sum(s["duration"] for s in scenes if s["background"] != "board")
+    board_runs: list[dict] = []
+    run: list[dict] = []
+
+    def close_run() -> None:
+        seconds = round(sum(s["duration"] for s in run), 1)
+        if run and seconds > MAX_BOARD_RUN_SECONDS:
+            board_runs.append({"scenes": [s["index"] for s in run], "seconds": seconds})
+
+    for scene in scenes:
+        if scene["background"] == "board":
+            run.append(scene)
+        else:
+            close_run()
+            run = []
+    close_run()
+    overlay_ratio = sum(1 for s in scenes if s.get("overlay")) / max(len(scenes), 1)
+    block_count = 1 + sum(1 for a, b in zip(scenes, scenes[1:]) if a["background"] != b["background"]) if scenes else 0
+    mean_run_seconds = total / block_count if block_count else 0.0
+    violations: list[str] = []
+    if block_count > 1 and mean_run_seconds < MIN_MEAN_BG_RUN_SECONDS:
+        violations.append("bg_switch_too_frequent")
+    if board_runs:
+        violations.append("board_run_too_long")
+    if footage_seconds / total < MIN_FOOTAGE_RATIO:
+        violations.append("footage_ratio_low")
+    if not (OVERLAY_RATIO_RANGE[0] <= overlay_ratio <= OVERLAY_RATIO_RANGE[1]):
+        violations.append("overlay_ratio_out_of_range")
+    return {
+        "violations": violations,
+        "footage_ratio": round(footage_seconds / total, 3),
+        "overlay_ratio": round(overlay_ratio, 3),
+        "mean_bg_run_seconds": round(mean_run_seconds, 1),
+        "long_board_runs": board_runs,
+    }
+
+
 def refresh_plan(plan: dict, demoted: list[int] | None = None) -> None:
     """장면 목록에서 구간·요약·총 길이를 다시 계산한다(전체 계획과 부분 재계획 공통)."""
     scenes = plan["scenes"]
@@ -242,6 +307,7 @@ def refresh_plan(plan: dict, demoted: list[int] | None = None) -> None:
         if scene["overlay"]:
             overlay_counts[scene["overlay"]["type"]] = overlay_counts.get(scene["overlay"]["type"], 0) + 1
     previous = (plan.get("summary") or {}).get("demoted_to_board", [])
+    plan["quality"] = plan_violations(plan)
     plan["scene_count"] = len(scenes)
     plan["total_seconds"] = round(sum(s["duration"] for s in scenes), 1)
     plan["segments"] = segments

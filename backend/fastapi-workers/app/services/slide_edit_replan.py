@@ -13,10 +13,14 @@ import time
 
 from app.services.slide_edit_plan import (
     BACKGROUNDS,
+    MAX_BOARD_RUN_SECONDS,
     MAX_PHOTO_SCENE_RATIO,
+    MIN_FOOTAGE_RATIO,
+    MIN_MEAN_BG_RUN_SECONDS,
     _SYSTEM_PROMPT,
     _call_llm,
     _clean_queries,
+    build_edit_plan,
     fallback_key_phrase,
     refresh_plan,
 )
@@ -38,7 +42,7 @@ def _overlay_label(overlay: dict | None) -> str:
     return str(overlay.get("text") or overlay.get("value") or overlay.get("title") or overlay.get("headline") or "")
 
 
-def replan_scenes(plan: dict, items: list[dict], *, llm_call=None) -> dict | None:
+def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str = "operator") -> dict | None:
     """운영자가 표시한 장면(index, note)만 다시 계획한다. 실패하면 None(기존 계획서를 유지한다)."""
     scenes = {s["index"]: s for s in plan.get("scenes", [])}
     notes: dict[int, str] = {}
@@ -108,10 +112,10 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None) -> dict | Non
             background=background,
             stock_queries=_clean_queries(entry.get("stock_queries")) if background == "stock" else [],
             photo_brief=str(entry.get("photo_brief") or "").strip()[:240] if background == "photo" else "",
-            reason=("운영자 수정: " + (notes[index] or "다시 계획"))[:60],
+            reason=(("운영자 수정: " if source == "operator" else "자동 보정: ") + (notes[index] or "다시 계획"))[:60],
             overlay=overlay,
-            revised=True,
         )
+        scene["revised" if source == "operator" else "auto_repaired"] = True
         if background == "stock":
             scene["fallback_key_text"] = fallback_key_phrase(scene["narration"])
         else:
@@ -120,7 +124,7 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None) -> dict | Non
     # 사진·스톡 상한은 전체 기준으로 다시 적용한다(운영자가 수정한 장면을 먼저 지킨다).
     all_scenes = updated["scenes"]
     limit = max(1, int(len(all_scenes) * MAX_PHOTO_SCENE_RATIO))
-    footage = [s for s in all_scenes if s["background"] != "board"]
+    footage = [s for s in all_scenes if s["background"] == "photo"]
     demoted = list((updated.get("summary") or {}).get("demoted_to_board", []))
     if len(footage) > limit:
         highlight_end = updated.get("highlight_end_index")
@@ -143,7 +147,100 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None) -> dict | Non
                                     "icon": None, "explain": True, "source": "fallback_phrase"}
             demoted.append(scene["index"])
 
-    updated["review_notes"] = {**(plan.get("review_notes") or {}), **{str(i): n for i, n in notes.items()}}
-    updated["revised_at"] = time.time()
+    if source == "operator":
+        updated["review_notes"] = {**(plan.get("review_notes") or {}), **{str(i): n for i, n in notes.items()}}
+        updated["revised_at"] = time.time()
     refresh_plan(updated, demoted)
     return updated
+
+
+# ---- 계획서 자동 보정 -----------------------------------------------------------------
+
+MAX_REPAIR_ROUNDS = 2
+_REPAIR_NOTE = (
+    "칠판(어두운 회색 배경)이 {seconds}초 이상 연속돼 지루하다(레퍼런스는 최대 30초). 이 장면은 주제·분위기에 어울리는 "
+    "상징적인 스톡 영상(stock_queries 2개)으로 바꾼다. 후편집은 문장에 수치·주장·목록이 있을 때만 가볍게 얹는다."
+)
+_REPAIR_FOOTAGE_NOTE = (
+    "스톡 영상 비중이 레퍼런스(약 2/3)보다 낮다. 이 장면은 주제·분위기에 어울리는 상징적인 스톡 영상(stock_queries "
+    "2개)으로 바꾼다. 후편집은 문장에 수치·주장·목록이 있을 때만 가볍게 얹는다."
+)
+
+
+_REPAIR_MERGE_NOTE = (
+    "앞뒤가 스톡 영상이라 이 장면만 칠판으로 끼어 배경이 너무 잦게 바뀐다(레퍼런스는 평균 12초 이상 유지). 이 장면도 "
+    "같은 흐름의 스톡 영상(stock_queries 2개)으로 이어 붙인다. 후편집은 문장에 수치·주장이 있으면 영상 위에 얹는다."
+)
+
+
+def repair_targets(plan: dict) -> list[dict]:
+    """레퍼런스 기준 위반(칠판 연속, 스톡 하한)을 바로잡을 장면과 지시를 정한다. 결정론적이다."""
+    quality = plan.get("quality") or {}
+    scenes = {s["index"]: s for s in plan["scenes"]}
+    marked: dict[int, str] = {}
+    for run in quality.get("long_board_runs", []):
+        acc = 0.0
+        for index in run["scenes"]:
+            acc += scenes[index]["duration"]
+            if acc > MAX_BOARD_RUN_SECONDS:
+                marked[index] = _REPAIR_NOTE.format(seconds=int(run["seconds"]))
+                acc = 0.0
+    total = sum(s["duration"] for s in scenes.values()) or 1.0
+    footage = sum(s["duration"] for s in scenes.values() if s["background"] != "board")
+    footage += sum(scenes[i]["duration"] for i in marked)
+    if footage / total < MIN_FOOTAGE_RATIO:
+        ordered = plan["scenes"]
+        by_pos = {s["index"]: p for p, s in enumerate(ordered)}
+
+        def next_to_footage(scene: dict) -> bool:
+            p = by_pos[scene["index"]]
+            near = [ordered[q] for q in (p - 1, p + 1) if 0 <= q < len(ordered)]
+            return any(n["background"] != "board" or n["index"] in marked for n in near)
+
+        # 이미 스톡인 덩어리에 이어 붙여 스톡 구간을 길게 만든다(레퍼런스는 평균 17초 연속). 없으면 하나 건너 하나.
+        for scene in [s for s in ordered if s["background"] == "board" and next_to_footage(s)] +                 [s for s in ordered if s["background"] == "board"][1::2]:
+            if footage / total >= MIN_FOOTAGE_RATIO:
+                break
+            if scene["index"] in marked:
+                continue
+            marked[scene["index"]] = _REPAIR_FOOTAGE_NOTE
+            footage += scene["duration"]
+    # 배경이 너무 잦게 바뀌면(스톡 사이에 낀 1장면짜리 칠판) 그 장면도 앞뒤 스톡 흐름에 이어 붙인다.
+    if "bg_switch_too_frequent" in quality.get("violations", []):
+        ordered = plan["scenes"]
+        block_total = 1 + sum(1 for a, b in zip(ordered, ordered[1:]) if a["background"] != b["background"])
+        for position in range(1, len(ordered) - 1):
+            scene = ordered[position]
+            prev_bg, next_bg = ordered[position - 1]["background"], ordered[position + 1]["background"]
+            if scene["background"] != "board" or scene["index"] in marked:
+                continue
+            if prev_bg == "board" or next_bg == "board" or marked.get(ordered[position - 1]["index"]):
+                continue
+            if total / max(block_total, 1) >= MIN_MEAN_BG_RUN_SECONDS:
+                break
+            marked[scene["index"]] = _REPAIR_MERGE_NOTE
+            block_total -= 2  # 양쪽 스톡 덩어리가 하나로 합쳐진다
+    return [{"index": i, "note": note} for i, note in sorted(marked.items())]
+
+
+def build_edit_plan_with_repair(
+    briefs: dict[int, dict], *, job_id: int, highlight_end_index: int | None = None, llm_call=None,
+) -> dict | None:
+    """계획서를 만든 뒤 레퍼런스 기준 위반을 최대 MAX_REPAIR_ROUNDS번 부분 재계획으로 바로잡는다.
+
+    끝까지 남은 위반은 plan["quality"]에 그대로 기록한다(조용히 통과시키지 않는다)."""
+    plan = build_edit_plan(briefs, job_id=job_id, highlight_end_index=highlight_end_index, llm_call=llm_call)
+    if not plan:
+        return None
+    rounds = 0
+    for _ in range(MAX_REPAIR_ROUNDS):
+        items = repair_targets(plan)
+        if not items:
+            break
+        repaired = replan_scenes(plan, items, llm_call=llm_call, source="auto")
+        if not repaired:
+            break
+        plan = repaired
+        rounds += 1
+    plan["auto_repair_rounds"] = rounds
+    return plan

@@ -34,6 +34,8 @@ DISCLAIMER_BANNER_TEXT = "투자의 최종 판단은 본인에게 있습니다  
 DISCLAIMER_SECONDS = 8.0
 # 오버레이가 아래에서 올라오는 거리(px)와 시간(초).
 OVERLAY_RISE_PX = 44
+# 레퍼런스: 데이터 카드·목록은 어둡게 눌린 스톡 영상 위에 얹힌다(스톡 장면의 41%).
+BASE_DIM_FILTER = ",eq=brightness=-0.14:saturation=0.9"
 OVERLAY_RISE_SECONDS = 0.5
 
 _PLAN_SYSTEM_PROMPT = (
@@ -395,7 +397,8 @@ def render_news_clip_overlay(
 
 
 def render_key_text_overlay(
-    *, text: str, output_path: str, icon: str | None = None, canvas: tuple[int, int] = CANVAS,
+    *, text: str, output_path: str, icon: str | None = None, style: str = "footage",
+    canvas: tuple[int, int] = CANVAS,
 ) -> bool:
     """핵심 구절을 화면 중앙에 크게 강조하는 오버레이(강조 텍스트)."""
     text = str(text or "").strip()
@@ -419,9 +422,13 @@ def render_key_text_overlay(
             # 2026-10-16 운영자 피드백("칠판 위에 텍스트만 가볍게"): 어두운 글자가 노란 띠 밖으로 삐져나와
             # 읽히지 않던 형광펜 띠를 없애고, 흰 분필 글자 + 얇은 강조색 밑줄로 바꾼다.
             left, top, right, bottom = draw.textbbox((x, y), line, font=font)
-            draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 150))
-            draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-            draw.rectangle((left, bottom + 12, right, bottom + 20), fill=ACCENT)
+            if style == "board":
+                # 레퍼런스의 어두운 배경 문구 장면: 굵은 붉은 글자(밑줄 없음).
+                draw.text((x, y), line, font=font, fill=(229, 57, 53, 255), stroke_width=3, stroke_fill=(229, 57, 53, 255))
+            else:
+                draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 150))
+                draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+                draw.rectangle((left, bottom + 12, right, bottom + 20), fill=ACCENT)
             y += line_h
         return _save(overlay, output_path)
     except Exception:
@@ -512,8 +519,8 @@ def render_equation_overlay(
 def ensure_board_background(output_path: str, canvas: tuple[int, int] = CANVAS) -> bool:
     """설명 장면용 칠판 배경(결정론적 Pillow 렌더, 외부 호출 없음). 이미 있으면 재사용.
 
-    2026-10-16 운영자 피드백: 거의 검은 단색이라 "칠판"으로 안 보였다. 짙은 녹회색 슬레이트에 분필
-    가루 얼룩·지운 자국·가장자리 그림자를 얹어 칠판 질감을 낸다(글자는 오버레이가 따로 그린다)."""
+    레퍼런스 분석(2026-10-16): 문구·숫자 장면의 배경은 어두운 회색(charcoal) 배경이다(초록 칠판은 챕터 카드 2%).
+    짙은 회색에 흐린 분필 가루·가장자리 그림자만 얹는다(글자는 오버레이가 따로 그린다)."""
     path = Path(output_path)
     if path.is_file() and path.stat().st_size > 2_000:
         return True
@@ -525,7 +532,7 @@ def ensure_board_background(output_path: str, canvas: tuple[int, int] = CANVAS) 
         # 2026-10-16 20번 Job 재현: 픽셀 단위 잡음(effect_noise)을 섞은 칠판은 정지 이미지인데도 x264가
         # 장면 하나당 수 분씩 걸려(3초 클립이 300초 초과) 71장면 생성이 1시간 넘게 걸렸다. 질감은
         # 흐린 분필 얼룩만으로 내고 고주파 잡음은 넣지 않는다(인코딩 비용이 단색 이미지와 같다).
-        board = Image.new("RGB", canvas, (38, 52, 47))
+        board = Image.new("RGB", canvas, (46, 47, 50))
 
         # 분필 가루·지운 자국: 크고 흐린 흰 얼룩을 여러 번 겹친다.
         dust = Image.new("L", canvas, 0)
@@ -539,16 +546,15 @@ def ensure_board_background(output_path: str, canvas: tuple[int, int] = CANVAS) 
             draw.arc((x0 - 420, y0 - 180, x0 + 420, y0 + 180), rng.randint(0, 180), rng.randint(200, 360),
                      fill=rng.randint(18, 34), width=rng.randint(34, 70))
         dust = dust.filter(ImageFilter.GaussianBlur(46))
-        chalk = Image.new("RGB", canvas, (205, 214, 208))
-        board = Image.composite(chalk, board, dust.point(lambda v: min(255, int(v * 1.6))))
+        chalk = Image.new("RGB", canvas, (200, 200, 205))
+        board = Image.composite(chalk, board, dust.point(lambda v: min(255, int(v * 0.9))))
 
         # 가장자리 어둡게(조명 비네팅) + 아래쪽 분필 받침 그림자
         vignette = Image.new("L", canvas, 0)
         ImageDraw.Draw(vignette).ellipse((-width * 0.20, -height * 0.30, width * 1.20, height * 1.30), fill=255)
         vignette = vignette.filter(ImageFilter.GaussianBlur(170))
-        board = Image.composite(board, Image.new("RGB", canvas, (16, 24, 21)), vignette)
-        ImageDraw.Draw(board).rectangle((0, height - 26, width, height), fill=(24, 18, 14))
-
+        board = Image.composite(board, Image.new("RGB", canvas, (12, 12, 14)), vignette)
+        
         path.parent.mkdir(parents=True, exist_ok=True)
         board.save(path)
         return path.stat().st_size > 2_000
@@ -737,7 +743,7 @@ def compose_animated_overlay(
     *, base_path: str, overlay_path: str, output_path: str, duration: float,
     base_is_video: bool, start_offset: float = 0.35, hold_seconds: float | None = None,
     fade_in_seconds: float = 0.35, fade_out_seconds: float = 0.3, hold_to_end: bool = False,
-    motion: str = "rise", canvas: tuple[int, int] = CANVAS,
+    motion: str = "rise", dim_base: bool = False, canvas: tuple[int, int] = CANVAS,
 ) -> bool:
     """배경(영상 또는 정지 이미지) 위에 오버레이를 "시간에 맞춰" 얹은 mp4를 만든다.
 
@@ -774,7 +780,7 @@ def compose_animated_overlay(
         "ffmpeg", "-y", *base_input, "-loop", "1", "-framerate", "30", "-i", overlay_path,
         "-filter_complex",
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
-        f"setsar=1,fps=30[b];"
+        f"setsar=1,fps=30{BASE_DIM_FILTER if dim_base else ''}[b];"
         f"[1:v]scale={width}:{height},format=rgba{fades}[o];"
         f"[b][o]overlay={place}",
         "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-preset", "fast",
