@@ -368,10 +368,9 @@ def _place_topic(group: list[dict]) -> list[dict]:
                 kept.append(element)
             continue
         element["replaces"] = None
-        candidates = ["center"] if element["kind"] in _WIDE_KINDS else (
-            [element["slot"], *[s for s in _SLOT_FALLBACKS if s != element["slot"]]]
-            if element["slot"] != "center" else list(_SLOT_FALLBACKS)
-        )
+        candidates = ["center"] if element["kind"] in _WIDE_KINDS else [
+            element["slot"], *[s for s in ("center", *_SLOT_FALLBACKS) if s != element["slot"]],
+        ]
         for slot in candidates:
             element["slot"] = slot
             rect = element_rect(element)
@@ -609,6 +608,14 @@ def _fill_gaps(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
         fallback = _fallback_scene_element(scene, starts, seq_start, f"g{len(added) + 1}")
         if not fallback:
             continue
+        if fallback["kind"] == "text" and len(fallback["content"]["text"]) > MAX_TEXT_CHARS:
+            continue  # 자막과 같은 절을 되풀이하는 긴 문구는 보충하지 않는다
+        key = str(fallback["content"].get("value") or fallback["content"].get("text") or "")
+        shown = " ".join(json.dumps(e["content"], ensure_ascii=False) for e in [*elements, *added])
+        if (key and key in shown) or any(
+            e["kind"] == fallback["kind"] and e["content"] == fallback["content"] for e in [*elements, *added]
+        ):
+            continue  # 이미 화면에 나온 내용을 다시 띄우지 않는다
         fallback["topic"] = next_topic
         next_topic += 1
         added.append(fallback)
@@ -656,12 +663,12 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
     try:
         designed = attempt()
         gap = _longest_gap(designed, duration)
-        if designed and gap > MAX_TOPIC_SECONDS and failures:
-            # 거절된 주제 때문에 화면이 오래 멈춰 있으면 거절 사유를 알려 주고 한 번 더 설계한다.
+        if designed and gap > MAX_TOPIC_SECONDS:
+            # 한 화면이 오래 멈춰 있으면(주제가 너무 길거나 일부 주제가 거절됨) 이유를 알려 주고 한 번 더 설계한다.
             retry = (
-                chr(10) * 2 + "[재설계 요청] 앞 설계에서 아래 문구가 거절돼 한 화면이 " + f"{gap:.0f}초 동안 멈춰 있다. "
-                "거절 사유를 피해(내레이션 구절을 그대로 복사하거나, 숫자 없는 짧은 핵심어를 쓰고) 주제를 4~9초로 나눠 다시 설계해라:"
-                + chr(10) + chr(10).join(f"- {item}" for item in failures[:8])
+                chr(10) * 2 + "[재설계 요청] 앞 설계에서 한 화면이 " + f"{gap:.0f}초 동안 멈춰 있다. 주제를 4~9초로 나눠 다시 설계해라."
+                + (" 아래 문구는 거절됐으니 내레이션 구절을 그대로 복사하거나 숫자 없는 짧은 핵심어를 써라:" + chr(10)
+                   + chr(10).join(f"- {item}" for item in failures[:8]) if failures else "")
             )
             failures_before = list(failures)
             second = attempt(retry)
@@ -925,8 +932,9 @@ def expand_primitives(sequence: dict) -> list[dict]:
             nodes = content["nodes"]
             span = 700 if len(nodes) == 2 else 1250  # 단계가 적으면 가깝게 붙여 한눈에 읽히게 한다
             xs = [int(cx - span / 2 + span * k / max(len(nodes) - 1, 1)) for k in range(len(nodes))] if len(nodes) > 1 else [cx]
+            stagger = min(0.9, max(0.35, (until - at - 0.8) / max(len(nodes), 1)))  # 짧은 주제는 간격을 줄인다
             for k, node in enumerate(nodes):
-                t = round(at + k * 0.9, 2)
+                t = round(at + k * stagger, 2)
                 prims.append({**base, "kind": "node", "at": t, "pos": (xs[k], cy), "label": node["label"],
                               "icon": node.get("icon")})
                 if k < len(nodes) - 1:

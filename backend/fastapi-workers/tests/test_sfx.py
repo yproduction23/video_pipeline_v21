@@ -55,3 +55,17 @@ def test_mixing_without_events_returns_false_and_leaves_the_original(tmp_path):
     _silence(narration, 2.0)
 
     assert mix_sfx_events(str(narration), [], str(tmp_path / "o.wav"), workdir=str(tmp_path)) is False
+
+
+def test_title_hit_is_loud_enough_to_be_heard_over_the_narration(tmp_path):
+    """2026-10-16 9020 시험 영상: 효과음이 최종 오디오에서 거의 들리지 않았다(저음 위주 + 라우드니스 정규화). 중음·고음 성분을 더한다."""
+    import subprocess
+
+    out = tmp_path / "hit.wav"
+    render_title_hit(str(out))
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(out), "-af", "volumedetect", "-f", "null", "-"],
+                            capture_output=True, text=True)
+    max_volume = next(float(line.split("max_volume:")[1].split("dB")[0]) for line in result.stderr.splitlines()
+                      if "max_volume" in line)
+
+    assert max_volume > -6.0

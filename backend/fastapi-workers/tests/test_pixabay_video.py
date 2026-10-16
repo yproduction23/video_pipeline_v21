@@ -175,3 +175,46 @@ def test_search_uses_the_largest_available_tier_when_nothing_reaches_1920(monkey
     results = search_candidates("city")
 
     assert results[0]["resolution_tier"] == "small"
+
+
+def test_download_retries_when_the_cdn_rate_limits_the_request(monkeypatch, tmp_path):
+    """2026-10-16 9020 시험 실행: 스톡 클립을 한꺼번에 받다 HTTP 429가 나 13장면이 실패했다. 429·5xx는 대기 후 재시도한다."""
+    from app.providers.real import pixabay_video
+
+    calls = []
+
+    class Response:
+        def __init__(self, status):
+            self.status_code = status
+            self.headers = {"Retry-After": "0"}
+
+        def iter_content(self, chunk_size):
+            yield b"video-bytes"
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return Response(429 if len(calls) < 3 else 200)
+
+    monkeypatch.setattr(pixabay_video.requests, "get", fake_get)
+    monkeypatch.setattr(pixabay_video.time, "sleep", lambda seconds: None)
+    out = tmp_path / "clip.mp4"
+
+    pixabay_video.download_clip("https://example/v.mp4", str(out))
+
+    assert len(calls) == 3 and out.read_bytes() == b"video-bytes"
+
+
+def test_download_gives_up_after_the_retry_budget(monkeypatch, tmp_path):
+    import pytest
+
+    from app.providers.real import pixabay_video
+
+    class Response:
+        status_code = 429
+        headers = {}
+
+    monkeypatch.setattr(pixabay_video.requests, "get", lambda *a, **k: Response())
+    monkeypatch.setattr(pixabay_video.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(pixabay_video.PixabayVideoUnavailableError):
+        pixabay_video.download_clip("https://example/v.mp4", str(tmp_path / "c.mp4"))

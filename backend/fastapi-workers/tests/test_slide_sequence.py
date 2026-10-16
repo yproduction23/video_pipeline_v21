@@ -318,3 +318,41 @@ def test_text_sprite_handles_text_with_line_breaks():
     sprite = _text_sprite("첫째 줄\n둘째 줄", 60, (255, 255, 255))
 
     assert sprite.height > _text_sprite("첫째 줄", 60, (255, 255, 255)).height  # 두 줄로 그려진다
+
+
+def test_a_centered_text_element_stays_centered_instead_of_being_moved_to_a_corner():
+    """2026-10-16 9020 시험 영상: 장면별 후편집으로 대체된 빨간 문구가 왼쪽 구석에 작게 나왔다(중앙 문구를 빈 자리로 옮기던 규칙)."""
+    elements = [_el("a", "text", "center", 0.3, 1, content={"text": "핵심 문구", "color": "red"})]
+
+    kept = resolve_lifetimes(elements, 8.0)
+
+    assert kept[0]["slot"] == "center"
+
+
+def test_gap_fill_does_not_repeat_content_already_on_screen_or_clause_length_text():
+    from app.services.slide_sequence import _fill_gaps
+
+    plan = _plan(duration=6.0)
+    run = board_runs(plan)[0]
+    plan["scenes"][1]["overlay"] = {"type": "key_text", "text": "과거에는 상위 7.9퍼센트였습니다"}  # 16자 초과 절
+    plan["scenes"][2]["overlay"] = {"type": "key_text", "text": "자산이 현금으로 바뀌는"}
+    existing = [{"id": "e1", "kind": "text", "scene": 0, "topic": 1, "at": 0.3, "until": 18.0, "slot": "center", "anim": "rise",
+                 "anchor": "", "replaces": None, "content": {"text": "자산이 현금으로 바뀌는", "color": "red"}}]
+
+    filled = _fill_gaps(existing, run, plan)
+
+    assert filled == existing  # 이미 화면에 있는 문구, 절 길이 문구는 보충하지 않는다
+
+
+def test_a_short_topic_slows_the_flow_so_each_step_still_has_time_to_land():
+    plan = _plan(duration=6.0)
+    run = board_runs(plan)[0]
+    design = {"topics": [{"template": "flow", "scene": 2, "anchor": "자산이 현금으로",
+                          "nodes": [{"label": "자산이"}, {"label": "현금으로"}, {"label": "구조가"}]}]}
+
+    seq = design_sequence(run, plan, llm_call=_llm(design))
+    flow = [e for e in seq["elements"] if e["kind"] == "flow"][0]
+    flow["until"] = flow["at"] + 3.0  # 3초짜리 주제
+    prims = [p for p in expand_primitives({"elements": [flow]}) if p["kind"] == "node"]
+
+    assert prims[-1]["at"] - flow["at"] <= 1.6  # 짧은 주제에서는 간격을 줄여 마지막 단계도 충분히 머문다

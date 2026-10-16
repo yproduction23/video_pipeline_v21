@@ -369,3 +369,17 @@ def test_scenes_with_no_verified_article_are_not_searched_again_right_away(tmp_p
 
     assert discovery2.calls == 0
     assert "article_capture" not in result.scenes[0]
+
+
+def test_the_same_article_is_not_used_as_evidence_for_two_scenes(tmp_path):
+    """2026-10-16 9020 시험 영상: 같은 기사 카드가 25초 간격으로 두 번 나왔다. 기사 한 건은 영상에서 한 장면에만 쓴다."""
+    planner, discovery, capture = _counting_planner(tmp_path)
+    scenes = [
+        {"scene_id": "a", "phase": "twist", "content": "코스피가 반도체 투톱 상승으로 12.5퍼센트 올랐습니다.", "source_refs": ["facts[0]"]},
+        {"scene_id": "b", "phase": "twist", "content": "코스피가 반도체 투톱 상승으로 12.5퍼센트 크게 올랐습니다.", "source_refs": ["facts[0]"]},
+    ]
+
+    result = planner.attach(job_id=93, scenes=scenes, verified_facts=[_FACT])
+
+    urls = [s["article_capture"]["source_url"] for s in result.scenes if s.get("article_capture")]
+    assert len(urls) == len(set(urls)) == 1  # 같은 기사(FakeDiscovery는 한 건만 돌려준다)는 첫 장면에만

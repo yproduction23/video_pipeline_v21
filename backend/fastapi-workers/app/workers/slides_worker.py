@@ -899,7 +899,15 @@ class SlidesWorker:
                 out["stock_miss_reason"] = "no_search_results"
             return False
         video_path = job_dir / f"scene_{index:03d}_stock.mp4"
-        download_clip(clip["download_url"], str(video_path))
+        try:
+            download_clip(clip["download_url"], str(video_path))
+        except PixabayVideoUnavailableError as exc:
+            # 끝내 못 받으면 장면 전체를 실패시키지 않고 스톡 미적중으로 처리한다(AI 이미지·회색 배경으로 내려간다).
+            logger.warning("슬라이드 장면 %s 스톡 클립 다운로드 실패: %s", index, exc)
+            with _PIXABAY_LOCK:
+                used_pixabay_ids.discard(clip["pixabay_id"])
+            out["stock_miss_reason"] = "download_failed"
+            return False
         frame_path = job_dir / f"scene_{index:03d}_stock_frame.png"
         _extract_first_frame(str(video_path), str(frame_path))
         out["stock_video_path"] = str(video_path)

@@ -374,6 +374,7 @@ class ArticleEvidencePlanner:
         store = self._load_store(job_id)
         used_scenes: set[int] = set()
         unresolved_now: set[int] = set()
+        used_urls: set[str] = set()  # 기사 한 건은 영상에서 한 장면에만 쓴다(같은 기사 카드가 반복되던 문제)
         for scene_index, scene in enumerate(output):
             if scene.get("article_capture"):
                 continue
@@ -381,7 +382,9 @@ class ArticleEvidencePlanner:
             saved = (store["selected"].get(key) or {})
             fields = saved.get("fields") or {}
             capture_path = str((fields.get("article_capture") or {}).get("local_path") or "")
-            if fields and capture_path and Path(capture_path).is_file():
+            saved_url = str((fields.get("article_capture") or {}).get("source_url") or "")
+            if fields and capture_path and Path(capture_path).is_file() and saved_url not in used_urls:
+                used_urls.add(saved_url)
                 scene.update(copy.deepcopy(fields))
                 scene.setdefault("verified_facts", verified_facts)
                 used_scenes.add(scene_index)
@@ -408,7 +411,7 @@ class ArticleEvidencePlanner:
                 continue
             scene = output[scene_index]
             fact = verified_facts[fact_index]
-            result = self._resolve_scene(job_id, scene, fact, fact_index, evidence_score)
+            result = self._resolve_scene(job_id, scene, fact, fact_index, evidence_score, used_urls=used_urls)
             tried.add(scene_index)
             if result is None:
                 audit["skipped"].append({
@@ -429,6 +432,7 @@ class ArticleEvidencePlanner:
             scene["evidence_match"] = selected_audit
             scene.setdefault("verified_facts", verified_facts)
             used_scenes.add(scene_index)
+            used_urls.add(str(capture.source_url))
             audit["selected"].append(selected_audit)
             store["selected"][narration_hash(scene)] = {
                 "saved_at": time.time(), "fact_index": fact_index,
@@ -456,6 +460,7 @@ class ArticleEvidencePlanner:
         fact: dict[str, Any],
         fact_index: int,
         evidence_score: float,
+        used_urls: set[str] | None = None,
     ):
         query, terms = _query_for(scene, fact)
         if not query:
@@ -471,6 +476,8 @@ class ArticleEvidencePlanner:
             return None
         checked_urls: list[str] = []
         for candidate in article_candidates[: int(runtime_config.value("evidence_max_searches_per_scene"))]:
+            if used_urls and candidate.url in used_urls:
+                continue  # 이미 다른 장면의 증거로 쓴 기사
             checked_urls.append(candidate.url)
             publisher_rule = publisher_for_url(candidate.url)
             publisher = str(

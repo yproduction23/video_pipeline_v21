@@ -764,3 +764,26 @@ def test_primed_ids_skip_scenes_that_will_be_regenerated(tmp_path):
     _prime_used_stock_ids(tmp_path, narrations, {1}, used)  # 0번 장면만 다시 만든다 → 1번 장면의 클립만 피한다
 
     assert used == {22}
+
+
+def test_a_failed_stock_download_is_a_stock_miss_not_a_failed_scene(monkeypatch, tmp_path):
+    """다운로드가 끝내 실패해도 장면 전체가 실패하지 않고(영상 조립이 막히지 않게) 다른 배경으로 내려간다."""
+    from app.providers.real.pixabay_video import PixabayVideoUnavailableError
+
+    candidate = {"pixabay_id": 5, "download_url": "https://example/v.mp4", "tags": "office"}
+    _stock_search_harness(monkeypatch, tmp_path, {"business office": [candidate], "office": [candidate]})
+
+    def broken_download(url, path):
+        raise PixabayVideoUnavailableError("Pixabay 클립 다운로드 실패: HTTP 429")
+
+    monkeypatch.setattr("app.workers.slides_worker.download_clip", broken_download)
+    used: set[int] = set()
+    out: dict = {}
+
+    ok = SlidesWorker()._render_pixabay_scene(
+        index=0, narration="문장입니다.", duration=4.0, job_dir=tmp_path, used_pixabay_ids=used, out=out,
+        planned_queries=["office"],
+    )
+
+    assert ok is False and out["stock_miss_reason"] == "download_failed"
+    assert 5 not in used  # 못 받은 클립은 다른 장면이 다시 시도할 수 있게 풀어 준다

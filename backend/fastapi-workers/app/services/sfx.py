@@ -11,9 +11,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _TITLE_HIT = (
-    "[0:a]afade=t=out:st=0.04:d=0.66,volume=1.8[low];"
-    "[1:a]highpass=f=1500,afade=t=out:st=0:d=0.3,volume=0.45[hiss];"
-    "[low][hiss]amix=inputs=2:normalize=0,alimiter=limit=0.85,aformat=sample_rates=44100:channel_layouts=stereo"
+    "[0:a]afade=t=out:st=0.04:d=0.66,volume=2.4[low];"
+    "[1:a]highpass=f=1500,afade=t=out:st=0:d=0.3,volume=0.8[hiss];"
+    "[2:a]afade=t=out:st=0.02:d=0.38,volume=1.1[mid];"
+    "[low][hiss][mid]amix=inputs=3:normalize=0,alimiter=limit=0.95,aformat=sample_rates=44100:channel_layouts=stereo"
 )
 
 
@@ -21,7 +22,9 @@ def render_title_hit(output_path: str) -> bool:
     """낮은 타격음 + 짧은 숨소리 소음으로 만든 0.7초 "쿵" 효과음."""
     cmd = [
         "ffmpeg", "-y", "-nostdin", "-f", "lavfi", "-i", "sine=frequency=90:duration=0.7",
-        "-f", "lavfi", "-i", "anoisesrc=d=0.7:c=white:a=0.6", "-filter_complex", _TITLE_HIT,
+        "-f", "lavfi", "-i", "anoisesrc=d=0.7:c=white:a=0.6",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.4",  # 중음 "퉁" 성분 — 작은 스피커에서도 들리게
+        "-filter_complex", _TITLE_HIT,
         output_path, "-loglevel", "error",
     ]
     try:

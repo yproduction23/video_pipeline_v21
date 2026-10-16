@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 
 import requests
 
@@ -105,13 +107,36 @@ def search_candidates(query: str, *, min_duration_seconds: int = 3, per_page: in
     return results
 
 
+_DOWNLOAD_ATTEMPTS = 4
+_DOWNLOAD_SLOTS = threading.BoundedSemaphore(3)  # 동시 다운로드 제한(한꺼번에 받으면 CDN이 429를 돌려준다)
+
+
 def download_clip(download_url: str, output_path: str) -> None:
-    try:
-        response = requests.get(download_url, timeout=60, stream=True)
-    except (requests.Timeout, requests.ConnectionError) as exc:
-        raise PixabayVideoUnavailableError(f"Pixabay 클립 다운로드 연결 실패: {exc}") from exc
-    if response.status_code != 200:
-        raise PixabayVideoUnavailableError(f"Pixabay 클립 다운로드 실패: HTTP {response.status_code}")
+    """클립을 받는다. 429·5xx·연결 실패는 대기 후 재시도한다(2026-10-16 9020 시험 실행: 한꺼번에 받다 13장면 실패)."""
+    last_error = ""
+    response = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with _DOWNLOAD_SLOTS:
+                response = requests.get(download_url, timeout=60, stream=True)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = f"연결 실패: {exc}"
+            response = None
+        else:
+            if response.status_code == 200:
+                break
+            last_error = f"HTTP {response.status_code}"
+            if response.status_code not in (429, 500, 502, 503, 504):
+                break
+        if attempt < _DOWNLOAD_ATTEMPTS:
+            wait = 2.0 * attempt
+            try:
+                wait = max(wait, min(float(getattr(response, "headers", {}).get("Retry-After", 0)), 30.0))
+            except (TypeError, ValueError):
+                pass
+            time.sleep(wait)
+    if response is None or response.status_code != 200:
+        raise PixabayVideoUnavailableError(f"Pixabay 클립 다운로드 실패: {last_error}")
     with open(output_path, "wb") as f:
         for chunk in response.iter_content(chunk_size=1 << 20):
             f.write(chunk)
