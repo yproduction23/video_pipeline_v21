@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -777,6 +779,10 @@ def render_disclaimer_banner(*, output_path: str, text: str = DISCLAIMER_BANNER_
         return False
 
 
+_FFMPEG_THREADS = 4
+_COMPOSE_SLOTS = threading.BoundedSemaphore(int(os.getenv("SLIDE_COMPOSE_CONCURRENCY", "3")))
+
+
 def compose_animated_overlay(
     *, base_path: str, overlay_path: str, output_path: str, duration: float,
     base_is_video: bool, start_offset: float = 0.35, hold_seconds: float | None = None,
@@ -815,7 +821,8 @@ def compose_animated_overlay(
     else:
         base_input = ["-loop", "1", "-framerate", "30", "-i", base_path]
     cmd = [
-        "ffmpeg", "-y", *base_input, "-loop", "1", "-framerate", "30", "-i", overlay_path,
+        "ffmpeg", "-y", "-nostdin", "-threads", str(_FFMPEG_THREADS), *base_input,
+        "-loop", "1", "-framerate", "30", "-i", overlay_path,
         "-filter_complex",
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
         f"setsar=1,fps=30{BASE_DIM_FILTER if dim_base else ''}[b];"
@@ -824,9 +831,20 @@ def compose_animated_overlay(
         "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-preset", "fast",
         "-pix_fmt", "yuv420p", output_path, "-loglevel", "error",
     ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
-    except Exception:
-        logger.exception("애니메이션 오버레이 합성 실패")
-        return False
-    return result.returncode == 0 and Path(output_path).is_file() and Path(output_path).stat().st_size > 1000
+    # 2026-10-16 20번 Job: 4K 스톡을 병렬로 합성하다 일부 ffmpeg가 240초 시간 초과로 멈춰 후편집 8장면이 배경만 남았다.
+    # 동시에 도는 합성 수를 제한하고(컨테이너 메모리 4GB), 시간 초과는 한 번 재시도하며 실패 원인을 남긴다.
+    for attempt in (1, 2):
+        try:
+            with _COMPOSE_SLOTS:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+        except subprocess.TimeoutExpired:
+            logger.warning("애니메이션 오버레이 합성 시간 초과(%s회차): %s", attempt, output_path)
+            continue
+        except Exception:
+            logger.exception("애니메이션 오버레이 합성 실패")
+            return False
+        ok = result.returncode == 0 and Path(output_path).is_file() and Path(output_path).stat().st_size > 1000
+        if not ok:
+            logger.warning("애니메이션 오버레이 합성 실패(rc=%s): %s", result.returncode, str(result.stderr)[-300:])
+        return ok
+    return False

@@ -30,6 +30,7 @@ PIXABAY_VIDEO_SEARCH_URL = "https://pixabay.com/api/videos/"
 
 # 큰 해상도부터 순서대로 선호 — 1920폭에 가장 가까운 해상도를 고른다.
 _RESOLUTION_TIERS = ("large", "medium", "small", "tiny")
+_TARGET_WIDTH = 1920
 
 
 class PixabayVideoUnavailableError(RuntimeError):
@@ -44,12 +45,21 @@ def _api_key() -> str:
 
 
 def _pick_resolution_file(hit: dict) -> dict | None:
+    """최종 영상이 1920x1080이므로 폭이 1920 이상인 것 중 가장 작은 해상도를 고른다(없으면 가장 큰 것).
+
+    2026-10-16 20번 Job: "large"(4K)를 받아 파일이 4배 커지고, 병렬 합성이 메모리(컨테이너 4GB)를 넘겨 멈췄다."""
     videos = hit.get("videos") or {}
+    landscape = []
     for tier in _RESOLUTION_TIERS:
         candidate_file = videos.get(tier)
         if candidate_file and int(candidate_file.get("width") or 0) >= int(candidate_file.get("height") or 1):
-            return {**candidate_file, "resolution_tier": tier}
-    return None
+            landscape.append({**candidate_file, "resolution_tier": tier})
+    if not landscape:
+        return None
+    enough = [f for f in landscape if int(f.get("width") or 0) >= _TARGET_WIDTH]
+    if enough:
+        return min(enough, key=lambda f: int(f.get("width") or 0))
+    return max(landscape, key=lambda f: int(f.get("width") or 0))
 
 
 def search_candidates(query: str, *, min_duration_seconds: int = 3, per_page: int = 15) -> list[dict]:

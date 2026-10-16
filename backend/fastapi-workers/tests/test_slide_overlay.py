@@ -332,3 +332,34 @@ def test_percent_sign_is_spelled_like_the_narration_before_verbatim_validation()
     plan = validate_overlay_plan([{"index": 0, "type": "key_text", "text": "7.57% 폭락했죠"}], briefs)
 
     assert plan[0]["text"] == "7.57퍼센트 폭락했죠"
+
+
+def test_compose_retries_once_when_ffmpeg_times_out_under_load(monkeypatch, tmp_path):
+    """2026-10-16 20번 Job: 4K 스톡을 병렬로 합성하다 일부 ffmpeg가 240초 시간 초과로 멈춰 후편집 8장면이 배경만 남았다.
+    시간 초과는 한 번 재시도하고, 실패 원인을 로그에 남긴다."""
+    import subprocess
+
+    from app.services import slide_overlay
+
+    calls = []
+    out = tmp_path / "o.mp4"
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(cmd, 240)
+        out.write_bytes(b"x" * 2000)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(slide_overlay.subprocess, "run", fake_run)
+    base = tmp_path / "b.png"
+    overlay = tmp_path / "ov.png"
+    Image.new("RGB", (64, 36)).save(base)
+    Image.new("RGBA", (64, 36)).save(overlay)
+
+    ok = slide_overlay.compose_animated_overlay(
+        base_path=str(base), overlay_path=str(overlay), output_path=str(out), duration=3.0, base_is_video=False,
+    )
+
+    assert ok is True and len(calls) == 2
+    assert "-threads" in calls[0] and "-nostdin" in calls[0]

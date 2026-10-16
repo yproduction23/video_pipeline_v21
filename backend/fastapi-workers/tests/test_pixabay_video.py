@@ -41,7 +41,7 @@ def test_search_sends_key_as_query_param(monkeypatch):
     assert captured["params"]["q"] == "empty supermarket aisle at dusk"
 
 
-def test_search_picks_the_largest_landscape_resolution_tier(monkeypatch):
+def test_search_picks_the_tier_closest_to_1920_width_not_the_largest(monkeypatch):
     monkeypatch.setenv("PIXABAY_API_KEY", "test-key")
     payload = {
         "hits": [
@@ -69,8 +69,9 @@ def test_search_picks_the_largest_landscape_resolution_tier(monkeypatch):
     results = search_candidates("busy grocery store daytime")
 
     assert len(results) == 1
-    assert results[0]["download_url"] == "large.mp4"
-    assert results[0]["resolution_tier"] == "large"
+    # 2026-10-16: 최종 영상은 1920x1080이다. 4K를 받으면 파일이 4배 커지고 병렬 합성이 메모리 부족으로 멈췄다.
+    assert results[0]["download_url"] == "medium.mp4"
+    assert results[0]["resolution_tier"] == "medium"
     assert results[0]["pixabay_id"] == 21117
     assert results[0]["tags"] == "grocery, store, shelves"
 
@@ -158,3 +159,19 @@ def test_non_200_response_raises_unavailable_error(monkeypatch):
 
     with pytest.raises(PixabayVideoUnavailableError):
         search_candidates("test query")
+
+
+def test_search_uses_the_largest_available_tier_when_nothing_reaches_1920(monkeypatch):
+    monkeypatch.setenv("PIXABAY_API_KEY", "test-key")
+    payload = {"hits": [{
+        "id": 1, "pageURL": "p", "duration": 6, "isAiGenerated": False, "isLowQuality": False, "tags": "t",
+        "videos": {
+            "small": {"url": "small.mp4", "width": 1280, "height": 720, "thumbnail": "t.jpg"},
+            "tiny": {"url": "tiny.mp4", "width": 960, "height": 540, "thumbnail": "t.jpg"},
+        },
+    }]}
+    monkeypatch.setattr("app.providers.real.pixabay_video.requests.get", lambda *a, **k: _FakeResponse(200, payload))
+
+    results = search_candidates("city")
+
+    assert results[0]["resolution_tier"] == "small"
