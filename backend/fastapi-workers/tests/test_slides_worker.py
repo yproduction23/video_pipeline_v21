@@ -648,3 +648,25 @@ def test_stock_miss_records_why_nothing_was_chosen(monkeypatch, tmp_path):
     assert ok is False
     assert out["stock_miss_reason"] == "candidates_rejected_by_selection"
     assert any(entry["found"] > 0 and entry["selected"] is False for entry in out["stock_search_log"])
+
+
+def test_plan_only_always_builds_a_fresh_plan_even_when_the_saved_one_matches(monkeypatch, tmp_path):
+    """2026-10-16 재현: "계획서 다시 만들기"가 입력이 같다는 이유로 저장된 계획서를 그대로 돌려줘 수정이 반영되지 않았다.
+    계획서만 만드는 요청은 명시적인 (재)생성이므로 항상 새로 만든다. 재사용은 실행(씬별 생성)에만 적용한다."""
+    worker = SlidesWorker()
+    scene = {"content": "문장입니다.", "start_seconds": 0, "end_seconds": 4}
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    built = []
+    monkeypatch.setattr("app.workers.slides_worker.load_plan", lambda job_id, data_dir: {"input_hash": "same", "scenes": []})
+    monkeypatch.setattr("app.workers.slides_worker.plan_matches", lambda plan, briefs: True)
+    monkeypatch.setattr("app.workers.slides_worker.save_plan", lambda plan, data_dir: None)
+
+    def fake_build(briefs, **kw):
+        built.append(1)
+        return {"version": "v", "input_hash": "new", "scene_count": 1, "summary": {}, "segments": [], "scenes": []}
+
+    monkeypatch.setattr("app.workers.slides_worker.build_edit_plan", fake_build)
+
+    worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}", plan_only=True)
+
+    assert built == [1]

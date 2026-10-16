@@ -243,7 +243,8 @@ class SlidesWorker:
         edit_plan = load_plan(job_id, DATA_DIR)
         # 운영자가 확인한 계획서가 있는데 입력(내레이션·길이)이 달라 새로 만드는 경우는 검수 사유로 남긴다.
         plan_replaced_after_review = bool(edit_plan) and not plan_matches(edit_plan, briefs) and not plan_only
-        if not plan_matches(edit_plan, briefs):
+        # 계획서만 만드는 요청은 명시적인 (재)생성이므로 항상 새로 만든다(재사용은 실행에만 적용한다).
+        if plan_only or not plan_matches(edit_plan, briefs):
             edit_plan = build_edit_plan(
                 briefs, job_id=job_id,
                 highlight_end_index=(highlight_end - 1) if highlight_end else None,
