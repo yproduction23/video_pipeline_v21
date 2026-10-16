@@ -1245,7 +1245,7 @@ SCRIPT_SYSTEM_PROMPT = """당신은 한국 금융 콘텐츠를 위한 오리지�
 - 실제 질문은 반드시 물음표(?)와 자연스러운 의문형 어미(예: "~까요?")로 끝내고, 바로 다음 문장 또는 다음 씬에서 검증 사실로 답하세요. 반전은 앞에서 제시한 통념을 실제로 뒤집을 때만 사용하세요.
 - “입니다/합니다/있습니다”의 기계적 나열을 피하세요. 질문형, 부정·반전형, 강조형, 이유형을 사실관계에 맞게 섞되, 위 예문을 그대로 반복하지 마세요.
 - 각 문장은 반드시 마침표(.), 물음표(?) 등으로 명확히 종결하세요
-- 숫자와 기호는 천단위 콤마(,)를 절대 사용하지 말고(예: 2783포인트, 6806포인트), % 기호는 반드시 '퍼센트'로만 풀어 쓰세요. '포인트'는 지수·가격의 절대 변동값에만 사용합니다. 1.2퍼센트와 1.2포인트는 다른 의미입니다.
+- 숫자와 기호는 천단위 콤마(,)를 절대 사용하지 말고(예: 2783포인트, 6806포인트), 퍼센트는 숫자 뒤에 % 기호를 붙여 쓰세요(예: 6.37%, '퍼센트'라고 풀어 쓰지 않습니다 — 음성은 자동으로 '퍼센트'로 읽습니다). '포인트'는 지수·가격의 절대 변동값에만 사용합니다. 1.2퍼센트와 1.2포인트는 다른 의미입니다.
 - 쉼표는 문장 안의 자연스러운 의미 단위에서만 제한적으로 사용하세요. 자막 길이를 맞추기 위해 쉼표·마침표·줄바꿈을 인위적으로 추가하지 마세요. 자막은 최종 음성의 문자 타임스탬프로 별도 분절됩니다.
 
 🎯 씬 구성 규칙 (비주얼 프롬프트 작성의 핵심!):
@@ -2182,7 +2182,7 @@ JSON 배열만 반환하세요. 각 원소는 {{"index": 정수, "text": "수정
 - The selected keywords are mandatory subjects, not optional context. Every section must directly explain a selected keyword, its verified impact, or the relationship between the selected keyword and the category. Do not replace this with a generic market crash, geopolitical event, or index recap unless the supplied evidence explicitly connects it.
 - Mention every distinctive entity, concept, and time qualifier contained in the selected topic naturally at least once. The category is the analytical lens, not a substitute for the selected topic.
 - 주제를 설명하는 타이밍이 중요합니다. 관련된 시장 지표(환율, 지수, VIX 등)를 먼저 전부 나열한 뒤 마지막에야 "이제 핵심 주제 얘기를 해보겠습니다"로 넘어가지 마세요. 대신 주제가 무엇이고 왜 지금 중요한지부터 이른 비트에서 밝히고, 각 지표는 그 주제에 대한 구체적 주장을 뒷받침하는 근거로 그때그때 하나씩 엮어 쓰세요. "증거 나열 → 설명"이 아니라 "주장 → 그 주장의 근거"가 반복되는 구조여야 합니다.
-- Use unit-safe facts only: percentages use '퍼센트', index or price changes use '포인트'; never call a percentage a point value.
+- Use unit-safe facts only: percentages use the % symbol attached to the number (e.g. 6.37%, never spelled out as 퍼센트 — the voice reads it automatically), index or price changes use '포인트'; never call a percentage a point value.
 - YouTube 영상은 주제·관심도 문맥으로만 사용한다. 영상 제목·조회수·좋아요 수를 금융 사실이나 수치의 검증 근거로 인용하지 않는다.
 - Write continuous, readable narration. Image scenes are derived after narration is complete; do not pad, shorten, or duplicate narration to reach a scene count.
 - 내러티브 플랜의 story_beats 순서·전환 목표를 따른다. 플랜은 고정 문구나 고정 비율이 아니라 소재에 맞춘 편집 의도다. 사실의 자연스러운 설명에 필요하면 인접 비트를 합치거나 짧게 조절할 수 있지만, 새 사실을 만들지 않는다. {style_instruction}
@@ -2849,8 +2849,6 @@ def _validate_unit_usage(script: str) -> dict:
             predicate_span = compact[label_at:label_at + len(label) + 20]
             if "포인트" in predicate_span or "pt" in predicate_span.lower():
                 errors.append(f"비율 라벨 직후 포인트 단위 사용: {compact[:80]}")
-        if re.search(r"\d+(?:\.\d+)?%", compact):
-            errors.append(f"TTS 전처리 전 % 기호 잔존: {compact[:80]}")
     return {"passed": not errors, "errors": errors}
 
 
@@ -3091,8 +3089,9 @@ def get_character_pose_from_text(text: str) -> str:
 def clean_script_commas_and_pct(text: str) -> str:
     if not text:
         return ""
-    # % is a percentage, never an index point change.
-    text = re.sub(r'(\d+(?:\.\d+)?)\s*%', r'\1퍼센트', text)
+    # 2026-10-16 운영자 요청: 대본·자막은 "퍼센트" 대신 % 기호를 쓴다. 음성은 TTS 전처리(_preprocess_for_tts)가 "퍼센트"로 읽는다.
+    # "퍼센트포인트"는 다른 단위이므로 건드리지 않는다. % is a percentage, never an index point change.
+    text = re.sub(r'(\d+(?:\.\d+)?)\s*퍼센트(?!포인트)', lambda m: f"{m.group(1)}%", text)
     # Remove all grouped thousands separators, including 29,800,000.
     while re.search(r'\d,\d{3}', text):
         text = re.sub(r'(\d),(\d{3})', r'\1\2', text)
@@ -3289,7 +3288,8 @@ def _validate_screen_text_values(
         sources.extend(str(value or "") for value in article.values())
 
     def compact(text: str) -> str:
-        return re.sub(r"\s+", "", text)
+        # "15%"와 "15퍼센트"는 같은 표기로 본다(2026-10-16: 대본·자막은 % 기호, 화면 문구는 어느 쪽이든 허용).
+        return re.sub(r"\s+", "", text).replace("퍼센트", "%")
 
     reasons: list[str] = []
     for value in values:

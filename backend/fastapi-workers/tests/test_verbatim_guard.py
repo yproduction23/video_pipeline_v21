@@ -39,7 +39,7 @@ def test_numeric_bubble_is_rejected_not_deleted_and_has_quality_reason():
 
 def test_visual_percent_is_preserved_while_narration_normalizes():
     assert validate("15%로 싹!", EVIDENCE).passed
-    assert "15퍼센트" in clean_script_commas_and_pct("15%로 조정됐습니다.")
+    assert "15%" in clean_script_commas_and_pct("15퍼센트로 조정됐습니다.")  # 2026-10-16: 대본은 % 기호
 
 
 def test_screen_text_accepts_values_that_are_verbatim_in_current_scene_narration():

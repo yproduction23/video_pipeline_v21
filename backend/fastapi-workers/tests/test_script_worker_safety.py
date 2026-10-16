@@ -10,11 +10,13 @@ from app.workers.script_worker import (
 
 
 def test_percentage_normalization_and_all_thousands_commas():
+    # 2026-10-16 운영자 요청: 대본·자막은 "퍼센트" 대신 % 기호로 쓴다(음성은 TTS 전처리가 "퍼센트"로 읽는다).
     result = clean_script_commas_and_pct("하락률 6.37퍼센트, 거래대금 29,800,000원, 등락률 1.2%")
-    assert "6.37퍼센트" in result
-    assert "1.2퍼센트" in result
+    assert "6.37%" in result
+    assert "1.2%" in result
     assert "6.37포인트" not in result
     assert "29800000원" in result
+    assert "퍼센트포인트" in clean_script_commas_and_pct("금리가 0.25퍼센트포인트 올랐습니다.")  # 단위가 다른 "퍼센트포인트"는 그대로
 
 
 def test_unit_validation_allows_correct_point_and_percentage_sentence():
@@ -22,16 +24,14 @@ def test_unit_validation_allows_correct_point_and_percentage_sentence():
     assert result["passed"], result
 
 
+def test_unit_validation_allows_the_percent_symbol_in_the_script():
+    assert _validate_unit_usage("코스피는 6.37% 하락했습니다.")["passed"]
+
+
 def test_unit_validation_rejects_rate_label_with_point_value():
     result = _validate_unit_usage("하락률은 4.53포인트였습니다.")
     assert not result["passed"]
     assert "포인트" in result["errors"][0]
-
-
-def test_unit_validation_rejects_percent_symbol_before_tts():
-    result = _validate_unit_usage("등락률은 1.2%입니다.")
-    assert not result["passed"]
-    assert "%" in result["errors"][0]
 
 
 def test_sentence_safe_cap_never_cuts_decimal_or_large_number():

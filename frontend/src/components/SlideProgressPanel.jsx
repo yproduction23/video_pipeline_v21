@@ -479,7 +479,7 @@ export function EditPlanSection({ plan, onReplan, busy }) {
 }
 
 const ELEMENT_KIND_LABEL = {
-  text: '문구', number: '큰 숫자', icon: '그림', arrow: '화살표', bars: '막대 그래프', list: '목록', rows: '비교 행', flow: '흐름도',
+  text: '문구', number: '큰 숫자', icon: '그림', arrow: '화살표', bars: '막대 그래프', list: '목록', rows: '비교 행', flow: '흐름도', symbol: '기호',
 }
 const SLOT_LABEL = {
   center: '화면 가운데(전체)', top: '위', bottom: '아래', left: '왼쪽', right: '오른쪽',
@@ -498,6 +498,8 @@ const KIND_TO_OVERLAY = {
 function elementContentLines(element) {
   const { kind, content } = element
   if (kind === 'icon') return [`그림 ${content.name}`]
+  if (kind === 'symbol') return [`기호 ${content.text}`]
+  if (kind === 'text') return [`${content.color === 'red' ? '빨간 강조' : content.color === 'gray' ? '보조 문구' : '흰 문구'} “${content.text}”`]
   if (kind === 'arrow') return [`화살표 ${{ up: '위(상승)', down: '아래(하락)', right: '오른쪽(이어짐)' }[content.direction] || content.direction}`]
   return overlayLines({ type: KIND_TO_OVERLAY[kind], ...content })
 }
@@ -528,7 +530,7 @@ function SequenceTimetable({ sequence }) {
               <span className="w-14 shrink-0 font-mono font-bold text-violet-800">{(base + element.at).toFixed(1)}초</span>
               <span className="text-slate-900">
                 <b>{ELEMENT_KIND_LABEL[element.kind] || element.kind}</b>
-                {' '}· {SLOT_LABEL[element.slot] || element.slot} · {ANIM_LABEL[element.anim] || element.anim} 등장
+                {' '}· {element.fixed ? '템플릿 자리' : (SLOT_LABEL[element.slot] || element.slot)} · {ANIM_LABEL[element.anim] || element.anim} 등장
                 {element.anchor ? <span className="text-slate-700"> · “{element.anchor}” 말할 때</span> : null}
                 {lines.map((line, k) => (
                   <span key={k} className="block pl-3 text-slate-800">{line.trimStart()}</span>

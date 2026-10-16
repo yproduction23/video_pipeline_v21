@@ -26,8 +26,8 @@ TITLE_Y = 235
 NUMBER_Y = 560
 CAPTION_Y = 790
 PAIR_LEFT_X, PAIR_RIGHT_X, PAIR_MID_X = 560, 1360, 960
-PAIR_ICON_Y, PAIR_VALUE_Y, PAIR_LABEL_Y = 450, 480, 700
-PAIR_ICON_SIZE = 260
+PAIR_ICON_Y, PAIR_VALUE_Y, PAIR_LABEL_Y = 440, 480, 700
+PAIR_ICON_SIZE = 320
 HEADLINE_Y, SUB_Y = 470, 690
 
 
@@ -78,7 +78,7 @@ def _title_number(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
         elements.append(_element("text", scene, anchor, start, title, (CANVAS_W // 2, TITLE_Y), size=88, max_width=1500))
     number_x, number_width = (1260, 880) if icon else (CANVAS_W // 2, 1500)
     if icon:
-        elements.append(_element("icon", scene, anchor, start + 0.1, {"name": icon}, (600, NUMBER_Y), icon_size=300))
+        elements.append(_element("icon", scene, anchor, start + 0.1, {"name": icon}, (600, NUMBER_Y), icon_size=340))
     elements.append(_element("number", scene, anchor, start + (0.25 if title else 0.0), number, (number_x, NUMBER_Y),
                              anim="count", max_width=number_width))
     if caption:
@@ -145,7 +145,7 @@ def _compare_pair(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
                                   max_width=640, size_cap=150))
         label_y = PAIR_LABEL_Y if structure != "label" else 540
         parts.append(_element("text", scene, anchor, at + 0.15, {"text": side["label"], "color": "white"}, (x, label_y),
-                              size=70, max_width=640))
+                              size=78, max_width=640))
         return parts
 
     elements += column(side_a, PAIR_LEFT_X, start + (0.2 if title else 0.0))
@@ -180,7 +180,7 @@ def _headline_sub(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
         return []
     sub = ctx.label(scene, topic.get("sub")) if topic.get("sub") else None
     y = HEADLINE_Y if sub else 520
-    elements = [_element("text", scene, anchor, start, headline, (CANVAS_W // 2, y), size=210, max_width=1700)]
+    elements = [_element("text", scene, anchor, start, headline, (CANVAS_W // 2, y), size=170, max_width=1700)]
     if sub:
         elements.append(_element("text", scene, anchor, start + 0.7, {"text": sub, "color": GRAY}, (CANVAS_W // 2, SUB_Y),
                                  size=58, max_width=1500))

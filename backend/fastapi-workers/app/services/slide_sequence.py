@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 CANVAS = (1920, 1080)
 FPS = 30
-SEQUENCE_VERSION = "slide-sequence-v2"
+SEQUENCE_VERSION = "slide-sequence-v3"
 RED = EMPHASIS_RED
 GRAY_TEXT = (190, 192, 198)
 WHITE = (255, 255, 255)
@@ -858,8 +858,8 @@ def _row_sprite(label: str, value: str, color: tuple) -> Image.Image:
 def _node_sprite(label: str, icon: str | None) -> Image.Image:
     """흐름도의 한 단계. 아이콘이 있으면 아이콘+글, 없으면 윤곽선 카드 안의 글(같은 흐름에서는 구조가 같다)."""
     if icon:
-        text = _text_sprite(label, 60, WHITE, max_width=520)
-        size = 240
+        text = _text_sprite(label, 72, WHITE, max_width=520)
+        size = 280
         sprite = Image.new("RGBA", (max(size + 40, text.width), size + 40 + text.height), (0, 0, 0, 0))
         sprite.alpha_composite(_icon_sprite(icon, size), ((sprite.width - size - 40) // 2, 0))
         sprite.alpha_composite(text, ((sprite.width - text.width) // 2, size + 30))
