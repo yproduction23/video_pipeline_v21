@@ -34,7 +34,7 @@ def test_stat_items_must_appear_verbatim_in_the_scene_narration():
         ]}],
         BRIEFS,
     )
-    assert [i["value_text"] for i in plan[3]["items"]] == ["7.6퍼센트", "1.1퍼센트"]
+    assert [i["value_text"] for i in plan[3]["items"]] == ["7.6%", "1.1%"]  # 화면에는 % 기호
     assert plan[3]["items"][0]["value"] == 7.6
 
 
@@ -263,7 +263,7 @@ def test_compare_numbers_needs_grounded_rows_and_headline():
     entry = {"index": 1, "type": "compare_numbers", "headline": "순자산 10억 원", "icon": "money_stack",
              "rows": [{"label": "현재", "value": "11.8퍼센트"}, {"label": "과거", "value": "7.9퍼센트"}]}
     ok = validate_overlay_plan([entry], {1: {"narration": REF_NARRATION}})
-    assert [r["value"] for r in ok[1]["rows"]] == ["11.8퍼센트", "7.9퍼센트"]
+    assert [r["value"] for r in ok[1]["rows"]] == ["11.8%", "7.9%"]  # 화면에는 % 기호
     invented = dict(entry, rows=[{"label": "현재", "value": "11.8퍼센트"}, {"label": "과거", "value": "6.1퍼센트"}])
     assert validate_overlay_plan([invented], {1: {"narration": REF_NARRATION}}) == {}
 
@@ -331,7 +331,7 @@ def test_percent_sign_is_spelled_like_the_narration_before_verbatim_validation()
 
     plan = validate_overlay_plan([{"index": 0, "type": "key_text", "text": "7.57% 폭락했죠"}], briefs)
 
-    assert plan[0]["text"] == "7.57퍼센트 폭락했죠"
+    assert plan[0]["text"] == "7.57% 폭락했죠"  # 검증은 내레이션 표기로 하고, 화면에는 % 기호로 보여 준다
 
 
 def test_compose_retries_once_when_ffmpeg_times_out_under_load(monkeypatch, tmp_path):
@@ -374,3 +374,36 @@ def test_key_text_over_footage_must_be_a_short_keyword_not_a_whole_clause():
     assert 0 not in validate_overlay_plan([{"index": 0, "type": "key_text", "text": long_text, "on_footage": True}], briefs)
     assert 0 in validate_overlay_plan([{"index": 0, "type": "key_text", "text": "주가가 급락", "on_footage": True}], briefs)
     assert 0 in validate_overlay_plan([{"index": 0, "type": "key_text", "text": long_text}], briefs)
+
+
+def test_screen_numbers_show_a_percent_sign_whether_the_narration_says_percent_or_uses_the_symbol():
+    """2026-10-16 운영자 요청: 화면에는 "퍼센트" 대신 "%"를 쓴다(레퍼런스도 "-14.4%"). 검증은 내레이션 표기와 글자 그대로 비교한다."""
+    spelled = {0: {"narration": "코스피는 7.57퍼센트 폭락했죠."}}
+    symbol = {0: {"narration": "코스피는 7.57% 폭락했죠."}}
+
+    for briefs in (spelled, symbol):
+        plan = validate_overlay_plan([{"index": 0, "type": "big_number", "value": "7.57%", "label": ""}], briefs)
+        assert plan[0]["value"] == "7.57%"
+        plan = validate_overlay_plan([{"index": 0, "type": "big_number", "value": "7.57퍼센트", "label": ""}], briefs)
+        assert plan[0]["value"] == "7.57%"
+
+
+def test_red_emphasis_uses_the_bundled_display_font_not_a_faux_bold_stroke():
+    """2026-10-16 운영자 피드백: 빨간 강조 글자가 두껍기만 하고 예쁘지 않다. 레퍼런스처럼 굵은 디스플레이 서체를 쓴다."""
+    from PIL import ImageFont
+
+    from app.services.slide_overlay import _FONT_DISPLAY, _font
+
+    font = _font(_FONT_DISPLAY, 100)
+
+    assert isinstance(font, ImageFont.FreeTypeFont) and "BlackHanSans" in str(font.path)
+
+
+def test_board_key_text_is_drawn_in_clean_red_without_a_stroke_halo(tmp_path):
+    out = tmp_path / "k.png"
+
+    assert render_key_text_overlay(text="코스피의 구조적 취약점", output_path=str(out), style="board")
+
+    pixels = Image.open(out).convert("RGB").getdata()
+    reds = [p for p in pixels if p[0] > 200 and p[1] < 80 and p[2] < 80]
+    assert len(reds) > 3000  # 선명한 빨강 글자가 충분히 그려진다

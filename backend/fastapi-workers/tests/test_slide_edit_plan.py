@@ -217,6 +217,8 @@ def test_worker_executes_the_plan_board_photo_and_stock_miss_without_extra_gemin
         texts[2]: {"background": "stock", "stock_queries": ["stock exchange building exterior"]},
     }, worker_env)
 
+    # 이 테스트는 "AI 대체 없이" 스톡 미적중이 회색 배경으로 내려가는 경로를 확인한다(대체 상한 0).
+    monkeypatch.setitem(__import__("app.runtime_config", fromlist=["_state"])._state, "slide_stock_miss_ai_max", 0)
     result = SlidesWorker().generate(job_id=5, tts_meta_json=None, script_meta_json="{}")
 
     types = [s["visual_type"] for s in result["scenes"]]
@@ -332,7 +334,7 @@ def test_board_scenes_in_a_sequence_render_through_the_sequence_and_keep_other_p
     assert sorted(rendered) == [(0.0, 4.0), (4.0, 8.0), (8.0, 12.0)]  # 장면마다 시퀀스 시간축의 자기 몫
     assert first[0]["overlay_type"] == "sequence"
     assert first[0]["slide_layers"]["overlays"][0]["sequence_id"] == 1
-    assert result["scenes"][5]["visual_type"] in {"slide_board", "slide_key_text"}  # 스톡 미적중 → 회색 배경 대체
+    assert result["scenes"][5]["visual_type"] in {"slide_ai_background", "slide_board", "slide_key_text"}  # 스톡 미적중 → AI 이미지(상한 안) 또는 회색 배경
 
 
 def test_plan_is_reused_even_when_article_evidence_availability_changes(tmp_path):

@@ -28,12 +28,16 @@ logger = logging.getLogger(__name__)
 CANVAS = (1920, 1080)
 _FONT_BOLD = "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"
 _FONT_REGULAR = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
+# 레퍼런스의 굵은 빨간 강조 글자와 같은 계열의 디스플레이 서체(Black Han Sans, SIL OFL). assets/fonts에 라이선스와 함께 둔다.
+_FONT_DISPLAY = str(Path(__file__).resolve().parents[2] / "assets" / "fonts" / "BlackHanSans-Regular.ttf")
+EMPHASIS_RED = (232, 30, 24)
 
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 # 고지 문구는 내레이션이 아니라 화면 배너로만 보여준다(운영자 결정 2026-10-15).
 DISCLAIMER_BANNER_TEXT = "투자의 최종 판단은 본인에게 있습니다  ·  본 영상은 교육 목적의 콘텐츠입니다"
-DISCLAIMER_SECONDS = 8.0
+DISCLAIMER_SECONDS = 8.0  # (이전 상단 띠 방식, 더 이상 쓰지 않는다)
+DISCLAIMER_CARD_SECONDS = 1.3
 # 오버레이가 아래에서 올라오는 거리(px)와 시간(초).
 OVERLAY_RISE_PX = 44
 # 레퍼런스: 데이터 카드·목록은 어둡게 눌린 스톡 영상 위에 얹힌다(스톡 장면의 41%).
@@ -156,15 +160,35 @@ KEY_TEXT_ON_FOOTAGE_MAX = 14
 
 
 def spell_like_narration(value, narration: str):
-    """내레이션이 "5.3퍼센트"라고 적었는데 Claude가 "5.3%"로 옮긴 경우의 표기만 내레이션에 맞춘다(값은 바꾸지 않는다)."""
-    if "퍼센트" not in narration or "%" in narration:
+    """내레이션 표기("5.3퍼센트" 또는 "5.3%")에 Claude가 옮긴 퍼센트 표기만 맞춘다(값은 바꾸지 않는다)."""
+    if "퍼센트" in narration and "%" not in narration:
+        old, new = "%", "퍼센트"
+    elif "%" in narration and "퍼센트" not in narration:
+        old, new = "퍼센트", "%"
+    else:
         return value
     if isinstance(value, str):
-        return value.replace("%", "퍼센트")
+        return value.replace(old, new)
     if isinstance(value, list):
         return [spell_like_narration(item, narration) for item in value]
     if isinstance(value, dict):
         return {key: spell_like_narration(item, narration) for key, item in value.items()}
+    return value
+
+
+_PERCENT_POINT_RE = re.compile(r"(\d)\s*퍼센트포인트")
+_PERCENT_RE = re.compile(r"(\d)\s*퍼센트")
+
+
+def to_percent_symbol(value):
+    """화면 표시용: 숫자 뒤의 "퍼센트"를 "%"로 쓴다(2026-10-16 운영자 요청, 레퍼런스도 "-14.4%").
+    검증이 끝난 뒤에만 적용하므로 원문 일치 검사에는 영향이 없다."""
+    if isinstance(value, str):
+        return _PERCENT_RE.sub(lambda m: f"{m.group(1)}%", _PERCENT_POINT_RE.sub(lambda m: f"{m.group(1)}%p", value))
+    if isinstance(value, list):
+        return [to_percent_symbol(item) for item in value]
+    if isinstance(value, dict):
+        return {key: to_percent_symbol(item) for key, item in value.items()}
     return value
 
 
@@ -259,7 +283,7 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
                 plan[index] = {"type": "equation", **equation, "icon": icon, "explain": explain}
         elif kind == "article_card" and brief.get("has_article"):
             plan[index] = {"type": "article_card"}
-    return plan
+    return {index: to_percent_symbol(value) for index, value in plan.items()}
 
 
 def plan_slide_overlays(briefs: dict[int, dict], *, llm_call=None) -> dict[int, dict] | None:
@@ -407,10 +431,13 @@ def render_news_clip_overlay(
         head_font = _font(_FONT_BOLD, 48)
         quote_font = _font(_FONT_REGULAR, 34)
 
-        head_lines = _wrap_text(draw, headline, head_font, text_w, 2)
-        quote_lines = _wrap_text(draw, quote, quote_font, text_w - 28, 3)
+        # 2026-10-16 운영자 피드백("기사 내용 반복된다"): 인용문은 내레이션과 같은 말이라 카드에서 빼고, 제목이 있으면 제목만 보여 준다.
+        if not headline:
+            headline, quote = quote, ""
+        head_lines = _wrap_text(draw, headline, head_font, text_w, 3)
+        quote_lines = []
         mast_h, head_lh, quote_lh = 56, 62, 50
-        panel_h = pad + mast_h + 20 + len(head_lines) * head_lh + 16 + len(quote_lines) * quote_lh + pad
+        panel_h = pad + mast_h + 20 + len(head_lines) * head_lh + (16 if quote_lines else 0) + len(quote_lines) * quote_lh + pad
         x0, y0 = (width - panel_w) // 2, (height - panel_h) // 2
 
         shadow = Image.new("RGBA", canvas, (0, 0, 0, 0))
@@ -430,7 +457,8 @@ def render_news_clip_overlay(
             draw.text((x0 + pad, y), line, font=head_font, fill=(18, 22, 38, 255))
             y += head_lh
         y += 16
-        draw.rectangle((x0 + pad, y + 4, x0 + pad + 6, y + len(quote_lines) * quote_lh - 6), fill=ACCENT)
+        if quote_lines:
+            draw.rectangle((x0 + pad, y + 4, x0 + pad + 6, y + len(quote_lines) * quote_lh - 6), fill=ACCENT)
         for line in quote_lines:
             draw.text((x0 + pad + 28, y), line, font=quote_font, fill=(70, 74, 86, 255))
             y += quote_lh
@@ -452,9 +480,10 @@ def render_key_text_overlay(
         width, height = canvas
         overlay = Image.new("RGBA", canvas, (0, 0, 0, 120))
         draw = ImageDraw.Draw(overlay)
-        font = _font(_FONT_BOLD, 96)
-        lines = _wrap_text(draw, text, font, int(width * 0.74), 2)
-        line_h = 124
+        board_style = style == "board"
+        font = _font(_FONT_DISPLAY, 150) if board_style else _font(_FONT_BOLD, 96)
+        lines = _wrap_text(draw, text, font, int(width * (0.82 if board_style else 0.74)), 2)
+        line_h = 176 if board_style else 124
         block_h = len(lines) * line_h
         icon_size = 260 if icon else 0
         y = (height - block_h - icon_size) // 2 + icon_size
@@ -468,7 +497,7 @@ def render_key_text_overlay(
             left, top, right, bottom = draw.textbbox((x, y), line, font=font)
             if style == "board":
                 # 레퍼런스의 어두운 배경 문구 장면: 굵은 붉은 글자(밑줄 없음).
-                draw.text((x, y), line, font=font, fill=(229, 57, 53, 255), stroke_width=3, stroke_fill=(229, 57, 53, 255))
+                draw.text((x, y), line, font=font, fill=EMPHASIS_RED + (255,))
             else:
                 draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 150))
                 draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
@@ -761,6 +790,29 @@ def render_bullet_overlay(*, title: str, items: list[str], output_path: str, can
         return _save(overlay, output_path)
     except Exception:
         logger.exception("목록 오버레이 렌더링 실패")
+        return False
+
+
+DISCLAIMER_CARD_LINES = ("투자의 최종 판단은 본인에게 있습니다", "본 영상은 교육 목적의 콘텐츠입니다")
+
+
+def render_disclaimer_card(*, output_path: str, canvas: tuple[int, int] = CANVAS) -> bool:
+    """투자 판단·교육 목적 고지를 화면 가운데에 보여 주는 전체 화면 카드(불투명). 내레이션이 아니라 화면 문구다."""
+    try:
+        width, height = canvas
+        card = Image.new("RGBA", canvas, (24, 25, 28, 255))
+        draw = ImageDraw.Draw(card)
+        main_font, sub_font = _font(_FONT_DISPLAY, 92), _font(_FONT_BOLD, 54)
+        main, sub = DISCLAIMER_CARD_LINES
+        main_w, sub_w = draw.textlength(main, font=main_font), draw.textlength(sub, font=sub_font)
+        top = height // 2 - 110
+        draw.text(((width - main_w) / 2, top), main, font=main_font, fill=(255, 255, 255, 255))
+        bar_w = 180
+        draw.rectangle(((width - bar_w) / 2, top + 150, (width + bar_w) / 2, top + 158), fill=ACCENT)
+        draw.text(((width - sub_w) / 2, top + 190), sub, font=sub_font, fill=(190, 192, 198, 255))
+        return _save(card, output_path)
+    except Exception:
+        logger.exception("고지 카드 렌더링 실패")
         return False
 
 

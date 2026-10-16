@@ -23,14 +23,19 @@ from typing import Callable
 from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
-from app.services.slide_overlay import _FONT_BOLD, _font, spell_like_narration as _spell_like_narration, validate_overlay_plan
+from app.services.slide_templates import expand_topic
+from app.services.slide_overlay import (
+    _FONT_BOLD, _FONT_DISPLAY, EMPHASIS_RED, _font, _in_narration, spell_like_narration as _spell_like_narration,
+    to_percent_symbol, validate_overlay_plan,
+)
 
 logger = logging.getLogger(__name__)
 
 CANVAS = (1920, 1080)
 FPS = 30
 SEQUENCE_VERSION = "slide-sequence-v2"
-RED = (229, 57, 53)
+RED = EMPHASIS_RED
+GRAY_TEXT = (190, 192, 198)
 WHITE = (255, 255, 255)
 
 # 화면 위치(중심 좌표). 레퍼런스: 문구는 위·가운데, 아이콘+숫자는 좌우, 행은 오른쪽에 쌓인다.
@@ -55,7 +60,10 @@ OPENING_LATEST_SECONDS = 0.3
 # 2026-10-16 운영자 요청: 구조와 애니메이션 순서는 복잡하지 않고 단순하며 보기 편해야 한다.
 # 20번 Job 1:17~1:33 재현(2초마다 같은 자리에서 서로 다른 아이콘 교체, 빈 화면) 뒤 레퍼런스 10~33초를 다시 분석해
 # 개수 제한이 아니라 "주제 단위로 쌓고, 주제가 바뀔 때만 비운다"로 바꿨다(레퍼런스는 5~6개가 동시에 있어도 짝지어져 읽힌다).
-MIN_TOPIC_SECONDS = 5.0              # 주제(한 가지 이야기)의 최소 길이: 이보다 짧으면 앞 주제에 합친다
+MIN_TOPIC_SECONDS = 4.0              # 주제(한 가지 이야기)의 최소 길이: 이보다 짧으면 앞 주제에 합친다
+MAX_TOPIC_SECONDS = 11.0             # 한 주제가 이보다 길게 정지해 있으면 재설계·보충한다
+FIXED_TOPIC_MIN_SECONDS = 2.5        # 템플릿 주제는 합치지 않으므로 이보다 짧으면 버린다
+MAX_ELEMENTS_PER_TEMPLATE = 8
 MIN_ELEMENT_SECONDS = 1.5            # 주제가 끝나기 전 이만큼도 안 남으면 새 요소를 만들지 않는다
 MIN_UPDATE_SECONDS = 1.5             # 같은 종류 숫자를 제자리에서 바꿀 때 앞 값이 머무는 최소 시간
 MAX_ELEMENTS_PER_TOPIC = 5
@@ -77,47 +85,35 @@ _OVERLAY_TO_KIND = {value: key for key, value in _KIND_TO_OVERLAY.items()}
 
 _SEQUENCE_SYSTEM = (
     "너는 한국 경제 해설 유튜브의 모션그래픽 연출가다. 어두운 회색 배경이 여러 장면(약 4~6초씩)에 걸쳐 끊기지 않고 "
-    "이어지는 구간을 받아, 그 구간에 나타날 요소들의 타임라인을 설계한다.\n\n"
-    "[레퍼런스 영상(부동산 10~33초)에서 확인한 연출 원칙]\n"
-    "1. 구간은 '주제(한 가지 이야기)' 단위로 나뉜다. 한 주제는 보통 6~12초이고, 장면 경계와 무관하다.\n"
-    "2. 한 주제 안에서는 요소가 하나씩 등장해 쌓이고 주제가 끝날 때까지 화면에 남는다. 새 주제가 시작될 때만 앞 주제의 "
-    "요소가 한꺼번에 사라진다. 화면이 비는 순간이 없어야 한다.\n"
-    "3. 주제마다 중심 요소 하나(큰 숫자, 핵심 문구, 아이콘+숫자 짝)로 시작하고, 그 둘레에 비교 대상·보조 숫자를 붙인다. "
-    "예: 돈뭉치 아이콘 + \"10억 원\" → 옆에 \"현재 11.8%\" → 이어서 \"과거 8%\"(앞 값 자리에서 숫자만 바뀜).\n"
-    "4. 같은 자리의 값이 바뀔 때는 같은 종류(숫자→숫자, 문구→문구)만 제자리에서 바꾼다(replaces에 앞 요소 id). 아이콘을 다른 "
-    "아이콘으로 바꾸지 않는다.\n"
-    "5. 글자는 작고 차분하다. 큰 것은 숫자 하나뿐이다.\n\n"
-    "요소 종류(kind)와 content:\n"
-    f'- "text": 핵심어 문구. {{"text": 그 장면 내레이션에 글자 그대로 있는 4~{MAX_TEXT_CHARS}자 핵심어, "color": "red|white"}}. '
-    "자막 문장을 그대로 되풀이하지 말고 핵심어(2~3단어)만 뽑는다. red는 핵심 주장.\n"
-    '- "number": 큰 숫자. {"value": 내레이션에 글자 그대로 있는 숫자 구절 16자 이내, "label": 8자 이내 소제목(없어도 됨, 숫자 금지)}.\n'
-    '- "icon": 그림. {"name": 아래 이름 중 하나}. 그 순간 말하는 대상을 직접 그린 것만 쓴다(예: "외국인"→foreigner, "반도체"→chip). '
-    "뜻이 정확히 맞는 아이콘이 없으면 아이콘을 쓰지 않는다. 같은 아이콘을 한 구간에서 두 번 쓰지 않는다.\n"
-    '- "arrow": 그려지는 화살표. {"direction": "up|down|right"} (상승·하락·이어짐). 숫자나 문구 옆에서만 쓴다.\n'
-    '- "bars": 막대 비교(화면 전체, center 전용). {"title": 18자 이내(숫자 금지), "items": [{"label": 대상 이름, "value_text": 내레이션에 적힌 숫자+단위 그대로}] 2~4개}.\n'
-    '- "list": 순서대로 나타나는 목록(화면 전체, center 전용). {"title": 18자 이내(숫자 금지), "items": [내레이션에 글자 그대로 있는 24자 이내 구절 2~4개]}.\n'
-    '- "rows": 이어서 추가되는 비교 행(화면 전체, center 전용). {"headline": 내레이션에 글자 그대로 있는 12자 이내 구절, "rows": [{"label": 6자 이내(숫자 금지), "value": 내레이션에 글자 그대로 있는 숫자 구절}] 2~3개}.\n'
-    '- "flow": A→B→C가 차례로 나타나는 흐름도(화면 전체, center 전용). {"nodes": [{"label": 8자 이내(숫자 금지), "icon": 아이콘 이름}] 2~3개}.\n'
+    "이어지는 구간을 받아, 그 구간을 '주제' 단위로 나누고 주제마다 구성 템플릿 하나와 채울 내용을 정한다. "
+    "자리·크기·정렬은 템플릿이 정하므로 너는 정하지 않는다.\n\n"
+    "[연출 원칙 — 레퍼런스 영상 분석 + 운영자 피드백]\n"
+    "1. 주제 하나는 '한 가지 이야기'이고 4~9초다(장면 경계와 무관). 주제가 바뀔 때만 화면이 한꺼번에 바뀐다.\n"
+    "2. 주제마다 시청자가 기억해야 할 핵심 하나만 보여 준다. 나열하지 않는다. 설명이 눈에 안 들어오는 요소 나열이 가장 나쁘다.\n"
+    "3. 내레이션에 숫자(%·원·배·거래일 등)가 나오면 그 숫자를 큰 숫자로 보여 주는 것이 최우선이다.\n"
+    "4. 같은 템플릿 안의 항목은 항상 같은 구조여야 한다(둘 다 아이콘+글, 또는 둘 다 숫자+글, 또는 둘 다 글).\n"
+    "5. 아이콘은 그 순간 말하는 대상을 직접 그린 것만 쓴다(예: '반도체'→chip, '외국인'→foreigner). 뜻이 정확히 맞지 않으면 "
+    "아이콘 없이 글만 쓴다. 같은 아이콘을 구간에서 두 번 쓰지 않는다. 장식용 아이콘은 쓰지 않는다.\n"
+    "6. 글은 핵심어(2~3단어)만. 자막 문장을 그대로 되풀이하지 않는다.\n\n"
+    "[템플릿] 주제 객체의 필드: template, scene(구간에 포함된 장면 번호), anchor(그 장면 내레이션에 글자 그대로 있는 구절 — "
+    "이 말을 하는 순간에 주제가 시작된다) + 템플릿별 필드.\n"
+    '- "title_number": 제목 + 큰 숫자. {"title": 선택, 4~16자 핵심어, "number": {"value": 내레이션에 글자 그대로 있는 숫자 구절 16자 이내, '
+    '"label": 선택, 8자 이내}, "icon": 선택, "caption": 선택, 보조 한 줄 2~16자}\n'
+    '- "compare_pair": 두 항목을 기호로 잇는 비교/결합(예: 외국인 이탈 + 자사주 매입 종료, 현재 vs 과거). '
+    '{"op": "+" | "vs" | "→" | "=", "a": {"label": 2~14자, "icon": 선택, "value": 선택(숫자 구절)}, '
+    '"b": {같은 구조, "anchor": 선택(이 항목을 말하는 구절)}, "title": 선택}. a와 b는 같은 구조로 쓴다.\n'
+    '- "flow": 2~3단계 연결(원인→결과). {"nodes": [{"label": 2~8자, "icon": 선택}, …]} 아이콘은 모두 쓰거나 모두 쓰지 않는다.\n'
+    '- "headline_sub": 굵은 빨간 한 줄(핵심 주장) + 작은 보조 문구. {"headline": 4~16자, "sub": 선택, 2~16자}\n'
+    '- "bars": 막대 비교. {"title": 18자 이내(숫자 금지), "items": [{"label": 대상, "value_text": 숫자+단위 그대로}] 2~4개}\n'
+    '- "list": 번호 목록. {"title": 18자 이내(숫자 금지), "items": [24자 이내 구절 2~4개]}\n'
+    '- "rows": 숫자 행 비교. {"headline": 12자 이내 구절, "rows": [{"label": 6자 이내(숫자 금지), "value": 숫자 구절}] 2~3개}\n'
     "아이콘 이름: " + ", ".join(f"{name}({ICON_HINTS[name]})" for name in ICON_NAMES) + "\n\n"
-    "각 요소 필드: id(e1, e2…), topic(주제 번호 1부터 시간 순서대로), kind, scene(구간에 포함된 장면 번호), "
-    "anchor(그 장면 내레이션에 글자 그대로 있는 구절 — 이 말을 하는 순간에 요소가 나타난다), "
-    "slot(center|top|bottom|left|right|upper_left|upper_right|lower_left|lower_right), "
-    "anim(rise|draw|count|grow — number는 count, arrow는 draw, bars는 grow, 나머지는 rise), content, "
-    "replaces(선택: 같은 자리에서 값만 바뀌는 앞 요소의 id).\n"
     "규칙:\n"
-    "- 주제는 최소 5초 이상. 주제마다 text·number·bars·list·rows·flow 중 하나 이상이 있어야 한다(아이콘·화살표만으로 주제를 만들지 않는다).\n"
-    "- 한 주제의 요소는 5개 이하. 서로 겹치지 않게 다른 자리를 쓴다(숫자는 left/right, 문구는 top, 아이콘은 숫자 옆). "
-    "center(막대·목록·비교 행·흐름도)를 쓰는 주제에는 다른 요소를 넣지 않는다.\n"
-    "- 내레이션에 숫자(퍼센트·원·배 등)가 나오면 그 숫자를 number로 크게 보여 주는 것이 가장 우선이다. 숫자는 아이콘·문구보다 "
-    "먼저 고른다.\n"
-    "- 한 주제는 12초를 넘기지 않고, 새 요소가 5초 이상 나오지 않는 구간이 없게 한다(긴 이야기는 주제를 나눈다).\n"
-    "- 구간은 첫 장면 시작과 함께 첫 요소가 나와야 하고, 주제가 바뀔 때마다 다음 주제의 첫 요소가 바로 이어져 빈 화면이 없어야 한다.\n"
-    "- text·value·items는 내레이션의 연속된 구절을 한 글자도 바꾸지 말고 복사한다(조사·어순·표기 그대로, 요약·바꿔쓰기·물음표 추가 금지, "
-    "\"5.3퍼센트\"를 \"5.3%\"로 쓰지 않는다). 예: 내레이션이 \"미국 10년물 국채금리가 24년 만에 5.3퍼센트를 넘어섰다고\"이면 "
-    "text는 \"24년 만에\", number의 value는 \"5.3퍼센트\".\n"
-    "- 모든 text·value·items·label은 해당 장면 내레이션(또는 직전 두 장면)에 적힌 글자를 그대로 옮긴다. 숫자를 "
-    "계산·반올림·추정·새로 만들지 않는다. 같은 문구를 두 번 쓰지 않는다.\n"
-    '출력은 JSON만: {"elements":[{"id":"e1","topic":1,"kind":"...","scene":번호,"anchor":"...","slot":"...","anim":"...","content":{...}}]}'
+    "- 모든 글자·숫자는 해당 장면 내레이션(또는 직전 두 장면)에 적힌 연속된 구절을 한 글자도 바꾸지 말고 복사한다"
+    "(조사·어순·표기 그대로, 요약·바꿔쓰기·물음표 추가 금지). 숫자를 계산·반올림·추정·새로 만들지 않는다. 같은 문구를 두 번 쓰지 않는다.\n"
+    "- 구간은 첫 장면 시작과 함께 첫 주제가 나와야 하고, 주제가 바뀔 때마다 다음 주제가 바로 이어져 빈 화면이 없어야 한다.\n"
+    "- 주제 순서는 시간 순서이며 anchor가 앞 주제보다 뒤여야 한다.\n"
+    '출력은 JSON만: {"topics":[{"template":"...","scene":번호,"anchor":"...", ...}]}'
 )
 
 
@@ -270,29 +266,36 @@ def _fallback_elements(run: list[dict], plan: dict) -> list[dict]:
     seq_start = starts[run[0]["index"]]
     elements: list[dict] = []
     for scene in run:
-        overlay = scene.get("overlay") or {}
-        kind = _OVERLAY_TO_KIND.get(overlay.get("type"))
-        if not kind:
-            continue
-        if kind == "text":
-            content = {"text": overlay["text"], "color": "red"}
-        elif kind == "number":
-            content = {"value": overlay["value"], "label": overlay.get("label", "")}
-        elif kind == "bars":
-            content = {"title": overlay.get("title", ""), "items": overlay.get("items", [])}
-        elif kind == "list":
-            content = {"title": overlay["title"], "items": overlay["items"]}
-        elif kind == "rows":
-            content = {"headline": overlay["headline"], "rows": overlay["rows"]}
-        else:
-            content = {"nodes": overlay["nodes"]}
-        elements.append({
-            "id": f"e{len(elements) + 1}", "kind": kind, "scene": scene["index"], "anchor": "", "slot": "center",
-            "topic": len(elements) + 1, "replaces": None,
-            "anim": {"number": "count", "bars": "grow"}.get(kind, "rise"),
-            "at": round(starts[scene["index"]] - seq_start + 0.3, 2), "content": content,
-        })
+        element = _fallback_scene_element(scene, starts, seq_start, f"e{len(elements) + 1}")
+        if element:
+            element["topic"] = len(elements) + 1
+            elements.append(element)
     return elements
+
+
+def _fallback_scene_element(scene: dict, starts: dict, seq_start: float, element_id: str) -> dict | None:
+    """장면 하나의 (이미 검증된) 후편집을 시퀀스 요소로 바꾼다."""
+    overlay = scene.get("overlay") or {}
+    kind = _OVERLAY_TO_KIND.get(overlay.get("type"))
+    if not kind:
+        return None
+    if kind == "text":
+        content = {"text": overlay["text"], "color": "red"}
+    elif kind == "number":
+        content = {"value": overlay["value"], "label": overlay.get("label", "")}
+    elif kind == "bars":
+        content = {"title": overlay.get("title", ""), "items": overlay.get("items", [])}
+    elif kind == "list":
+        content = {"title": overlay["title"], "items": overlay["items"]}
+    elif kind == "rows":
+        content = {"headline": overlay["headline"], "rows": overlay["rows"]}
+    else:
+        content = {"nodes": overlay["nodes"]}
+    return {
+        "id": element_id, "kind": kind, "scene": scene["index"], "anchor": "", "slot": "center", "replaces": None,
+        "anim": {"number": "count", "bars": "grow"}.get(kind, "rise"),
+        "at": round(starts[scene["index"]] - seq_start + 0.3, 2), "content": content,
+    }
 
 
 def _tight_rect(prim: dict) -> tuple[float, float, float, float]:
@@ -315,6 +318,27 @@ def element_rect(element: dict) -> tuple[float, float, float, float]:
 def _intersects(a: tuple, b: tuple) -> bool:
     return not (a[2] + RECT_MARGIN <= b[0] or b[2] + RECT_MARGIN <= a[0]
                 or a[3] + RECT_MARGIN <= b[1] or b[3] + RECT_MARGIN <= a[1])
+
+
+def _is_fixed(group: list[dict]) -> bool:
+    """템플릿이 자리를 정한 주제인지."""
+    return bool(group) and all(e.get("fixed") for e in group)
+
+
+def _place_fixed(head: dict, rest: list[dict], end: float) -> list[dict]:
+    """템플릿 주제: 자리는 그대로 두고, 늦게 나올 항목은 버리지 않고 주제 끝 전에 나오도록 당긴다(구조가 깨지지 않게).
+    서로 겹치는 항목은 뒤에 나온 쪽을 버린다."""
+    kept = [head]
+    rects = [element_rect(head)]
+    latest = max(end - MIN_ELEMENT_SECONDS, head["at"] + 0.15)
+    for element in rest[:MAX_ELEMENTS_PER_TEMPLATE - 1]:
+        element["at"] = round(min(element["at"], latest), 2)
+        rect = element_rect(element)
+        if any(_intersects(rect, other) for other in rects):
+            continue
+        kept.append(element)
+        rects.append(rect)
+    return kept
 
 
 def _group_topics(elements: list[dict]) -> list[list[dict]]:
@@ -372,8 +396,12 @@ def resolve_lifetimes(elements: list[dict], duration: float, *, merge_short: boo
         merged: list[list[dict]] = []
         for k, group in enumerate(topics):
             end = topics[k + 1][0]["at"] if k + 1 < len(topics) else duration
-            if merged and end - group[0]["at"] < MIN_TOPIC_SECONDS:
+            short = end - group[0]["at"] < MIN_TOPIC_SECONDS
+            # 템플릿 주제는 자리가 정해져 있어 다른 주제와 합치면 겹친다 — 합치지 않고, 너무 짧으면 버린다.
+            if merged and short and not _is_fixed(group) and not _is_fixed(merged[-1]):
                 merged[-1].extend(group)
+            elif _is_fixed(group) and end - group[0]["at"] < FIXED_TOPIC_MIN_SECONDS and merged:
+                continue
             else:
                 merged.append(group)
         topics = merged
@@ -383,8 +411,11 @@ def resolve_lifetimes(elements: list[dict], duration: float, *, merge_short: boo
         end = topics[k + 1][0]["at"] if k + 1 < len(topics) else duration
         group.sort(key=lambda e: e["at"])
         head, rest = group[0], group[1:]
-        rest = [e for e in rest if end - e["at"] >= MIN_ELEMENT_SECONDS]
-        placed = _place_topic([head, *rest][:MAX_ELEMENTS_PER_TOPIC * 2])[:MAX_ELEMENTS_PER_TOPIC + 2]
+        if _is_fixed(group):
+            placed = _place_fixed(head, rest, end)
+        else:
+            rest = [e for e in rest if end - e["at"] >= MIN_ELEMENT_SECONDS]
+            placed = _place_topic([head, *rest][:MAX_ELEMENTS_PER_TOPIC * 2])[:MAX_ELEMENTS_PER_TOPIC + 2]
         if placed:
             survivors.append(placed)
     result: list[dict] = []
@@ -397,6 +428,195 @@ def resolve_lifetimes(elements: list[dict], duration: float, *, merge_short: boo
             result.append(element)
     result.sort(key=lambda e: e["at"])
     return result
+
+
+class _TemplateContext:
+    """slide_templates가 쓰는 검증·시각 도구. 글자·숫자는 기존 검증기(원문 일치·계산 검산)를 그대로 통과해야 한다."""
+
+    def __init__(self, run: list[dict], plan: dict, approved: set[tuple[int, str]] | None = None):
+        self.scenes = {s["index"]: s for s in plan["scenes"]}
+        self.starts = _scene_starts(plan)
+        self.seq_start = self.starts[run[0]["index"]]
+        self.run_indexes = {s["index"] for s in run}
+        self.approved = approved or set()  # 내레이션을 그대로 옮기지 않았지만 검수를 통과한 요약 문구(숫자 없음)
+        self.failures: list[str] = []  # 거절된 문구와 이유(재설계 요청에 쓴다)
+
+    def _scene(self, scene: int) -> dict | None:
+        return self.scenes.get(scene) if scene in self.run_indexes else None
+
+    def label(self, scene: int, text: object) -> str | None:
+        target = self._scene(scene)
+        value = str(text or "").strip()
+        if not target or not (2 <= len(value) <= MAX_TEXT_CHARS):
+            return None
+        value = _spell_like_narration(value, target["narration"])
+        if _in_narration(value, target["narration"]) or (scene, value) in self.approved:
+            return to_percent_symbol(value)
+        self.failures.append(f'"{value}": 내레이션에 없고 요약 검수도 통과하지 못함(숫자가 든 요약은 불가)')
+        return None
+
+    def text(self, scene: int, text: object, color: str) -> dict | None:
+        if not self._scene(scene):
+            return None
+        value = str(text or "").strip()
+        if (scene, value) in self.approved and 2 <= len(value) <= MAX_TEXT_CHARS:
+            return {"text": value, "color": "white" if color in ("white", "gray") else "red"}
+        validated = _validate_content("text", {"text": value, "color": color}, scene, self.scenes)
+        if not validated:
+            self.failures.append(f'"{value}": 내레이션 구절이 아니거나 {MAX_TEXT_CHARS}자 초과')
+        return validated
+
+    def content(self, kind: str, content: dict, scene: int) -> dict | None:
+        if not self._scene(scene) or not isinstance(content, dict):
+            return None
+        return _validate_content(kind, content, scene, self.scenes)
+
+    def icon(self, name: object) -> str | None:
+        return name if isinstance(name, str) and name in ICON_NAMES else None
+
+    def time(self, scene: int, anchor: object) -> float:
+        target = self._scene(scene)
+        if not target:
+            return 0.0
+        return max(_anchor_time(target, self.starts[scene], str(anchor or "")) - self.seq_start, 0.0)
+
+
+_JUDGE_SYSTEM = (
+    "너는 영상 자막·후편집의 사실 확인 검수자다. 각 항목은 영상 화면에 뜰 짧은 문구이고, 그 장면의 내레이션(과 직전 두 장면)과 함께 "
+    "주어진다. 문구가 내레이션이 말한 내용을 왜곡·과장 없이 줄여 쓴 핵심어/요약이면 ok다. 내레이션에 없는 새 사실·원인·주장, "
+    "방향(오른다/내린다)이나 긍정/부정의 반전, 새 대상(회사·인물)이 들어 있으면 거절한다. 확신이 없으면 거절한다.\n"
+    '출력은 JSON만: {"ok": [통과한 항목 번호, ...]}'
+)
+
+
+def _label_candidates(topic: dict) -> list[str]:
+    values: list[object] = [topic.get(key) for key in ("title", "caption", "headline", "sub")]
+    for side in ("a", "b"):
+        if isinstance(topic.get(side), dict):
+            values.append(topic[side].get("label"))
+    for node in topic.get("nodes") or []:
+        if isinstance(node, dict):
+            values.append(node.get("label"))
+    return [str(v).strip() for v in values if isinstance(v, str) and v.strip()]
+
+
+def _approve_paraphrases(raw_topics: list, run: list[dict], plan: dict, llm_call=None) -> set[tuple[int, str]]:
+    """내레이션을 그대로 옮기지 않은 요약 문구를 Claude가 한 번에 검수한다(숫자가 든 문구는 검수 대상이 아니라 거절).
+
+    2026-10-16 운영자 피드백: 화면 문구는 자막을 되풀이하지 않는 핵심어여야 한다. 원문 그대로만 허용하면 핵심어를 못 쓰고 자막 반복이
+    남는다. 숫자·단위는 계속 원문 일치 검증을 거치고, 요약 문구만 의미 검수(왜곡·새 사실 금지)를 거친다."""
+    scenes = {s["index"]: s for s in plan["scenes"]}
+    ordered = sorted(scenes)
+    run_indexes = {s["index"] for s in run}
+    items: list[tuple[int, str]] = []
+    for raw in (raw_topics or [])[:12]:
+        try:
+            scene = int(raw.get("scene")) if isinstance(raw, dict) else -1
+        except (TypeError, ValueError):
+            continue
+        if scene not in run_indexes:
+            continue
+        narration = scenes[scene]["narration"]
+        for text in _label_candidates(raw):
+            spelled = _spell_like_narration(text, narration)
+            if not 2 <= len(spelled) <= MAX_TEXT_CHARS or re.search(r"\d", spelled) or _in_narration(spelled, narration):
+                continue
+            if (scene, spelled) not in items:
+                items.append((scene, spelled))
+    if not items:
+        return set()
+    lines = []
+    for number, (scene, text) in enumerate(items, start=1):
+        position = ordered.index(scene)
+        context = " ".join(scenes[i]["narration"] for i in ordered[max(0, position - 2):position + 1])
+        lines.append(f"{number}. 문구: \"{text}\" / 내레이션: {context}")
+    try:
+        raw = _call_llm(_JUDGE_SYSTEM, "\n".join(lines) + "\n\nJSON만 반환:", llm_call=llm_call)
+        cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        ok = {int(n) for n in (json.loads(match.group(0) if match else cleaned).get("ok") or [])}
+    except Exception as exc:
+        logger.warning("요약 문구 검수 실패(원문 그대로인 문구만 쓴다): %s", exc)
+        return set()
+    return {items[n - 1] for n in ok if 1 <= n <= len(items)}
+
+
+def _topics_to_elements(
+    raw_topics: list, run: list[dict], plan: dict, llm_call=None, failures: list[str] | None = None,
+) -> list[dict]:
+    """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
+    ctx = _TemplateContext(run, plan, _approve_paraphrases(raw_topics, run, plan, llm_call))
+    if failures is not None:
+        failures.extend(ctx.failures)  # 같은 리스트를 계속 갱신하도록 아래에서 다시 합친다
+    elements: list[dict] = []
+    seen: set[str] = set()
+    number = 0
+    for raw in (raw_topics or [])[:12]:
+        if not isinstance(raw, dict):
+            continue
+        expanded = expand_topic(raw, ctx)
+        if not expanded:
+            continue
+        core = json.dumps(
+            [(e["kind"], e["content"]) for e in expanded if e["kind"] in _ANCHOR_KINDS], ensure_ascii=False, sort_keys=True,
+        )
+        if core in seen:
+            continue
+        seen.add(core)
+        number += 1
+        for element in expanded:
+            element["topic"] = number
+            element["id"] = f"e{len(elements) + 1}"
+            element["replaces"] = None
+            elements.append(element)
+    if failures is not None:
+        failures.extend(f for f in ctx.failures if f not in failures)
+    elements.sort(key=lambda e: (e["topic"], e["at"]))
+    # 첫 주제는 구간이 시작하자마자 나온다(주제 안의 상대 시각은 그대로 둔다).
+    first = [e for e in elements if e["topic"] == 1]
+    if first:
+        shift = min(e["at"] for e in first) - OPENING_LATEST_SECONDS
+        if shift > 0:
+            for element in first:
+                element["at"] = round(max(element["at"] - shift, 0.0), 2)
+    return elements
+
+
+def _longest_gap(elements: list[dict], duration: float) -> float:
+    """주제 시작 시각 사이(마지막은 구간 끝까지)의 가장 긴 간격 — 화면이 한 주제로 오래 멈춰 있는 정도."""
+    starts = sorted({e["topic"]: e["at"] for e in elements}.values()) if elements else []
+    if not starts:
+        return duration
+    points = [0.0, *starts, duration] if starts[0] > MAX_TOPIC_SECONDS else [*starts, duration]
+    return max(b - a for a, b in zip(points, points[1:]))
+
+
+def _fill_gaps(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
+    """템플릿 주제가 거절돼 한 화면이 MAX_TOPIC_SECONDS보다 오래 멈추면, 그 사이 장면의 후편집(이미 검증됨)을 새 주제로 보충한다."""
+    if not elements:
+        return elements
+    starts = _scene_starts(plan)
+    seq_start = starts[run[0]["index"]]
+    topic_starts = sorted({e["topic"]: e["at"] for e in elements}.values())
+    last = topic_starts[0]
+    next_topic = max(e["topic"] for e in elements) + 1
+    added: list[dict] = []
+    for scene in run:
+        offset = starts[scene["index"]] - seq_start
+        covering = max([t for t in topic_starts if t <= offset + 1e-6] + [last])
+        if offset - covering <= MAX_TOPIC_SECONDS - 3 or not scene.get("overlay"):
+            continue
+        fallback = _fallback_scene_element(scene, starts, seq_start, f"g{len(added) + 1}")
+        if not fallback:
+            continue
+        fallback["topic"] = next_topic
+        next_topic += 1
+        added.append(fallback)
+        topic_starts.append(fallback["at"])
+        topic_starts.sort()
+    for index, element in enumerate(added, start=1):
+        element["id"] = f"e{len(elements) + index}"
+    return elements + added
 
 
 def sequence_signature(run: list[dict]) -> str:
@@ -422,12 +642,33 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
     )
     designed: list[dict] = []
     source = "claude"
-    try:
-        raw = _call_llm(_SEQUENCE_SYSTEM, prompt, llm_call=llm_call)
+    failures: list[str] = []
+
+    def attempt(extra: str = "") -> list[dict]:
+        raw = _call_llm(_SEQUENCE_SYSTEM, prompt + extra, llm_call=llm_call)
         cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
         match = re.search(r"\{[\s\S]*\}", cleaned)
         data = json.loads(match.group(0) if match else cleaned)
-        designed = _normalize_elements(data.get("elements") or [], run, plan)
+        if data.get("topics"):
+            return _topics_to_elements(data.get("topics") or [], run, plan, llm_call=llm_call, failures=failures)
+        return _normalize_elements(data.get("elements") or [], run, plan)  # 이전 형식(자유 배치 요소)도 받는다
+
+    try:
+        designed = attempt()
+        gap = _longest_gap(designed, duration)
+        if designed and gap > MAX_TOPIC_SECONDS and failures:
+            # 거절된 주제 때문에 화면이 오래 멈춰 있으면 거절 사유를 알려 주고 한 번 더 설계한다.
+            retry = (
+                chr(10) * 2 + "[재설계 요청] 앞 설계에서 아래 문구가 거절돼 한 화면이 " + f"{gap:.0f}초 동안 멈춰 있다. "
+                "거절 사유를 피해(내레이션 구절을 그대로 복사하거나, 숫자 없는 짧은 핵심어를 쓰고) 주제를 4~9초로 나눠 다시 설계해라:"
+                + chr(10) + chr(10).join(f"- {item}" for item in failures[:8])
+            )
+            failures_before = list(failures)
+            second = attempt(retry)
+            if second and _longest_gap(second, duration) < gap:
+                designed = second
+            failures[:] = failures_before
+        designed = _fill_gaps(designed, run, plan)
     except Exception as exc:
         logger.warning("시퀀스 설계 실패(장면별 후편집으로 대체): %s", exc)
     # 구간의 모든 장면에 움직임이 있어야 한다(요소가 한 장면도 못 채우면 장면별 후편집을 보충한다).
@@ -489,8 +730,10 @@ def _ease_out(p: float) -> float:
     return 1 - (1 - p) ** 3
 
 
-def _text_sprite(text: str, size: int, color: tuple, *, stroke: int = 0, max_width: int = 1500) -> Image.Image:
-    font = _font(_FONT_BOLD, size)
+def _text_sprite(
+    text: str, size: int, color: tuple, *, stroke: int = 0, max_width: int = 1500, font_path: str = _FONT_BOLD,
+) -> Image.Image:
+    font = _font(font_path, size)
     probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
     lines = []
     # 원문에 줄바꿈이 있으면 그 줄을 먼저 나누고, 각 줄 안에서만 폭에 맞춰 단어 단위로 감는다.
@@ -535,9 +778,11 @@ def _fit_size(text: str, size: int, max_width: int, floor: int = 64) -> int:
     return size
 
 
-def _number_sprite(value: str, label: str, p: float, max_width: int = WIDE_SLOT_MAX_WIDTH) -> Image.Image:
+def _number_sprite(
+    value: str, label: str, p: float, max_width: int = WIDE_SLOT_MAX_WIDTH, size_cap: int | None = None,
+) -> Image.Image:
     # 카운트업 도중 폭이 변해 크기가 흔들리지 않게 최종 값 기준으로 글자 크기를 정한다(좌우 자리에서 잘리지 않게).
-    size = _fit_size(value, 190, max_width)
+    size = _fit_size(value, min(190, size_cap or 190), max_width)
     main = _text_sprite(_number_text(value, p), size, WHITE, max_width=10_000)
     if not label:
         return main
@@ -611,12 +856,21 @@ def _row_sprite(label: str, value: str, color: tuple) -> Image.Image:
 
 
 def _node_sprite(label: str, icon: str | None) -> Image.Image:
-    text = _text_sprite(label, 54, WHITE, max_width=420)
-    size = 240
-    sprite = Image.new("RGBA", (max(size + 40, text.width), size + 40 + text.height), (0, 0, 0, 0))
+    """흐름도의 한 단계. 아이콘이 있으면 아이콘+글, 없으면 윤곽선 카드 안의 글(같은 흐름에서는 구조가 같다)."""
     if icon:
+        text = _text_sprite(label, 60, WHITE, max_width=520)
+        size = 240
+        sprite = Image.new("RGBA", (max(size + 40, text.width), size + 40 + text.height), (0, 0, 0, 0))
         sprite.alpha_composite(_icon_sprite(icon, size), ((sprite.width - size - 40) // 2, 0))
-    sprite.alpha_composite(text, ((sprite.width - text.width) // 2, size + 30))
+        sprite.alpha_composite(text, ((sprite.width - text.width) // 2, size + 30))
+        return sprite
+    text = _text_sprite(label, 80, WHITE, max_width=520)
+    pad_x, pad_y = 36, 24
+    sprite = Image.new("RGBA", (text.width + pad_x * 2, text.height + pad_y * 2), (0, 0, 0, 0))
+    ImageDraw.Draw(sprite).rounded_rectangle(
+        (2, 2, sprite.width - 3, sprite.height - 3), radius=26, fill=(255, 255, 255, 22), outline=(255, 255, 255, 210), width=4,
+    )
+    sprite.alpha_composite(text, (pad_x, pad_y))
     return sprite
 
 
@@ -625,19 +879,28 @@ def expand_primitives(sequence: dict) -> list[dict]:
     prims: list[dict] = []
     for element in sequence["elements"]:
         kind, content, at, until = element["kind"], element["content"], element["at"], element["until"]
-        cx, cy = SLOTS.get(element["slot"], SLOTS["center"])
+        # 템플릿 요소는 위치(pos)·글자 크기(size)·최대 폭을 직접 정한다. 자유 배치 요소만 슬롯을 쓴다.
+        cx, cy = element.get("pos") or SLOTS.get(element["slot"], SLOTS["center"])
         base = {"element": element["id"], "until": until, "anim": element["anim"],
-                "max_width": SIDE_SLOT_MAX_WIDTH if element["slot"] in _SIDE_SLOTS else WIDE_SLOT_MAX_WIDTH}
-        if kind == "text":
-            size = 112 if element["slot"] in ("center", "top", "bottom") else 92
-            color = WHITE if content.get("color") == "white" else RED
+                "max_width": element.get("max_width")
+                or (SIDE_SLOT_MAX_WIDTH if element["slot"] in _SIDE_SLOTS else WIDE_SLOT_MAX_WIDTH)}
+        if kind in ("text", "symbol"):
+            size = element.get("size")
+            if not size:
+                size = 112 if element["slot"] in ("center", "top", "bottom") else 92
+                if content.get("color") not in ("white", "gray"):
+                    size = int(size * 1.2)  # 빨간 강조 글자는 디스플레이 서체라 같은 크기에서 더 작아 보인다
+            color = {"white": WHITE, "gray": GRAY_TEXT}.get(content.get("color"), RED)
+            if kind == "symbol":
+                color, size = ACCENT[:3], element.get("size") or 150
             prims.append({**base, "kind": "text", "at": at, "pos": (cx, cy), "text": content["text"], "size": size,
                           "color": color})
         elif kind == "number":
             prims.append({**base, "kind": "number", "at": at, "pos": (cx, cy), "value": content["value"],
-                          "label": content.get("label", "")})
+                          "label": content.get("label", ""), "size_cap": element.get("size_cap")})
         elif kind == "icon":
-            prims.append({**base, "kind": "icon", "at": at, "pos": (cx, cy), "name": content["name"]})
+            prims.append({**base, "kind": "icon", "at": at, "pos": (cx, cy), "name": content["name"],
+                          "icon_size": element.get("icon_size", 400)})
         elif kind == "arrow":
             prims.append({**base, "kind": "arrow", "at": at, "pos": (cx, cy), "direction": content["direction"]})
         elif kind == "bars":
@@ -645,10 +908,10 @@ def expand_primitives(sequence: dict) -> list[dict]:
                           "items": content["items"]})
         elif kind == "list":
             prims.append({**base, "kind": "text", "at": at, "pos": (cx, cy - 250), "text": content["title"],
-                          "size": 64, "color": ACCENT[:3]})
+                          "size": 72, "color": ACCENT[:3]})
             for k, item in enumerate(content["items"]):
                 prims.append({**base, "kind": "text", "at": round(at + 0.55 + k * 0.75, 2),
-                              "pos": (cx, cy - 90 + k * 130), "text": f"{k + 1}  {item}", "size": 70, "color": WHITE})
+                              "pos": (cx, cy - 90 + k * 130), "text": f"{k + 1}  {item}", "size": 84, "color": WHITE})
         elif kind == "rows":
             prims.append({**base, "kind": "text", "at": at, "pos": (cx, cy - 260), "text": content["headline"],
                           "size": 88, "color": WHITE})
@@ -660,7 +923,7 @@ def expand_primitives(sequence: dict) -> list[dict]:
                               "label": row["label"], "value": row["value"], "color": palette[k % 3]})
         elif kind == "flow":
             nodes = content["nodes"]
-            span = 1400
+            span = 700 if len(nodes) == 2 else 1250  # 단계가 적으면 가깝게 붙여 한눈에 읽히게 한다
             xs = [int(cx - span / 2 + span * k / max(len(nodes) - 1, 1)) for k in range(len(nodes))] if len(nodes) > 1 else [cx]
             for k, node in enumerate(nodes):
                 t = round(at + k * 0.9, 2)
@@ -675,13 +938,14 @@ def expand_primitives(sequence: dict) -> list[dict]:
 def _sprite_for(prim: dict, p: float) -> Image.Image:
     kind = prim["kind"]
     if kind == "text":
-        return _text_sprite(prim["text"], prim["size"], prim["color"], stroke=3 if prim["color"] == RED else 0,
+        return _text_sprite(prim["text"], prim["size"], prim["color"], stroke=0,
+                            font_path=_FONT_DISPLAY if prim["color"] == RED else _FONT_BOLD,
                             max_width=prim.get("max_width", WIDE_SLOT_MAX_WIDTH))
     if kind == "number":
         return _number_sprite(prim["value"], prim["label"], p if prim["anim"] == "count" else 1.0,
-                              prim.get("max_width", WIDE_SLOT_MAX_WIDTH))
+                              prim.get("max_width", WIDE_SLOT_MAX_WIDTH), prim.get("size_cap"))
     if kind == "icon":
-        return _icon_sprite(prim["name"])
+        return _icon_sprite(prim["name"], prim.get("icon_size", 400))
     if kind == "arrow":
         return _arrow_sprite(prim["direction"], p if prim["anim"] != "pop" else 1.0, prim.get("size", 300))
     if kind == "bars":

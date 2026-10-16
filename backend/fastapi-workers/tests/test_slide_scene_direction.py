@@ -151,3 +151,37 @@ def test_strict_selection_keeps_the_original_prompt():
 
     assert select_best_candidate("문장입니다.", [{"tags": "x"}], llm_call=fake_llm) is None
     assert "엄격 기준" in seen["system"]
+
+
+def test_vision_selection_judges_the_thumbnails_and_can_reject_every_candidate(monkeypatch):
+    """2026-10-16 운영자 피드백: 태그만 보고 고르면 눈보라 치는 지구·초록 네온 얼굴 같은 영상이 자주 통과했다."""
+    from app.services import slide_scene_direction as direction
+
+    monkeypatch.setattr(direction, "_fetch_thumbnail", lambda url, timeout=8.0: b"jpeg-bytes")
+    seen = {}
+
+    def fake_vision(system, text, images):
+        seen["system"], seen["text"], seen["images"] = system, text, images
+        return '{"index": 1}'
+
+    candidates = [{"tags": "earth, snow", "thumbnail_url": "u0"}, {"tags": "office, city", "thumbnail_url": "u1"}]
+    chosen = direction.select_best_candidate("금리가 올랐습니다.", candidates, vision=True, relaxed=True, vision_call=fake_vision)
+
+    assert chosen == 1
+    assert len(seen["images"]) == 2 and "눈보라" in seen["system"]  # 부적절한 유형을 기준에 명시
+    none_fits = direction.select_best_candidate(
+        "금리가 올랐습니다.", candidates, vision=True, vision_call=lambda s, t, i: '{"index": null}',
+    )
+    assert none_fits is None
+
+
+def test_vision_selection_falls_back_to_the_tag_judgement_when_thumbnails_are_unavailable(monkeypatch):
+    from app.services import slide_scene_direction as direction
+
+    monkeypatch.setattr(direction, "_fetch_thumbnail", lambda url, timeout=8.0: None)
+
+    chosen = direction.select_best_candidate(
+        "금리가 올랐습니다.", [{"tags": "bank", "thumbnail_url": "u"}], vision=True, llm_call=lambda s, m, t: '{"index": 0}',
+    )
+
+    assert chosen == 0

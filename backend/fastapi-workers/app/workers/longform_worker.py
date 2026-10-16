@@ -47,6 +47,7 @@ from app.utils.market_charts import render_market_chart
 from app.utils.data_surface_locator import locate_data_surface
 from app.services.overlay.surface_detector import detect_surface
 from app.services.overlay.watermark import render_channel_watermark_layer
+from app.services.sfx import mix_sfx_events
 from app.utils.budget import ProviderRequestAudit, load_preflight, record_cost
 from app.utils.intro_motion import scene_duration_seconds, select_intro_motion_scene_indices
 from app.utils.narration_contract import (
@@ -636,6 +637,15 @@ class LongformWorker:
         font_available = os.path.exists(NANUM_BOLD) or os.path.exists(NANUM_REGULAR)
         ass_exists = os.path.exists(ass_path) and os.path.getsize(ass_path) > 200
         audio_exists = os.path.exists(audio_path) and os.path.getsize(audio_path) > 0
+        # 편집점 효과음(예: 고지 카드)을 나레이션 오디오에 미리 합성한다. 길이는 그대로이고 실패하면 원본을 쓴다.
+        sfx_events = [event for scene in scenes for event in (scene.get("sfx_events") or [])]
+        if audio_exists and sfx_events:
+            sfx_audio = str(temp_dir / "narration_with_sfx.wav")
+            if mix_sfx_events(audio_path, sfx_events, sfx_audio, workdir=str(temp_dir)):
+                audio_path = sfx_audio
+                logger.info("편집점 효과음 합성: %s개", len(sfx_events))
+            else:
+                logger.warning("편집점 효과음 합성 실패 — 효과음 없이 진행")
 
         # BGM 파일 탐색 (bgm_worker가 생성한 파일)
         bgm_path = f"/app/data/jobs/{job_id}/bgm.mp3"
@@ -716,7 +726,8 @@ class LongformWorker:
             raise RuntimeError("롱폼 영상 생성 실패")
 
         # 우상단 채널 워터마크는 자막/BGM 합성과 독립된 마지막 패스로 적용한다.
-        watermark_applied = _apply_channel_watermark(output_path, temp_dir, job_id)
+        # 슬라이드형(캐릭터 없는 모드)에는 캐릭터 채널 배지를 달지 않는다(2026-10-16 운영자 결정).
+        watermark_applied = False if _is_slide_job(scenes) else _apply_channel_watermark(output_path, temp_dir, job_id)
 
         probe = os.popen(
             f'ffprobe -v error -show_entries format=duration '
@@ -2220,6 +2231,14 @@ def _apply_editorial_overlays(scene: dict, clip_path: str, temp_dir: Path, index
     if isinstance(scene.get("editorial_overlay_plan"), dict):
         return True
     return _apply_speech_bubble_overlay(scene, clip_path, temp_dir, index, duration, job_id)
+
+
+def _is_slide_job(scenes: list[dict]) -> bool:
+    """장면이 슬라이드형(배경 영상 + 후편집)으로 만들어졌는지."""
+    return any(
+        str(scene.get("generation_method") or "") == "slide" or str(scene.get("visual_type") or "").startswith("slide_")
+        for scene in scenes or []
+    )
 
 
 def _apply_channel_watermark(video_path: str, temp_dir: Path, job_id: int) -> bool:

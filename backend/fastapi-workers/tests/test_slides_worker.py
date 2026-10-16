@@ -229,7 +229,10 @@ def test_overlay_plan_failure_is_not_silent(monkeypatch, tmp_path):
     assert result["scenes"][0]["image_path"].endswith("_bg.png")
 
 
-def test_disclaimer_banner_goes_on_the_first_scene_after_the_intro_highlight(monkeypatch, tmp_path):
+def test_disclaimer_is_a_one_second_full_screen_card_with_a_sound_effect_on_the_first_scene_after_the_highlight(
+    monkeypatch, tmp_path,
+):
+    """2026-10-16 운영자 요청: 고지 문구를 상단 띠가 아니라 화면 가운데에 1초쯤 보여 주며 효과음을 넣고 넘어간다(편집점 느낌)."""
     worker = SlidesWorker()
     scenes = [
         {"content": f"장면 {i}", "start_seconds": i * 4, "end_seconds": i * 4 + 4,
@@ -240,25 +243,23 @@ def test_disclaimer_banner_goes_on_the_first_scene_after_the_intro_highlight(mon
     _stub_base_layer(monkeypatch, tmp_path)
     seen = _fake_composer(monkeypatch)
 
-    def fake_banner(*, output_path, **kw):
-        Path(output_path).write_bytes(b"banner")
+    def fake_card(*, output_path, **kw):
+        Path(output_path).write_bytes(b"card")
         return True
 
-    monkeypatch.setattr("app.workers.slides_worker.render_disclaimer_banner", fake_banner)
+    monkeypatch.setattr("app.workers.slides_worker.render_disclaimer_card", fake_card)
     monkeypatch.setattr(SlidesWorker, "_disclaimer_scene_index", _REAL_DISCLAIMER_INDEX)
 
     result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
 
-    # 장면 클립은 4초씩이라 8초 배너는 3번에서 시작해 4번까지 이어진다(2026-10-16 20번 Job 재현).
-    banner_scenes = [s["index"] for s in result["scenes"] if s.get("disclaimer_banner")]
-    assert banner_scenes == [3, 4]
-    assert result["scenes"][3]["slide_layers"]["overlays"][-1]["type"] == "disclaimer_banner"
-    assert len(seen["composed"]) == 2
-    # 장면은 병렬로 합성되므로 호출 순서가 아니라 페이드 값으로 첫 조각과 끝 조각을 구분한다.
-    first, second = sorted(seen["composed"], key=lambda c: -c["fade_in_seconds"])
-    assert first["fade_in_seconds"] > 0 and first["fade_out_seconds"] == 0 and first["hold_to_end"] is True
-    assert second["fade_in_seconds"] == 0 and second["fade_out_seconds"] > 0 and second["hold_to_end"] is False
-    assert first["motion"] == "none" and second["motion"] == "none"
+    carded = [s["index"] for s in result["scenes"] if s.get("disclaimer_banner")]
+    assert carded == [3]  # 한 장면에서 끝난다(8초 띠가 아니다)
+    scene = result["scenes"][3]
+    assert scene["slide_layers"]["overlays"][-1]["type"] == "disclaimer_card"
+    assert scene["sfx_events"] == [{"name": "title_hit", "at": 12.0}]  # 장면 시작 시각에 효과음
+    assert len(seen["composed"]) == 1
+    composed = seen["composed"][0]
+    assert composed["start_offset"] == 0.0 and composed["hold_seconds"] == 1.3 and composed["motion"] == "none"
 
 
 def _highlight_scenes():
@@ -670,3 +671,96 @@ def test_plan_only_always_builds_a_fresh_plan_even_when_the_saved_one_matches(mo
     worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}", plan_only=True)
 
     assert built == [1]
+
+
+def _stock_miss_scene(monkeypatch, tmp_path, state, queries=("confused investor looking at documents", "office")):
+    worker = SlidesWorker()
+    calls = []
+
+    def fake_ai(self, **kw):
+        calls.append(kw.get("photo_brief"))
+        kw["out"]["image_path"] = str(tmp_path / "bg.png")
+        kw["out"]["visual_type"] = "slide_ai_background"
+
+    monkeypatch.setattr(SlidesWorker, "_render_pixabay_scene", lambda self, **kw: False)
+    monkeypatch.setattr(SlidesWorker, "_render_ai_background_scene", fake_ai)
+    monkeypatch.setattr(SlidesWorker, "_apply_overlay", lambda self, **kw: None)  # 합성(ffmpeg)은 이 테스트의 관심이 아니다
+    monkeypatch.setattr("app.workers.slides_worker.ensure_board_background", lambda path: Path(path).write_bytes(b"b") or True)
+    out = worker._render_scene(
+        index=0, scene={"content": "불안한 투자자가 서류를 봅니다.", "start_seconds": 0, "end_seconds": 4},
+        job_id=1, job_dir=tmp_path, used_pixabay_ids=set(), overlay_plan=None,
+        base_plan={"background": "stock", "stock_queries": list(queries)}, ai_miss_state=state,
+    )
+    return out, calls
+
+
+def test_stock_miss_is_replaced_by_a_gemini_image_within_the_per_job_cap(monkeypatch, tmp_path):
+    """2026-10-16 운영자 결정: 스톡이 내용과 안 맞아 대체해야 하면 회색 배경 대신 Gemini 이미지로 만든다(먼저 Gemini만)."""
+    import threading
+
+    state = {"used": 0, "max": 2, "lock": threading.Lock()}
+
+    first, calls = _stock_miss_scene(monkeypatch, tmp_path, state)
+    second, calls2 = _stock_miss_scene(monkeypatch, tmp_path, state)
+    third, calls3 = _stock_miss_scene(monkeypatch, tmp_path, state)
+
+    assert first["visual_type"] == "slide_ai_background" and first["base_fallback"] == "stock_miss_to_ai"
+    assert calls == ["confused investor looking at documents"]  # 계획서의 첫 스톡 검색어(촬영 가능한 피사체)를 촬영 설명으로
+    assert second["visual_type"] == "slide_ai_background"
+    assert third["visual_type"] == "slide_board" and third["base_fallback"] == "stock_miss_to_board" and calls3 == []  # 상한 초과
+
+
+def test_gemini_failure_for_a_stock_miss_falls_back_to_the_board_background(monkeypatch, tmp_path):
+    import threading
+
+    state = {"used": 0, "max": 5, "lock": threading.Lock()}
+    worker = SlidesWorker()
+
+    def failing_ai(self, **kw):
+        raise RuntimeError("budget exceeded")
+
+    monkeypatch.setattr(SlidesWorker, "_render_pixabay_scene", lambda self, **kw: False)
+    monkeypatch.setattr(SlidesWorker, "_render_ai_background_scene", failing_ai)
+    monkeypatch.setattr(SlidesWorker, "_apply_overlay", lambda self, **kw: None)
+    monkeypatch.setattr("app.workers.slides_worker.ensure_board_background", lambda path: Path(path).write_bytes(b"b") or True)
+
+    out = worker._render_scene(
+        index=0, scene={"content": "문장입니다.", "start_seconds": 0, "end_seconds": 4}, job_id=1, job_dir=tmp_path,
+        used_pixabay_ids=set(), overlay_plan=None, base_plan={"background": "stock", "stock_queries": ["office"]},
+        ai_miss_state=state,
+    )
+
+    assert out["visual_type"] == "slide_board" and out["base_fallback"] == "stock_miss_to_board"
+
+
+def test_cached_stock_clips_are_claimed_up_front_so_no_scene_picks_a_clip_another_scene_already_uses(tmp_path):
+    """2026-10-16 20번 Job: 같은 스톡 클립이 장면 3곳에 나왔다 — 캐시를 재사용하는 장면과 새로 고르는 장면이 병렬로 돌며
+    아직 등록되지 않은 클립을 서로 가져갔다. 실행 전에 캐시된 클립 ID를 먼저 등록하고, 앞 장면과 겹치는 캐시는 다시 고른다."""
+    from app.workers.slides_worker import _prime_used_stock_ids, _write_base_cache
+
+    narrations = ["첫째 장면입니다.", "둘째 장면입니다.", "셋째 장면입니다."]
+    for index, pixabay_id in enumerate((11, 22, 11)):  # 0번과 2번이 같은 클립
+        video = tmp_path / f"v{index}.mp4"
+        video.write_bytes(b"v")
+        _write_base_cache(tmp_path, index, "stock", narrations[index], video_path=str(video), pixabay_id=pixabay_id)
+    used: set[int] = set()
+
+    conflicts = _prime_used_stock_ids(tmp_path, narrations, {0, 1, 2}, used)
+
+    assert used == {11, 22}
+    assert conflicts == {2}  # 뒤 장면의 중복 캐시는 버리고 다시 고른다
+
+
+def test_primed_ids_skip_scenes_that_will_be_regenerated(tmp_path):
+    from app.workers.slides_worker import _prime_used_stock_ids, _write_base_cache
+
+    narrations = ["첫째 장면입니다.", "둘째 장면입니다."]
+    for index, pixabay_id in enumerate((11, 22)):
+        video = tmp_path / f"v{index}.mp4"
+        video.write_bytes(b"v")
+        _write_base_cache(tmp_path, index, "stock", narrations[index], video_path=str(video), pixabay_id=pixabay_id)
+    used: set[int] = set()
+
+    _prime_used_stock_ids(tmp_path, narrations, {1}, used)  # 0번 장면만 다시 만든다 → 1번 장면의 클립만 피한다
+
+    assert used == {22}

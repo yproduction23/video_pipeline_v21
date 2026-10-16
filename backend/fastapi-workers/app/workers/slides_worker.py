@@ -44,7 +44,7 @@ from app.services.slide_edit_replan import build_edit_plan_with_repair as build_
 from app.services.slide_sequence import render_sequence_clip
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
-    DISCLAIMER_SECONDS,
+    DISCLAIMER_CARD_SECONDS,
     compose_animated_overlay,
     ensure_board_background,
     plan_slide_overlays,
@@ -53,7 +53,7 @@ from app.services.slide_overlay import (
     render_compare_numbers_layers,
     render_equation_overlay,
     render_flow_layers,
-    render_disclaimer_banner,
+    render_disclaimer_card,
     render_key_text_overlay,
     render_news_clip_overlay,
     render_stat_overlay,
@@ -109,6 +109,25 @@ def _read_base_cache(job_dir: Path, index: int, kind: str, narration: str) -> di
         if path and not (Path(path).is_file() and Path(path).stat().st_size > 0):
             return None
     return meta if meta.get("image_path") or meta.get("video_path") else None
+
+
+def _prime_used_stock_ids(job_dir: Path, narrations: list[str], keep_indexes: set[int], used_ids: set) -> set[int]:
+    """실행 전에, 그대로 두는 장면(캐시 재사용·이번에 다시 만들지 않는 장면)의 스톡 클립 ID를 먼저 등록한다.
+
+    앞 장면과 같은 클립을 쓰는 캐시는 충돌로 돌려줘 그 장면이 새로 고르게 한다."""
+    conflicts: set[int] = set()
+    for index in sorted(keep_indexes):
+        if index >= len(narrations):
+            continue
+        cached = _read_base_cache(job_dir, index, "stock", narrations[index])
+        pixabay_id = (cached or {}).get("pixabay_id")
+        if not pixabay_id:
+            continue
+        if pixabay_id in used_ids:
+            conflicts.add(index)
+        else:
+            used_ids.add(pixabay_id)
+    return conflicts
 
 
 def _write_base_cache(job_dir: Path, index: int, kind: str, narration: str, **fields) -> None:
@@ -212,6 +231,12 @@ class SlidesWorker:
 
         progress.start([{"index": index, "text": narration_of(scene)} for index, scene in targets])
 
+        # 같은 스톡 클립이 여러 장면에 나오지 않게, 그대로 두는 장면의 클립 ID를 먼저 등록한다(2026-10-16 20번 Job 재현).
+        target_indexes = {index for index, _ in targets}
+        keep_indexes = set(range(len(scenes_meta))) if scene_indices is None else set(range(len(scenes_meta))) - target_indexes
+        cache_conflicts = _prime_used_stock_ids(job_dir, [narration_of(s) for s in scenes_meta], keep_indexes, used_pixabay_ids)
+        ai_miss_state = {"used": 0, "max": int(runtime_config.value("slide_stock_miss_ai_max")), "lock": threading.Lock()}
+
         # 오버레이 계획(Claude): 고정 개수·간격 없이 장면 맥락을 보고 정한다(운영자 지시).
         # 화면에 올라가는 글자·숫자는 계획 검증에서 내레이션 원문과 대조한다.
         from app.utils.statistic_chart_card import extract_numeric_series
@@ -297,9 +322,9 @@ class SlidesWorker:
                 overlay_plan=overlay_plan.get(index),
                 banner=banner_plan.get(index),
                 base_plan=base_plans.get(index),
-                sequence=sequences_by_scene.get(index),
+                sequence=sequences_by_scene.get(index), ai_miss_state=ai_miss_state,
                 # 전체 실행에서만 배경을 재사용한다. 단일 장면 다시 생성은 새 결과를 원하는 요청이다.
-                reuse_base=scene_indices is None,
+                reuse_base=scene_indices is None and index not in cache_conflicts,
             )
             progress.scene_done(index, out)
             return out
@@ -391,7 +416,7 @@ class SlidesWorker:
         self, *, index: int, scene: dict, job_id: int, job_dir: Path,
         used_pixabay_ids: set[int], kling_state: dict | None = None,
         overlay_plan: dict | None = None, banner: dict | None = None, reuse_base: bool = False,
-        base_plan: dict | None = None, sequence: dict | None = None,
+        base_plan: dict | None = None, sequence: dict | None = None, ai_miss_state: dict | None = None,
     ) -> dict:
         narration = str(
             scene.get("subtitle_text") or scene.get("content") or scene.get("text") or ""
@@ -438,6 +463,21 @@ class SlidesWorker:
                     reuse_base=reuse_base,
                     planned_queries=(base_plan or {}).get("stock_queries") if planned_background == "stock" else None,
                 )
+                if not rendered and planned_background == "stock" and self._claim_ai_replacement(ai_miss_state):
+                    # 2026-10-16 운영자 결정: 스톡이 내용과 안 맞으면 회색 배경 대신 Gemini 이미지로 대체한다(영상당 상한).
+                    queries = (base_plan or {}).get("stock_queries") or []
+                    try:
+                        self._render_ai_background_scene(
+                            index=index, narration=narration, job_id=job_id, job_dir=job_dir, out=out,
+                            reuse_base=reuse_base, photo_brief=str(queries[0]) if queries else "",
+                        )
+                        out["base_fallback"] = "stock_miss_to_ai"
+                        out["quality_flags"] = list(dict.fromkeys([
+                            *out.get("quality_flags", []), f"stock_miss_ai:{out.get('stock_miss_reason', 'unknown')}",
+                        ]))
+                        rendered = True
+                    except Exception:
+                        logger.exception("슬라이드 장면 %s 스톡 대체 AI 이미지 실패 — 회색 배경으로 대체", index)
                 if not rendered and planned_background == "stock":
                     # 스톡이 없으면 유료 사진으로 넘어가지 않고 칠판 + 계획서의 대체 구절로 만든다.
                     if not ensure_board_background(str(board_path)):
@@ -715,58 +755,37 @@ class SlidesWorker:
 
     @staticmethod
     def _banner_schedule(scenes_meta: list, first_index: int | None, target_indexes: set[int]) -> dict[int, dict]:
-        """고지 배너를 DISCLAIMER_SECONDS 동안 이어서 보여 주는 장면별 구간.
+        """고지 카드를 보여 줄 장면과 구간. 하이라이트 뒤 첫 장면 시작에서 DISCLAIMER_CARD_SECONDS 동안만 화면 전체를 덮는다.
 
-        2026-10-16 20번 Job 재현: 장면 클립이 4초 안팎인데 배너를 한 장면에만 붙여 8초 계획이 3.8초로
-        끝났다. 첫 장면에서 이어 다음 장면들에도 남은 시간만큼 붙인다. 중간 장면은 페이드 없이 이어지고
-        마지막 조각에서만 사라진다."""
-        if first_index is None or not scenes_meta:
+        2026-10-16 운영자 요청: 상단 띠(8초)가 아니라 화면 가운데에 1초쯤 보여 주며 효과음을 넣고 넘어간다(편집점 느낌).
+        나레이션은 그대로 흐르므로 영상·음성 길이는 달라지지 않는다."""
+        if first_index is None or not scenes_meta or first_index not in target_indexes:
             return {}
-        default = float(runtime_config.value("scene_duration_sec"))
-        remaining = DISCLAIMER_SECONDS
-        plan: dict[int, dict] = {}
-        index = first_index
-        first = True
-        while remaining > 0.05 and index < len(scenes_meta):
-            duration = scene_duration_seconds(scenes_meta[index], default)
-            start = 0.2 if first else 0.0
-            hold = min(remaining, max(duration - start - 0.05, 0.0))
-            if hold <= 0.05:
-                break
-            remaining -= hold
-            last = remaining <= 0.05
-            if index in target_indexes:
-                plan[index] = {
-                    "start_offset": start, "hold_seconds": hold,
-                    "fade_in_seconds": 0.35 if first else 0.0,
-                    "fade_out_seconds": 0.3 if last else 0.0,
-                    "hold_to_end": not last,
-                }
-            first = False
-            index += 1
-        if plan:
-            # 장면이 모자라 8초를 못 채워도 마지막 조각은 페이드로 사라진다.
-            plan[max(plan)].update(fade_out_seconds=0.3, hold_to_end=False)
-        return plan
+        return {first_index: {
+            "start_offset": 0.0, "hold_seconds": DISCLAIMER_CARD_SECONDS,
+            "fade_in_seconds": 0.06, "fade_out_seconds": 0.12, "hold_to_end": False,
+        }}
 
     def _apply_disclaimer_banner(
         self, *, index: int, duration: float, job_dir: Path, out: dict, schedule: dict | None = None,
     ) -> None:
-        banner_png = job_dir / f"scene_{index:03d}_banner.png"
-        if not render_disclaimer_banner(output_path=str(banner_png)):
-            raise RuntimeError("고지 배너 렌더링 실패")
+        card_png = job_dir / f"scene_{index:03d}_banner.png"
+        if not render_disclaimer_card(output_path=str(card_png)):
+            raise RuntimeError("고지 카드 렌더링 실패")
         schedule = schedule or {
-            "start_offset": 0.2, "hold_seconds": DISCLAIMER_SECONDS,
-            "fade_in_seconds": 0.35, "fade_out_seconds": 0.3, "hold_to_end": False,
+            "start_offset": 0.0, "hold_seconds": DISCLAIMER_CARD_SECONDS,
+            "fade_in_seconds": 0.06, "fade_out_seconds": 0.12, "hold_to_end": False,
         }
         self._compose_into_clip(
-            index=index, duration=duration, job_dir=job_dir, out=out, overlay_png=banner_png,
+            index=index, duration=duration, job_dir=job_dir, out=out, overlay_png=card_png,
             suffix="banner", start_offset=schedule["start_offset"], hold_seconds=schedule["hold_seconds"],
             fade_in_seconds=schedule["fade_in_seconds"], fade_out_seconds=schedule["fade_out_seconds"],
             hold_to_end=schedule["hold_to_end"], motion="none",
         )
-        out["slide_layers"]["overlays"].append({"type": "disclaimer_banner", "overlay_png": str(banner_png)})
+        out["slide_layers"]["overlays"].append({"type": "disclaimer_card", "overlay_png": str(card_png)})
         out["disclaimer_banner"] = True
+        # 장면이 시작하는 순간 편집점 효과음을 넣는다(롱폼 조립이 나레이션 오디오에 합성한다).
+        out["sfx_events"] = [{"name": "title_hit", "at": round(float(out.get("start") or 0.0), 3)}]
 
     def _compose_into_clip(
         self, *, index: int, duration: float, job_dir: Path, out: dict, overlay_png: Path,
@@ -856,7 +875,7 @@ class SlidesWorker:
                 continue
             # 계획서가 정한 스톡 장면은 레퍼런스처럼 주제·분위기에 어울리는 일반 영상이면 충분하다.
             best_index = (
-                select_best_candidate(narration, fresh, relaxed=True) if planned_queries
+                select_best_candidate(narration, fresh, relaxed=True, vision=True) if planned_queries
                 else select_best_candidate(narration, fresh)
             )
             if best_index is None:
@@ -938,6 +957,17 @@ class SlidesWorker:
             out["quality_flags"] = list(dict.fromkeys([
                 *out.get("quality_flags", []), "kling_failed_static_fallback",
             ]))
+
+    @staticmethod
+    def _claim_ai_replacement(state: dict | None) -> bool:
+        """영상당 상한 안에서만 스톡 대체 AI 이미지를 허용한다(병렬 장면 처리를 고려한 잠금)."""
+        if not state:
+            return False
+        with state["lock"]:
+            if state["used"] >= state["max"]:
+                return False
+            state["used"] += 1
+            return True
 
     def _render_ai_background_scene(
         self, *, index: int, narration: str, job_id: int, job_dir: Path, out: dict,

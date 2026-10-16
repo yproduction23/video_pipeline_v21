@@ -113,8 +113,55 @@ _RELAXED_SELECTION_SYSTEM_PROMPT = (
     "정말 하나도 없을 때만 null. 4) {\"index\": 숫자 또는 null} 형태의 JSON만 반환한다."
 )
 
+_VISION_SELECTION_SYSTEM_PROMPT = (
+    "너는 한국 경제 해설 유튜브의 자료영상 선택 담당자다. 내레이션 한 문장과 후보 영상의 대표 이미지를 번호 순서대로 받는다. "
+    "태그가 아니라 이미지에 실제로 보이는 내용을 기준으로 고른다. 이 채널은 화면의 약 2/3를 주제·분위기에 어울리는 상징적 일반 영상"
+    "(빌딩 숲, 도시 야경, 서류, 계산기, 회의, 거래 화면 등)으로 깐다.\n"
+    "기준:\n"
+    "1) 그 문장을 말하는 경제 해설 영상의 배경으로 자연스러워야 한다(문장의 주제·상황과 어울리는 장소·사물·사람).\n"
+    "2) 제외: 우주·지구·달 CG, 눈보라·눈송이, 네온·해커풍 인물, SF·판타지, 추상 CG, 글자·로고·광고판이 큰 영상, 문장과 무관한 직업·장소"
+    "(예: 전기 작업자, 낯선 해외 재래시장), 폭력·선정적인 영상, 문장과 반대되는 분위기.\n"
+    "3) 자연스러운 후보가 있으면 가장 좋은 것의 번호를, 없으면 null을 고른다. null이면 AI 이미지로 대체되므로 억지로 고르지 않는다. "
+    "확신이 없으면 null.\n"
+    '{"index": 숫자 또는 null} 형태의 JSON만 반환한다.'
+)
+
+
+def _fetch_thumbnail(url: str, timeout: float = 8.0) -> bytes | None:
+    try:
+        import requests
+
+        response = requests.get(url, timeout=timeout)
+        if response.status_code == 200 and response.content:
+            return response.content
+    except Exception as exc:  # 대표 이미지를 못 받으면 그 후보는 이미지 없이 태그로만 판단한다
+        logger.info("스톡 대표 이미지 다운로드 실패: %s", exc)
+    return None
+
+
+def _call_vision(system: str, text: str, images: list[bytes | None]) -> str:
+    import base64
+
+    from anthropic import Anthropic
+
+    content: list[dict] = []
+    for number, image in enumerate(images):
+        content.append({"type": "text", "text": f"[후보 {number}]"})
+        if image:
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": "image/jpeg", "data": base64.standard_b64encode(image).decode()}})
+        else:
+            content.append({"type": "text", "text": "(대표 이미지 없음)"})
+    content.append({"type": "text", "text": text})
+    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+        model="claude-sonnet-4-6", max_tokens=200, system=system, messages=[{"role": "user", "content": content}],
+    )
+    return "".join(block.text for block in response.content if hasattr(block, "text"))
+
+
 def select_best_candidate(
-    narration: str, candidates: list[dict], *, llm_call=None, relaxed: bool = False,
+    narration: str, candidates: list[dict], *, llm_call=None, relaxed: bool = False, vision: bool = False,
+    vision_call=None,
 ) -> int | None:
     """후보 영상 목록 중 내레이션 맥락에 실제로 맞는 것의 색인을 Claude에게
     판단시킨다. 2026-10-14 사용자 재현: 검색어-태그 단어 겹침 개수로는
@@ -125,6 +172,30 @@ def select_best_candidate(
     narration = str(narration or "").strip()
     if not narration or not candidates:
         return None
+    if vision:
+        # 2026-10-16 운영자 피드백: 태그만 보고 고르면 눈보라 치는 지구·초록 네온 얼굴 같은 영상이 자주 통과했다.
+        # 대표 이미지를 직접 보고 판단한다. 이미지를 거의 못 받거나 호출이 실패하면 태그 판단으로 내려간다.
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            images = list(pool.map(lambda c: _fetch_thumbnail(c.get("thumbnail_url")) if c.get("thumbnail_url") else None,
+                                   candidates))
+        if sum(1 for image in images if image) * 2 >= len(candidates):
+            tag_lines = "\n".join(f"후보 {i}: 태그 {str(c.get('tags') or '').strip()}" for i, c in enumerate(candidates))
+            text = (f'내레이션: "{narration}"\n\n{tag_lines}\n\n'
+                    '가장 자연스러운 후보 번호 또는 null을 {"index": 숫자 또는 null} JSON으로만 반환해라.')
+            try:
+                call = vision_call or _call_vision
+                raw = call(_VISION_SELECTION_SYSTEM_PROMPT, text, images)
+                cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
+                match = re.search(r"\{[\s\S]*\}", cleaned)
+                index = json.loads(match.group(0) if match else cleaned).get("index")
+                if index is None:
+                    return None
+                index = int(index)
+                return index if 0 <= index < len(candidates) else None
+            except Exception as exc:
+                logger.warning("영상 후보 이미지 판단 실패, 태그 판단으로 대체: %s", exc)
     lines = [f"{i}: {str(c.get('tags') or '').strip()}" for i, c in enumerate(candidates)]
     prompt = (
         f'내레이션: "{narration}"\n\n'
