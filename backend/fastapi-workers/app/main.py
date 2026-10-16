@@ -1229,6 +1229,8 @@ class ImagesGenerateRequest(BaseModel):
     # 2026-10-15 사용자 결정: content_nature와 같은 패턴 — null/blank면 기존
     # 캐릭터 경로(images_worker), "SLIDE"면 slides_worker로 분기한다.
     visual_mode: Optional[str] = None
+    # 슬라이드형: true면 편집 계획서만 만들어 저장하고 이미지는 만들지 않는다(비용 0).
+    plan_only: Optional[bool] = False
 
 
 @app.post("/workers/images/generate")
@@ -1243,6 +1245,7 @@ def images_generate(request: ImagesGenerateRequest):
                 job_id=request.job_id or 0,
                 budget_limit_krw=request.budget_limit_krw,
                 scene_indices=request.scene_indices,
+                plan_only=bool(request.plan_only),
             )
         return get_images_worker().generate(
             tts_meta_json=request.tts_meta,

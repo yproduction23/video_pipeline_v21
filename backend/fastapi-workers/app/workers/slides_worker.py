@@ -144,6 +144,15 @@ def _extract_first_frame_at(video_path: str, output_path: str, seconds: float) -
     return result.returncode == 0 and Path(output_path).is_file()
 
 
+class _NullProgress:
+    """계획서만 만드는 실행(plan_only)은 장면 진행 파일을 건드리지 않는다."""
+
+    def preparing(self) -> None: ...
+    def start(self, scenes: list[dict]) -> None: ...
+    def scene_done(self, index: int, out: dict) -> None: ...
+    def finish(self, status: str = "completed") -> None: ...
+
+
 class SlidesWorker:
     """images_worker.ImagesWorker와 같은 호출 계약의 슬라이드형 워커."""
 
@@ -155,13 +164,16 @@ class SlidesWorker:
         script_meta_json: str | None = None,
         budget_limit_krw: int | None = None,
         scene_indices: list[int] | None = None,
+        plan_only: bool = False,
         **_ignored_character_kwargs,
     ) -> dict:
         """**_ignored_character_kwargs: character_image_path/style/poses_dir,
         lora_*, autonomy_mode 등 캐릭터 전용 인자는 이 모드와 무관하므로
         받기만 하고 쓰지 않는다 — Spring이 images_worker와 같은 호출부로
         두 워커를 모두 부를 수 있게 한다."""
-        progress = SlideProgress(job_id, DATA_DIR, keep_existing=scene_indices is not None)
+        progress = _NullProgress() if plan_only else SlideProgress(
+            job_id, DATA_DIR, keep_existing=scene_indices is not None,
+        )
         progress.preparing()
         try:
             prepared = prepare_job_scenes(
@@ -235,6 +247,27 @@ class SlidesWorker:
             )
             if edit_plan:
                 save_plan(edit_plan, DATA_DIR)
+        if plan_only:
+            # 2026-10-16 운영자 요청: 계획서만 만들고 멈춘다 — 이미지·영상은 한 장도 만들지 않는다(비용 0).
+            return {
+                "job_id": job_id,
+                "status": "PLAN_READY" if edit_plan else "PLAN_FAILED",
+                "scenes": [],
+                "scene_count": 0,
+                "gifs": [],
+                "gif_count": 0,
+                "visual_mode": "SLIDE",
+                "requires_manual_review": not edit_plan,
+                "review_reasons": [] if edit_plan else ["편집 계획서 생성 실패(Claude) — 다시 시도해 주세요."],
+                "edit_plan": (
+                    {
+                        "version": edit_plan["version"], "input_hash": edit_plan["input_hash"],
+                        "scene_count": edit_plan["scene_count"], "summary": edit_plan["summary"],
+                        "segments": edit_plan["segments"],
+                    }
+                    if edit_plan else None
+                ),
+            }
         if edit_plan:
             plan_failed = False
             plan_scenes = {s["index"]: s for s in edit_plan["scenes"]}
@@ -368,7 +401,7 @@ class SlidesWorker:
         # 단, Claude가 "설명 장면"(explain)으로 계획한 장면은 배경 영상을 찾지 않고 일관된
         # 칠판 배경 위에 인포그래픽을 크게 보여준다(레퍼런스 영상의 방식, 비용·시간도 줄어든다).
         try:
-            board_path = job_dir / "board_background_v2.png"
+            board_path = job_dir / "board_background_v3.png"
             planned_background = (base_plan or {}).get("background")
             if planned_background == "board" or (
                 not base_plan and overlay_plan and overlay_plan.get("explain")

@@ -1061,6 +1061,25 @@ public class FastApiClient {
         }
     }
 
+    /**
+     * 슬라이드형 편집 계획서만 만든다(plan_only). 이미지·영상은 만들지 않으므로 공급자 비용이 나가지 않는다.
+     */
+    public ImagesGenerateResponse planSlideEdit(Long jobId, String ttsMetaJson, String scriptMetaJson) {
+        try {
+            Map<String, Object> bodyMap = new HashMap<>();
+            bodyMap.put("job_id", jobId);
+            bodyMap.put("tts_meta", ttsMetaJson);
+            bodyMap.put("script_meta", scriptMetaJson);
+            bodyMap.put("visual_mode", "SLIDE");
+            bodyMap.put("plan_only", true);
+            return objectMapper.readValue(
+                    postJson(fastApiUrl + "/workers/images/generate", bodyMap),
+                    ImagesGenerateResponse.class);
+        } catch (Exception e) {
+            throw new RuntimeException("편집 계획서 생성 오류: " + e.getMessage(), e);
+        }
+    }
+
     /** 슬라이드형 편집 계획서. 조회 실패는 계획서 없음으로 둔다. */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getSlideEditPlan(Long jobId) {

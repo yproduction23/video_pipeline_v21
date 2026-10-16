@@ -266,3 +266,34 @@ def test_plan_failure_is_reported_and_falls_back_to_the_inline_overlay_plan(monk
     assert result["edit_plan"] is None
     assert result["requires_manual_review"] is True
     assert any("계획 생성 실패" in reason for reason in result["review_reasons"])
+
+
+def test_plan_only_saves_the_plan_and_never_renders_or_spends(monkeypatch, worker_env, tmp_path):
+    texts = ["칠판에서 설명할 문장입니다 금리가 올랐습니다.", "서울 출근길 지하철 장면 문장입니다."]
+    fillers = [f"칠판 설명 문장 {i}번입니다 충분히 깁니다." for i in range(8)]
+    _prepare(monkeypatch, _scenes(*texts, *fillers))
+    _fake_planner(monkeypatch, {
+        texts[1]: {"background": "photo", "photo_brief": "commuters walking out of a subway station"},
+    }, worker_env)
+
+    result = SlidesWorker().generate(job_id=12, tts_meta_json=None, script_meta_json="{}", plan_only=True)
+
+    assert result["status"] == "PLAN_READY"
+    assert result["scenes"] == [] and result["scene_count"] == 0
+    assert result["edit_plan"]["summary"]["photo"] == 1
+    assert result["edit_plan"]["summary"]["gemini_krw_expected"] == GEMINI_IMAGE_EST_KRW
+    assert (tmp_path / "jobs" / "12" / "slides" / "edit_plan.json").is_file()
+    # 계획서만 만든다: 이미지·스톡·진행 파일 모두 건드리지 않는다
+    assert worker_env["gemini"] == [] and worker_env["stock"] == []
+    assert not (tmp_path / "jobs" / "12" / "slides" / "progress.json").exists()
+
+
+def test_plan_only_reports_failure_without_generating_anything(monkeypatch, worker_env):
+    _prepare(monkeypatch, _scenes("실패 문장입니다."))
+    monkeypatch.setattr("app.workers.slides_worker.build_edit_plan", lambda *a, **k: None)
+
+    result = SlidesWorker().generate(job_id=13, tts_meta_json=None, script_meta_json="{}", plan_only=True)
+
+    assert result["status"] == "PLAN_FAILED" and result["requires_manual_review"] is True
+    assert result["edit_plan"] is None
+    assert worker_env["gemini"] == []

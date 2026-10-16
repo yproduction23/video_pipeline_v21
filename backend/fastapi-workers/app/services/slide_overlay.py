@@ -522,9 +522,10 @@ def ensure_board_background(output_path: str, canvas: tuple[int, int] = CANVAS) 
 
         width, height = canvas
         rng = random.Random(20261016)
+        # 2026-10-16 20번 Job 재현: 픽셀 단위 잡음(effect_noise)을 섞은 칠판은 정지 이미지인데도 x264가
+        # 장면 하나당 수 분씩 걸려(3초 클립이 300초 초과) 71장면 생성이 1시간 넘게 걸렸다. 질감은
+        # 흐린 분필 얼룩만으로 내고 고주파 잡음은 넣지 않는다(인코딩 비용이 단색 이미지와 같다).
         board = Image.new("RGB", canvas, (38, 52, 47))
-        noise = Image.effect_noise(canvas, 26).convert("RGB")
-        board = Image.blend(board, noise, 0.07)
 
         # 분필 가루·지운 자국: 크고 흐린 흰 얼룩을 여러 번 겹친다.
         dust = Image.new("L", canvas, 0)

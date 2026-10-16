@@ -42,7 +42,13 @@ public class ImagesController {
         return ResponseEntity.ok(fastApiClient.getSlideProgress(jobId));
     }
 
-    /** 슬라이드형 편집 계획서(씬별 생성 시작 시 만들어져 저장된다). */
+    /** 편집 계획서만 만든다. 이미지·영상은 만들지 않는다(비용 없음). */
+    @PostMapping("/plan")
+    public ResponseEntity<ImagesGenerateResponse> buildEditPlan(@PathVariable Long jobId) {
+        return ResponseEntity.ok(imagesService.buildEditPlan(jobId));
+    }
+
+    /** 슬라이드형 편집 계획서(저장된 것을 읽는다). */
     @GetMapping("/plan")
     public ResponseEntity<Map<String, Object>> editPlan(@PathVariable Long jobId) {
         return ResponseEntity.ok(fastApiClient.getSlideEditPlan(jobId));

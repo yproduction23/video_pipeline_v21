@@ -74,6 +74,27 @@ public class ImagesService {
     }
 
     /**
+     * 2026-10-16 운영자 요청: 씬별 생성 전에 편집 계획서만 먼저 만든다. 이미지·영상은 만들지 않는다.
+     * 슬라이드형 작업에서만 허용하며, TTS가 확정된 이후여야 한다(타임라인이 필요하다).
+     */
+    @Transactional(readOnly = true)
+    public ImagesGenerateResponse buildEditPlan(Long jobId) {
+        VideoJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
+        if (job.getVisualMode() != VisualMode.SLIDE) {
+            throw new IllegalStateException("편집 계획서는 슬라이드형 작업에서만 만들 수 있습니다.");
+        }
+        JobStatus status = job.getStatus();
+        if (status == JobStatus.DRAFT || status == JobStatus.KEYWORD_PENDING
+                || status == JobStatus.SCRIPT_PENDING || status == JobStatus.TTS_PENDING) {
+            throw new IllegalStateException("TTS 확정 전에는 편집 계획서를 만들 수 없습니다. 현재: " + status);
+        }
+        log.info("편집 계획서 생성 시작(이미지 생성 없음): jobId={}", jobId);
+        return fastApiClient.planSlideEdit(
+                jobId, loadAssetMeta(jobId, AssetType.TTS_AUDIO), loadAssetMeta(jobId, AssetType.SCRIPT));
+    }
+
+    /**
      * sceneIndices를 지정하면 검토 필요 목록에서 사용자가 고른 씬만 재시도한다.
      * 비워두면(null) 기존처럼 전체 씬을 처리한다.
      */
@@ -99,6 +120,17 @@ public class ImagesService {
             // 같은 API 재시도로 이미지 게이트부터 안전하게 재개할 수 있다.
             job.setStatus(JobStatus.IMAGES_PENDING);
             jobRepository.save(job);
+        }
+
+        // 슬라이드형: 수동·가이드 모드는 편집 계획서를 확인한 뒤에만 이미지를 만든다(비용이 나가는 단계).
+        // AUTO는 자동화 목적상 워커가 계획서를 만들고 이어서 생성한다. 일부 장면 재생성은 기존 계획서를 쓴다.
+        if (job.getVisualMode() == VisualMode.SLIDE && !autonomyService.isAuto(job)
+                && (sceneIndices == null || sceneIndices.isEmpty())) {
+            Map<String, Object> planResponse = fastApiClient.getSlideEditPlan(jobId);
+            if (planResponse == null || planResponse.get("plan") == null) {
+                throw new IllegalStateException(
+                        "편집 계획서를 먼저 만들어 주세요. 계획서를 확인한 뒤 씬별 생성을 눌러야 이미지 비용이 나갑니다.");
+            }
         }
 
         // TTS chunks 로드

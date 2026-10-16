@@ -42,6 +42,8 @@ export const jobsApi = {
   // sceneIndices를 지정하면 검토 필요 목록에서 고른 씬만 재시도한다.
   generateImages: (id, sceneIndices) =>
     apiClient.post(`/jobs/${id}/images/generate`, sceneIndices?.length ? { sceneIndices } : {}).then(r => r.data),
+  // 슬라이드형: 편집 계획서만 만든다(이미지·영상은 만들지 않아 비용이 나가지 않는다).
+  buildEditPlan: (id) => apiClient.post(`/jobs/${id}/images/plan`, {}).then(r => r.data),
   confirmImages: (id) => apiClient.post(`/jobs/${id}/images/confirm`, {}).then(r => r.data),
   updateSceneImage: (id, index, payload) =>
     apiClient.post(`/jobs/${id}/images/scenes/${index}`, payload).then(r => r.data),

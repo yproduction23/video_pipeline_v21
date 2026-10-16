@@ -26,6 +26,7 @@ export default function SlideProgressPanel({ jobId, running }) {
   const [thumbs, setThumbs] = useState({})
   const [regenerating, setRegenerating] = useState(false)
   const [actionError, setActionError] = useState('')
+  const [planBuilding, setPlanBuilding] = useState(false)
   const [viewer, setViewer] = useState(null) // { index, kind: 'image'|'video', url } | { index, loading: true }
   const requested = useRef(new Set())
   const queryClient = useQueryClient()
@@ -112,7 +113,47 @@ export default function SlideProgressPanel({ jobId, running }) {
     }
   }
 
-  if (!data || data.status === 'none') return null
+  const buildPlan = async () => {
+    if (planBuilding) return
+    setPlanBuilding(true)
+    setActionError('')
+    try {
+      await jobsApi.buildEditPlan(jobId)
+      queryClient.invalidateQueries(['slide-plan', jobId])
+    } catch (e) {
+      setActionError(e.response?.data?.message || e.message || '편집 계획서 생성에 실패했습니다.')
+    } finally {
+      setPlanBuilding(false)
+    }
+  }
+  const planButton = (label) => (
+    <button type="button" disabled={planBuilding || running || data?.status === 'running'}
+      onClick={buildPlan}
+      className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-700 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
+      {planBuilding ? <Loader size={12} className="animate-spin" /> : <CheckCircle size={12} />}
+      {planBuilding ? '계획서 만드는 중 (이미지는 만들지 않아요)' : label}
+    </button>
+  )
+
+  if (!data || data.status === 'none') {
+    return (
+      <div className="mt-3 rounded-xl border border-cyan-200 bg-cyan-50/50 p-4 space-y-3">
+        <p className="text-xs font-semibold text-slate-600">
+          {plan
+            ? '편집 계획서가 준비됐어요. 확인한 뒤 씬별 생성을 눌러 주세요.'
+            : '씬별 생성 전에 편집 계획서를 먼저 만드세요. 계획서만 만들 때는 이미지 비용이 나가지 않아요.'}
+        </p>
+        {plan && <EditPlanSection plan={plan} />}
+      <div className="flex flex-wrap items-center gap-2">
+        {planButton(plan ? '계획서 다시 만들기' : '편집 계획서 만들기')}
+      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {planButton(plan ? '계획서 다시 만들기' : '편집 계획서 만들기')}
+          {actionError && <span className="text-xs font-semibold text-rose-600">{actionError}</span>}
+        </div>
+      </div>
+    )
+  }
   const total = data.total || 0
   const done = data.done || 0
   const percent = total > 0 ? Math.round((done / total) * 100) : 0
