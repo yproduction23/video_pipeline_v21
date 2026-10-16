@@ -6,19 +6,26 @@
 """
 from __future__ import annotations
 
-from PIL import ImageDraw
+import json
+import os
+import subprocess
+import tempfile
+import threading
+from pathlib import Path
+
+from PIL import Image, ImageDraw
 
 ACCENT = (255, 184, 28, 255)
 WHITE = (255, 255, 255, 255)
 DARK = (16, 20, 32, 255)
 DEEP_ACCENT = (214, 140, 10, 255)
 
-ICON_NAMES = (
+_LEGACY_NAMES = (
     "money_stack", "coin", "house", "building", "bank", "chart_up", "chart_down",
     "arrow_up", "arrow_down", "person", "people", "warning", "clock", "document",
 )
 
-ICON_HINTS = {
+_LEGACY_HINTS = {
     "money_stack": "돈뭉치(금액·자산·현금)", "coin": "동전(소액·가격·단위)", "house": "집(주택·부동산)",
     "building": "건물(기업·빌딩)", "bank": "은행(금리·대출·금융기관)", "chart_up": "상승 차트",
     "chart_down": "하락 차트", "arrow_up": "위 화살표(상승)", "arrow_down": "아래 화살표(하락)",
@@ -26,9 +33,63 @@ ICON_HINTS = {
     "clock": "시계(기간·시점)", "document": "문서(보고서·공시·정책)",
 }
 
+# 2026-10-16 운영자 요청: 노란 이모티콘 같은 도형이 아니라 영상 스타일에 맞는 아이콘 세트를 쓴다.
+# assets/icons/*.svg는 한 스타일 계약(흰색 본체 + 앰버 포인트 + 진한 선, 굵고 둥근 평면 도형)으로 그린 세트다.
+# 서버의 ffmpeg(librsvg)로 PNG로 바꿔 캐시하며, 세트에 없는 이름은 아래 Pillow 도형으로 그린다.
+SVG_ICON_DIR = Path(__file__).resolve().parents[2] / "assets" / "icons"
+_CACHE_DIR = Path(tempfile.gettempdir()) / "slide_icon_cache"
+_cache_lock = threading.Lock()
+
+
+def _load_library() -> dict[str, str]:
+    try:
+        rows = json.loads((SVG_ICON_DIR / "library.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {
+        str(row["name"]): str(row.get("hint") or row["name"])
+        for row in rows if (SVG_ICON_DIR / f"{row['name']}.svg").is_file()
+    }
+
+
+_LIBRARY = _load_library()
+ICON_NAMES = tuple(dict.fromkeys([*_LIBRARY, *_LEGACY_NAMES]))
+ICON_HINTS = {**_LEGACY_HINTS, **_LIBRARY}
+
+
+def icon_image(name: str, size: int) -> Image.Image | None:
+    """세트 아이콘을 size x size RGBA 이미지로 돌려준다(없으면 None). 같은 크기는 한 번만 변환한다."""
+    if name not in _LIBRARY:
+        return None
+    path = _CACHE_DIR / f"{name}_{size}.png"
+    if not path.is_file():
+        with _cache_lock:
+            if not path.is_file():
+                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                temp = path.with_suffix(".tmp.png")
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(SVG_ICON_DIR / f"{name}.svg"),
+                     "-vf", f"scale={size}:{size}:flags=lanczos", "-pix_fmt", "rgba", "-frames:v", "1",
+                     str(temp), "-loglevel", "error"],
+                    capture_output=True, timeout=60,
+                )
+                if result.returncode != 0 or not temp.is_file():
+                    return None
+                os.replace(temp, path)
+    try:
+        return Image.open(path).convert("RGBA")
+    except OSError:
+        return None
+
 
 def draw_icon(draw: ImageDraw.ImageDraw, name: str, cx: int, cy: int, size: int) -> bool:
-    """중심 (cx, cy), 한 변 size인 정사각 영역 안에 아이콘을 그린다."""
+    """중심 (cx, cy), 한 변 size인 정사각 영역 안에 아이콘을 그린다(세트 우선, 없으면 기본 도형)."""
+    target = getattr(draw, "_image", None)
+    if target is not None and target.mode == "RGBA":
+        image = icon_image(name, size)
+        if image is not None:
+            target.alpha_composite(image, (int(cx - size / 2), int(cy - size / 2)))
+            return True
     painter = _PAINTERS.get(name)
     if painter is None:
         return False

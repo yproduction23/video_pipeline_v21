@@ -219,7 +219,7 @@ def test_equation_requires_grounded_terms_and_correct_arithmetic():
 
 def test_unknown_icon_is_dropped_but_the_overlay_stays():
     plan = validate_overlay_plan(
-        [{"index": 3, "type": "key_text", "text": "4조 5천억 원을 던졌습니다", "icon": "rocket"}], BRIEFS,
+        [{"index": 3, "type": "key_text", "text": "4조 5천억 원을 던졌습니다", "icon": "unicorn"}], BRIEFS,
     )
     assert plan[3]["icon"] is None
 
@@ -270,7 +270,7 @@ def test_compare_numbers_needs_grounded_rows_and_headline():
 
 def test_flow_needs_two_grounded_labels_and_drops_unknown_icons():
     ok = validate_overlay_plan(
-        [{"index": 1, "type": "flow", "nodes": [{"label": "자산", "icon": "building"}, {"label": "현금", "icon": "rocket"}]}],
+        [{"index": 1, "type": "flow", "nodes": [{"label": "자산", "icon": "building"}, {"label": "현금", "icon": "unicorn"}]}],
         {1: {"narration": REF_NARRATION}},
     )
     assert [n["icon"] for n in ok[1]["nodes"]] == ["building", None]

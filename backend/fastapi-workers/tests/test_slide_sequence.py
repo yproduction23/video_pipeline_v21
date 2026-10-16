@@ -169,3 +169,35 @@ def test_render_sequence_clip_writes_an_mp4_for_just_the_scene_slice(tmp_path):
     ok = render_sequence_clip(seq, 4.0, 4.6, str(board), str(out))
 
     assert ok and out.is_file() and out.stat().st_size > 1000
+
+
+def test_long_number_labels_are_shortened_at_a_word_boundary_not_mid_word():
+    plan = _plan()
+    run = board_runs(plan)[0]
+    design = {"elements": [{
+        "id": "e1", "kind": "number", "scene": 0, "anchor": "상위 11.8퍼센트", "slot": "right", "anim": "count",
+        "content": {"value": "11.8퍼센트", "label": "순자산 상위 비중입니다"},
+    }]}
+
+    seq = design_sequence(run, plan, llm_call=_llm(design))
+
+    assert seq["elements"][0]["content"]["label"] in ("", "순자산 상위")  # 중간에서 잘린 "순자산 상위 비"가 아니다
+
+
+def test_design_stays_simple_at_most_three_elements_visible_and_two_seconds_on_screen():
+    plan = _plan()
+    run = board_runs(plan)[0]
+    design = {"elements": [
+        {"id": f"e{k}", "kind": "icon", "scene": 0, "anchor": "", "slot": slot, "anim": "rise",
+         "content": {"name": "person"}}
+        for k, slot in enumerate(["left", "right", "top", "bottom", "upper_left"])
+    ]}
+
+    seq = design_sequence(run, plan, llm_call=_llm(design))
+
+    for element in seq["elements"]:
+        alive = [e for e in seq["elements"] if e["at"] <= element["at"] + 1e-6 < e["until"]]
+        assert len(alive) <= 3
+    for earlier, later in zip(seq["elements"], seq["elements"][1:]):
+        if earlier["until"] <= later["at"] + 1e-6 and earlier["slot"] == later["slot"]:
+            assert later["at"] - earlier["at"] >= 2.0 - 1e-6  # 교체는 최소 2초 뒤

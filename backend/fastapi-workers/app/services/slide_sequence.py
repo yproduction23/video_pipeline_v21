@@ -41,7 +41,7 @@ SLOTS = {
     "lower_left": (520, 740), "lower_right": (1400, 740),
 }
 KINDS = {"text", "number", "icon", "arrow", "bars", "list", "rows", "flow"}
-ANIMS = {"rise", "pop", "draw", "count", "grow"}
+ANIMS = {"rise", "draw", "count", "grow"}  # 튀어나옴(pop)은 산만해 쓰지 않는다
 # 한 요소가 나타나는 데 걸리는 시간(초)
 ENTER_SECONDS = {"text": 0.45, "number": 0.9, "icon": 0.4, "arrow": 0.7, "bars": 0.9, "row": 0.5, "node": 0.45,
                  "item": 0.4, "title": 0.4}
@@ -52,7 +52,10 @@ SIDE_SLOT_MAX_WIDTH = 820
 WIDE_SLOT_MAX_WIDTH = 1500
 _SIDE_SLOTS = {"left", "right", "upper_left", "upper_right", "lower_left", "lower_right"}
 OPENING_LATEST_SECONDS = 0.3
-MAX_ELEMENTS_PER_SEQUENCE = 12
+# 2026-10-16 운영자 요청: 구조와 애니메이션 순서는 복잡하지 않고 단순하며 보기 편해야 한다.
+MAX_ELEMENTS_PER_SEQUENCE = 7        # 구간 전체 요소 상한(장면 수에 따라 더 줄어든다)
+MAX_SIMULTANEOUS = 3                 # 한 번에 화면에 남는 요소 수
+MIN_ON_SCREEN_SECONDS = 2.0          # 한 요소가 최소한 화면에 머무는 시간(깜빡임 방지)
 
 _KIND_TO_OVERLAY = {
     "text": "key_text", "number": "big_number", "bars": "stat_chart", "list": "bullet_list",
@@ -80,7 +83,7 @@ _SEQUENCE_SYSTEM = (
     "아이콘 이름: " + ", ".join(f"{name}({ICON_HINTS[name]})" for name in ICON_NAMES) + "\n\n"
     "각 요소 필드: id(e1, e2…), kind, scene(구간에 포함된 장면 번호), anchor(그 장면 내레이션에 글자 그대로 있는 구절 — "
     "이 말을 하는 순간에 요소가 나타난다), slot(center|top|bottom|left|right|upper_left|upper_right|lower_left|lower_right), "
-    "anim(rise|pop|draw|count|grow — number는 count, arrow는 draw, bars는 grow를 우선), content.\n"
+    "anim(rise|draw|count|grow — number는 count, arrow는 draw, bars는 grow, 나머지는 rise), content.\n"
     "규칙:\n"
     "- 구간의 장면마다 최소 한 번은 새 요소가 등장해 화면이 계속 움직여야 한다. 구간 전체 요소는 3~10개.\n"
     "- 같은 자리(slot)에 새 요소가 나타나면 앞 요소는 사라진다(교체). 다른 자리의 요소는 그대로 남는다(누적).\n"
@@ -153,6 +156,12 @@ def _validate_content(kind: str, content: dict, scene_index: int, scenes: dict[i
     ordered = sorted(scenes)
     position = ordered.index(scene_index)
     context = " ".join(scenes[i]["narration"] for i in ordered[max(0, position - 2):position])
+    if kind == "number" and content.get("label"):
+        # 소제목은 8자 이내: 단어 중간에서 잘리지 않게 단어 경계에서 줄이고, 못 줄이면 뺀다.
+        label = str(content["label"]).strip()
+        if len(label) > 8:
+            label = label[:9].rsplit(" ", 1)[0] if " " in label[:9] else ""
+        content = {**content, "label": label}
     raw = {**content, "type": overlay_type, "index": scene_index}
     if kind == "text":
         raw = {"type": "key_text", "index": scene_index, "text": content.get("text")}
@@ -183,8 +192,9 @@ def _normalize_elements(raw_elements: list, run: list[dict], plan: dict) -> list
     seq_start = starts[run[0]["index"]]
     elements: list[dict] = []
     used_text: set[str] = set()
+    limit = min(MAX_ELEMENTS_PER_SEQUENCE, 2 * len(run) + 1)
     for position, raw in enumerate(raw_elements or []):
-        if not isinstance(raw, dict) or len(elements) >= MAX_ELEMENTS_PER_SEQUENCE:
+        if not isinstance(raw, dict) or len(elements) >= limit:
             continue
         kind = str(raw.get("kind") or "").strip()
         try:
@@ -254,7 +264,15 @@ def _conflicts(slot_a: str, slot_b: str) -> bool:
 
 
 def resolve_lifetimes(elements: list[dict], duration: float) -> None:
-    """요소가 사라지는 시각(until)을 정한다: 같은 자리를 차지하는 새 요소가 나타나는 순간 앞 요소는 교체된다."""
+    """요소가 사라지는 시각(until)을 정한다. 단순하고 보기 편한 흐름이 목표다:
+    - 같은 자리를 차지하는 새 요소가 나타나면 앞 요소는 교체된다(center는 모든 자리와 겹친다).
+    - 앞 요소가 화면에 최소 MIN_ON_SCREEN_SECONDS 머문 뒤에 교체되도록 새 요소의 등장을 늦춘다.
+    - 한 번에 MAX_SIMULTANEOUS개를 넘으면 가장 오래된 요소부터 사라진다."""
+    for index, element in enumerate(elements):
+        for earlier in elements[:index]:
+            if _conflicts(earlier["slot"], element["slot"]) and 0 <= element["at"] - earlier["at"] < MIN_ON_SCREEN_SECONDS:
+                element["at"] = round(min(earlier["at"] + MIN_ON_SCREEN_SECONDS, max(duration - 0.8, earlier["at"])), 2)
+    elements.sort(key=lambda e: e["at"])
     for index, element in enumerate(elements):
         until = duration
         for later in elements[index + 1:]:
@@ -262,6 +280,13 @@ def resolve_lifetimes(elements: list[dict], duration: float) -> None:
                 until = later["at"]
                 break
         element["until"] = round(min(max(until, element["at"] + 0.6), duration), 2)
+    # 동시에 보이는 요소 수 제한: 새 요소가 나타나는 순간 살아 있는 요소가 한도를 넘으면 가장 오래된 것을 끝낸다.
+    for element in elements:
+        alive = [e for e in elements if e["at"] < element["at"] + 1e-6 and e["until"] > element["at"] + 1e-6]
+        while len(alive) > MAX_SIMULTANEOUS:
+            oldest = min(alive, key=lambda e: e["at"])
+            oldest["until"] = round(max(element["at"], oldest["at"] + 0.6), 2)
+            alive.remove(oldest)
 
 
 def sequence_signature(run: list[dict]) -> str:
@@ -404,7 +429,7 @@ def _number_sprite(value: str, label: str, p: float, max_width: int = WIDE_SLOT_
     return sprite
 
 
-def _icon_sprite(name: str, size: int = 340) -> Image.Image:
+def _icon_sprite(name: str, size: int = 400) -> Image.Image:
     sprite = Image.new("RGBA", (size + 40, size + 40), (0, 0, 0, 0))
     draw_icon(ImageDraw.Draw(sprite), name, (size + 40) // 2, (size + 40) // 2, size)
     return sprite
