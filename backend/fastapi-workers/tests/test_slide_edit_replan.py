@@ -190,7 +190,7 @@ def _stock_plan(overlay_pattern, duration=4.0):
     for i, has_overlay in enumerate(overlay_pattern):
         entry = {"index": i, "background": "stock", "stock_queries": ["office", "city"]}
         if has_overlay:
-            entry["overlay"] = {"type": "key_text", "text": f"{i}번 장면의 주장 문장입니다"}
+            entry["overlay"] = {"type": "key_text", "text": f"{i}번 장면의 주장"}
         entries.append(entry)
     return assemble_plan(briefs, entries, job_id=1)
 

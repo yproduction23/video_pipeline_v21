@@ -97,7 +97,10 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
     if not entries:
         return None
 
-    raw_overlays = [{**e["overlay"], "index": i} for i, e in entries.items() if isinstance(e.get("overlay"), dict)]
+    raw_overlays = [
+        {**e["overlay"], "index": i, "on_footage": str(e.get("background") or "").strip().lower() in {"stock", "photo"}}
+        for i, e in entries.items() if isinstance(e.get("overlay"), dict)
+    ]
     validated = validate_overlay_plan(raw_overlays, {i: briefs[i] for i in entries})
     # 내레이션을 바꿔 쓴 문구는 검증에서 거절된다(2026-10-16 재현: 스톡 위 후편집 13장면이 전부 거절돼 보정이 효과가 없었다).
     # 거절된 장면만 이유를 알려 주고 한 번 더 요청한다. 그래도 안 맞으면 후편집 없이 둔다(조용히 만들어 내지 않는다).
@@ -108,7 +111,8 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
             f"{json.dumps(entries[i]['overlay'], ensure_ascii=False)}" for i in rejected
         ]
         retry_prompt = (
-            prompt + NL + NL + "위 답변에서 아래 장면의 후편집이 내레이션과 글자 그대로 일치하지 않아 거절됐다. 내레이션에서 연속된 "
+            prompt + NL + NL + "위 답변에서 아래 장면의 후편집이 내레이션과 글자 그대로 일치하지 않거나 길이 기준(스톡·사진 위 key_text는 14자 이내 "
+            "핵심어)을 넘어 거절됐다. 내레이션에서 연속된 "
             "구절을 한 글자도 바꾸지 말고(조사·어순·표기 그대로, 요약·바꿔쓰기 금지, 숫자는 내레이션 표기 그대로) 복사해 같은 "
             "형식으로 이 장면들만 다시 JSON으로 반환:" + NL + NL.join(retry_lines)
         )
@@ -120,7 +124,9 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
             again = {int(e["index"]): e for e in (data_retry.get("scenes") or [])
                      if isinstance(e, dict) and "index" in e and int(e["index"]) in rejected}
             fixed = validate_overlay_plan(
-                [{**e["overlay"], "index": i} for i, e in again.items() if isinstance(e.get("overlay"), dict)],
+                [{**e["overlay"], "index": i,
+                  "on_footage": str(entries[i].get("background") or "").strip().lower() in {"stock", "photo"}}
+                 for i, e in again.items() if isinstance(e.get("overlay"), dict)],
                 {i: briefs[i] for i in again},
             )
             for i, overlay in fixed.items():

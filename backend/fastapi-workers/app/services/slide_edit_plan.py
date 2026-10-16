@@ -78,7 +78,8 @@ _SYSTEM_PROMPT = (
     "- board 장면은 반드시 overlay를 가진다. stock 장면도 문장의 숫자·핵심 주장·목록·비교를 overlay로 얹는다(스톡 장면의 "
     "60~75%). 모든 스톡 장면에 붙이지는 않는다. 후편집 없이 영상과 자막만 나오는 스톡이 연속 3장면(약 12초)을 넘지 않게 한다. 기사 증거([article: …])가 "
     "붙은 장면은 article_card를 우선 쓴다.\n"
-    "- key_text는 자막 문장을 그대로 되풀이하지 말고 핵심어(2~3단어, 16자 이내)만 뽑는다.\n"
+    "- key_text는 자막 문장을 그대로 되풀이하지 말고 핵심어만 뽑는다: 스톡·사진 위는 14자 이내(예: \"주가가 급락\"), "
+    "회색 배경 위는 28자 이내.\n"
     "- 후편집이 붙는 장면은 전체의 약 55~60%다(모든 장면에 붙이지 않는다). 연속 3장면 이상 같은 종류의 overlay를 "
     "반복하지 않는다. 종류 비중은 강조 문구(key_text) 약 40%, 목록(bullet_list) 25%, 막대(stat_chart)·"
     "수치 비교 15%, 큰 숫자(big_number) 10%, 흐름도(flow)·계산식 10% 정도.\n\n"
@@ -185,7 +186,8 @@ def assemble_plan(
     for index, entry in by_index.items():
         overlay = entry.get("overlay")
         if isinstance(overlay, dict) and index in briefs:
-            raw_overlays.append({**overlay, "index": index})
+            on_footage = str(entry.get("background") or "").strip().lower() in {"stock", "photo"}
+            raw_overlays.append({**overlay, "index": index, "on_footage": on_footage})
     validated = validate_overlay_plan(raw_overlays, briefs)
 
     # 2) 배경 결정 + 보정

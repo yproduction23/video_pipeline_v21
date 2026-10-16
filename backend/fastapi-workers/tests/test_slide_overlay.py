@@ -363,3 +363,14 @@ def test_compose_retries_once_when_ffmpeg_times_out_under_load(monkeypatch, tmp_
 
     assert ok is True and len(calls) == 2
     assert "-threads" in calls[0] and "-nostdin" in calls[0]
+
+
+def test_key_text_over_footage_must_be_a_short_keyword_not_a_whole_clause():
+    """2026-10-16 20번 Job 완성 영상: 스톡 위 문구가 자막과 같은 절("코어위브의 주가가 급락했습니다")을 그대로 되풀이했다.
+    영상 위 강조 문구는 14자 이내 핵심어만 허용하고, 칠판 위(explain) 문구는 기존처럼 28자까지 허용한다."""
+    briefs = {0: {"narration": "기업 코어위브의 주가가 급락했습니다."}}
+    long_text = "코어위브의 주가가 급락했습니다"  # 15자
+
+    assert 0 not in validate_overlay_plan([{"index": 0, "type": "key_text", "text": long_text, "on_footage": True}], briefs)
+    assert 0 in validate_overlay_plan([{"index": 0, "type": "key_text", "text": "주가가 급락", "on_footage": True}], briefs)
+    assert 0 in validate_overlay_plan([{"index": 0, "type": "key_text", "text": long_text}], briefs)

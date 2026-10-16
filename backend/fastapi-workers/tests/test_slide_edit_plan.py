@@ -345,3 +345,17 @@ def test_plan_is_reused_even_when_article_evidence_availability_changes(tmp_path
 
     assert plan_input_hash(with_article) == plan_input_hash(without_article)
     assert plan_matches(plan, without_article) is True
+
+
+def test_plan_marks_overlays_on_stock_as_on_footage_so_clause_length_text_is_dropped():
+    briefs = _briefs("기업 코어위브의 주가가 급락했습니다.", "기업 코어위브의 주가가 급락했습니다.")
+    entries = [
+        {"index": 0, "background": "stock", "stock_queries": ["office", "city"],
+         "overlay": {"type": "key_text", "text": "코어위브의 주가가 급락했습니다"}},
+        {"index": 1, "background": "board", "overlay": {"type": "key_text", "text": "코어위브의 주가가 급락했습니다"}},
+    ]
+
+    plan = assemble_plan(briefs, entries, job_id=1)
+
+    assert plan["scenes"][0]["overlay"] is None
+    assert plan["scenes"][1]["overlay"]["text"] == "코어위브의 주가가 급락했습니다"

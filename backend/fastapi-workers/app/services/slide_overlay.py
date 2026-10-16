@@ -152,6 +152,9 @@ def _validate_equation(entry: dict, narration: str) -> dict | None:
     return {"label": label, "left": left, "ops": ops, "result": result}
 
 
+KEY_TEXT_ON_FOOTAGE_MAX = 14
+
+
 def spell_like_narration(value, narration: str):
     """내레이션이 "5.3퍼센트"라고 적었는데 Claude가 "5.3%"로 옮긴 경우의 표기만 내레이션에 맞춘다(값은 바꾸지 않는다)."""
     if "퍼센트" not in narration or "%" in narration:
@@ -194,7 +197,8 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
 
         if kind == "key_text":
             text = str(entry.get("text") or "").strip()
-            if 4 <= len(text) <= 28 and _in_narration(text, narration):
+            # 영상 위 문구는 자막을 되풀이하지 않도록 14자 이내 핵심어만(2026-10-16), 칠판 위 문구는 28자까지.
+            if 4 <= len(text) <= (KEY_TEXT_ON_FOOTAGE_MAX if entry.get("on_footage") else 28)                     and _in_narration(text, narration):
                 plan[index] = {"type": "key_text", "text": text, "icon": icon, "explain": explain}
         elif kind == "bullet_list":
             title = str(entry.get("title") or "").strip()[:18]
