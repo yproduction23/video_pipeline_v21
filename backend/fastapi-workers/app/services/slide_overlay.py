@@ -32,13 +32,21 @@ _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 # 고지 문구는 내레이션이 아니라 화면 배너로만 보여준다(운영자 결정 2026-10-15).
 DISCLAIMER_BANNER_TEXT = "투자의 최종 판단은 본인에게 있습니다  ·  본 영상은 교육 목적의 콘텐츠입니다"
 DISCLAIMER_SECONDS = 8.0
+# 오버레이가 아래에서 올라오는 거리(px)와 시간(초).
+OVERLAY_RISE_PX = 44
+OVERLAY_RISE_SECONDS = 0.5
 
 _PLAN_SYSTEM_PROMPT = (
-    "너는 한국 경제 뉴스 유튜브의 편집 디렉터다. 번호가 붙은 승인 내레이션 목록(각 장면의 "
-    "배경은 이미 스톡 영상이나 이미지로 깔려 있다)을 읽고, 그 위에 얹을 오버레이를 장면 맥락에 "
-    "맞게 계획한다. 정해진 개수나 간격은 없다 — 시청자가 이해하는 데 실제로 도움이 되는 "
-    "장면에만 넣고, 배경이 그대로 보여야 좋은 장면은 비워둔다. 같은 종류가 연달아 쌓이거나 "
-    "화면이 글자로 가득 차지 않게 흐름 전체의 리듬을 본다.\n\n"
+    "너는 한국 경제 뉴스 유튜브의 편집 디렉터다. 번호가 붙은 승인 내레이션 목록을 읽고, 각 장면 위에 얹을 "
+    "후편집(강조 텍스트·인포그래픽)을 계획한다. 이 채널의 레퍼런스 영상은 거의 모든 문장에 짧은 텍스트나 "
+    "그림이 함께 뜨고, 설명 중심 장면은 배경 영상 없이 어두운 칠판 위에 텍스트·아이콘·도식이 가볍게 "
+    "나타난다. 정해진 개수는 없지만 시청자가 지루하지 않게 리듬을 만든다:\n"
+    "- 주장·원인·수치·핵심 용어가 있는 장면에는 대부분 key_text(핵심 구절) 이상을 붙인다. 아이콘 이름과 "
+    "의미가 맞으면 icon도 붙인다(예: 금액→money_stack, 금리→bank, 하락→chart_down).\n"
+    "- 연속 3장면 이상 아무 보조 없이 비워 두지 않는다. 같은 종류가 4번 이상 연달아 쌓이지 않게 섞는다.\n"
+    "- 구체적으로 촬영할 수 있는 피사체가 없는 추상적 문장(구조·원인·전망·질문·정리)은 실사 배경이 오히려 "
+    "어색하다. 그런 장면은 explain:true로 두고 key_text(+아이콘)나 도식으로 칠판 위에서 보여준다.\n"
+    "- 실제 장소·사람·사물이 문장의 중심이면 배경 영상을 살리고 key_text를 가볍게 얹는다.\n\n"
     "오버레이 종류(type):\n"
     '- "key_text": 그 구간의 핵심 주장·핵심 수치를 큼직하게 강조. {"text": 내레이션에 글자 그대로 있는 '
     "4~28자 구절}\n"
@@ -155,6 +163,8 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
         if not brief or index in plan:
             continue
         narration = str(brief.get("narration") or "")
+        # 수치·계산 오버레이는 직전 두 장면에서 이미 말한 수치도 근거로 허용한다(원문 글자 일치는 그대로 요구).
+        numeric_ground = f"{brief.get('context') or ''} {narration}".strip()
         kind = str(entry.get("type") or "").strip()
         if kind in _DIAGRAM_KINDS and entry.get("explain") is None:
             # 화면을 인포그래픽이 덮는 종류는 배경을 새로 만들 이유가 없다(명시적 false만 예외).
@@ -183,9 +193,9 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
                 label = str(item.get("label") or "").strip()
                 value_text = str(item.get("value_text") or "").strip()
                 parsed = _parse_value(value_text)
-                if label and parsed and _in_narration(value_text, narration):
+                if label and parsed and _in_narration(value_text, numeric_ground):
                     items.append({"label": label, "value_text": value_text, "value": parsed[0], "unit": parsed[1]})
-            if len(items) >= 2 and _title_is_grounded(title, narration):
+            if len(items) >= 2 and _title_is_grounded(title, numeric_ground):
                 plan[index] = {"type": "stat_chart", "title": title, "items": items, "explain": explain}
             elif brief.get("has_numeric_series"):
                 plan[index] = {"type": "stat_chart", "title": title, "items": [], "use_article_series": True,
@@ -193,8 +203,8 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
         elif kind == "big_number":
             value = str(entry.get("value") or "").strip()
             label = str(entry.get("label") or "").strip()[:8]
-            if 1 <= len(value) <= 16 and _in_narration(value, narration) and re.search(r"\d", value):
-                if not label or _title_is_grounded(label, narration):
+            if 1 <= len(value) <= 16 and _in_narration(value, numeric_ground) and re.search(r"\d", value):
+                if not label or _title_is_grounded(label, numeric_ground):
                     plan[index] = {"type": "big_number", "value": value, "label": label,
                                    "icon": icon, "explain": explain}
         elif kind == "compare_numbers":
@@ -204,10 +214,10 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
                 if not isinstance(row, dict):
                     continue
                 label, value = str(row.get("label") or "").strip()[:6], str(row.get("value") or "").strip()
-                if label and value and _title_is_grounded(label, narration) and _in_narration(value, narration) \
-                        and re.search(r"\d", value):
+                if label and value and _title_is_grounded(label, numeric_ground) \
+                        and _in_narration(value, numeric_ground) and re.search(r"\d", value):
                     rows.append({"label": label, "value": value})
-            if 1 <= len(headline) <= 12 and _in_narration(headline, narration) and len(rows) >= 2:
+            if 1 <= len(headline) <= 12 and _in_narration(headline, numeric_ground) and len(rows) >= 2:
                 plan[index] = {"type": "compare_numbers", "headline": headline, "rows": rows,
                                "icon": icon, "explain": explain}
         elif kind == "flow":
@@ -222,7 +232,7 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
             if len(nodes) >= 2:
                 plan[index] = {"type": "flow", "nodes": nodes, "explain": explain}
         elif kind == "equation":
-            equation = _validate_equation(entry, narration)
+            equation = _validate_equation(entry, numeric_ground)
             if equation:
                 plan[index] = {"type": "equation", **equation, "icon": icon, "explain": explain}
         elif kind == "article_card" and brief.get("has_article"):
@@ -406,9 +416,12 @@ def render_key_text_overlay(
         for line in lines:
             tw = draw.textlength(line, font=font)
             x = (width - tw) / 2
-            # 노란 형광펜 띠 + 흰 글자
-            draw.rectangle((x - 24, y + 30, x + tw + 24, y + line_h - 6), fill=(ACCENT[0], ACCENT[1], ACCENT[2], 235))
-            draw.text((x, y), line, font=font, fill=(16, 20, 32, 255))
+            # 2026-10-16 운영자 피드백("칠판 위에 텍스트만 가볍게"): 어두운 글자가 노란 띠 밖으로 삐져나와
+            # 읽히지 않던 형광펜 띠를 없애고, 흰 분필 글자 + 얇은 강조색 밑줄로 바꾼다.
+            left, top, right, bottom = draw.textbbox((x, y), line, font=font)
+            draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 150))
+            draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
+            draw.rectangle((left, bottom + 12, right, bottom + 20), fill=ACCENT)
             y += line_h
         return _save(overlay, output_path)
     except Exception:
@@ -497,19 +510,44 @@ def render_equation_overlay(
 
 
 def ensure_board_background(output_path: str, canvas: tuple[int, int] = CANVAS) -> bool:
-    """설명 장면용 어두운 칠판 배경(결정론적 Pillow 렌더, 외부 호출 없음). 이미 있으면 재사용."""
+    """설명 장면용 칠판 배경(결정론적 Pillow 렌더, 외부 호출 없음). 이미 있으면 재사용.
+
+    2026-10-16 운영자 피드백: 거의 검은 단색이라 "칠판"으로 안 보였다. 짙은 녹회색 슬레이트에 분필
+    가루 얼룩·지운 자국·가장자리 그림자를 얹어 칠판 질감을 낸다(글자는 오버레이가 따로 그린다)."""
     path = Path(output_path)
     if path.is_file() and path.stat().st_size > 2_000:
         return True
     try:
+        import random
+
         width, height = canvas
-        base = Image.new("RGB", canvas, (30, 32, 36))
-        noise = Image.effect_noise(canvas, 18).convert("RGB")
-        board = Image.blend(base, noise, 0.10)
+        rng = random.Random(20261016)
+        board = Image.new("RGB", canvas, (38, 52, 47))
+        noise = Image.effect_noise(canvas, 26).convert("RGB")
+        board = Image.blend(board, noise, 0.07)
+
+        # 분필 가루·지운 자국: 크고 흐린 흰 얼룩을 여러 번 겹친다.
+        dust = Image.new("L", canvas, 0)
+        draw = ImageDraw.Draw(dust)
+        for _ in range(26):
+            cx, cy = rng.randint(-100, width + 100), rng.randint(-60, height + 60)
+            rx, ry = rng.randint(180, 520), rng.randint(40, 170)
+            draw.ellipse((cx - rx, cy - ry, cx + rx, cy + ry), fill=rng.randint(10, 26))
+        for _ in range(7):  # 지우개로 쓸어 낸 넓은 호
+            x0, y0 = rng.randint(0, width), rng.randint(0, height)
+            draw.arc((x0 - 420, y0 - 180, x0 + 420, y0 + 180), rng.randint(0, 180), rng.randint(200, 360),
+                     fill=rng.randint(18, 34), width=rng.randint(34, 70))
+        dust = dust.filter(ImageFilter.GaussianBlur(46))
+        chalk = Image.new("RGB", canvas, (205, 214, 208))
+        board = Image.composite(chalk, board, dust.point(lambda v: min(255, int(v * 1.6))))
+
+        # 가장자리 어둡게(조명 비네팅) + 아래쪽 분필 받침 그림자
         vignette = Image.new("L", canvas, 0)
-        ImageDraw.Draw(vignette).ellipse((-width * 0.25, -height * 0.35, width * 1.25, height * 1.35), fill=255)
-        vignette = vignette.filter(ImageFilter.GaussianBlur(160))
-        board = Image.composite(board, Image.new("RGB", canvas, (10, 11, 14)), vignette)
+        ImageDraw.Draw(vignette).ellipse((-width * 0.20, -height * 0.30, width * 1.20, height * 1.30), fill=255)
+        vignette = vignette.filter(ImageFilter.GaussianBlur(170))
+        board = Image.composite(board, Image.new("RGB", canvas, (16, 24, 21)), vignette)
+        ImageDraw.Draw(board).rectangle((0, height - 26, width, height), fill=(24, 18, 14))
+
         path.parent.mkdir(parents=True, exist_ok=True)
         board.save(path)
         return path.stat().st_size > 2_000
@@ -697,7 +735,8 @@ def render_disclaimer_banner(*, output_path: str, text: str = DISCLAIMER_BANNER_
 def compose_animated_overlay(
     *, base_path: str, overlay_path: str, output_path: str, duration: float,
     base_is_video: bool, start_offset: float = 0.35, hold_seconds: float | None = None,
-    canvas: tuple[int, int] = CANVAS,
+    fade_in_seconds: float = 0.35, fade_out_seconds: float = 0.3, hold_to_end: bool = False,
+    motion: str = "rise", canvas: tuple[int, int] = CANVAS,
 ) -> bool:
     """배경(영상 또는 정지 이미지) 위에 오버레이를 "시간에 맞춰" 얹은 mp4를 만든다.
 
@@ -707,9 +746,25 @@ def compose_animated_overlay(
     width, height = canvas
     duration = max(float(duration), 0.8)
     start = min(max(start_offset, 0.0), max(duration - 0.6, 0.0))
-    end = duration - 0.3 if hold_seconds is None else min(duration - 0.3, start + hold_seconds)
+    if hold_to_end:
+        end = duration
+    else:
+        end = duration - 0.3 if hold_seconds is None else min(duration - 0.3, start + hold_seconds)
     end = max(end, start + 0.5)
-    fade_in, fade_out = 0.35, 0.3
+    fade_in, fade_out = max(fade_in_seconds, 0.0), max(fade_out_seconds, 0.0)
+    fades = ""
+    if fade_in > 0:
+        fades += f",fade=t=in:st={start:.3f}:d={fade_in}:alpha=1"
+    if fade_out > 0:
+        fades += f",fade=t=out:st={max(end - fade_out, start):.3f}:d={fade_out}:alpha=1"
+    # 아래에서 제자리로 올라오며 나타나는 모션(상승 화살표·숫자 강조에 어울림). 배너는 제자리 유지.
+    if motion == "rise":
+        place = (
+            f"0:'{OVERLAY_RISE_PX}*pow(1-min(max((t-{start:.3f})/{OVERLAY_RISE_SECONDS},0),1),2)'"
+            ":eval=frame:format=auto"
+        )
+    else:
+        place = "0:0:format=auto"
     if base_is_video:
         base_input = ["-stream_loop", "-1", "-i", base_path]
     else:
@@ -719,10 +774,8 @@ def compose_animated_overlay(
         "-filter_complex",
         f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},"
         f"setsar=1,fps=30[b];"
-        f"[1:v]scale={width}:{height},format=rgba,"
-        f"fade=t=in:st={start:.3f}:d={fade_in}:alpha=1,"
-        f"fade=t=out:st={max(end - fade_out, start):.3f}:d={fade_out}:alpha=1[o];"
-        f"[b][o]overlay=0:0:format=auto",
+        f"[1:v]scale={width}:{height},format=rgba{fades}[o];"
+        f"[b][o]overlay={place}",
         "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-preset", "fast",
         "-pix_fmt", "yuv420p", output_path, "-loglevel", "error",
     ]

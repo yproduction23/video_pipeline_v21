@@ -42,12 +42,17 @@ export default function SlideProgressPanel({ jobId, running }) {
   const scenes = data?.scenes || []
   useEffect(() => {
     scenes.forEach((scene) => {
-      if (!scene.has_thumb || requested.current.has(scene.index)) return
-      requested.current.add(scene.index)
+      // 같은 번호 장면을 다시 생성하면 파일 경로·상태가 바뀐다 — 번호만으로 캐시하면 이전 썸네일이 남는다.
+      const key = `${scene.index}:${scene.status}:${scene.image_path || ''}`
+      if (!scene.has_thumb || requested.current.has(key)) return
+      requested.current.add(key)
       apiClient
         .get(`/jobs/${jobId}/images/progress/thumb/${scene.index}`, { responseType: 'blob' })
-        .then(res => setThumbs(prev => ({ ...prev, [scene.index]: URL.createObjectURL(res.data) })))
-        .catch(() => requested.current.delete(scene.index))
+        .then(res => setThumbs(prev => {
+          if (prev[scene.index]) URL.revokeObjectURL(prev[scene.index])
+          return { ...prev, [scene.index]: URL.createObjectURL(res.data) }
+        }))
+        .catch(() => requested.current.delete(key))
     })
   }, [scenes, jobId])
 

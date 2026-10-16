@@ -482,4 +482,57 @@ class ImagesServiceAutoGateTest {
 
         verify(assetRepository, times(2)).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE));
     }
+
+    /**
+     * 2026-10-16 20번 Job: 실패했던 71번 장면(경로 없음)을 다시 생성하자 같은 번호의 자산이 둘로 남았다.
+     */
+    @Test
+    void persistGenerateResult_regeneratedSceneReplacesTheStalePlaceholderOfTheSameIndex() {
+        VideoJob job = new VideoJob();
+        job.setId(20L);
+        Asset stale = Asset.builder().jobId(20L).assetType(AssetType.SCENE_IMAGE).localPath(null)
+                .metaJson("{\"index\":70,\"image_path\":null}").build();
+        Asset other = Asset.builder().jobId(20L).assetType(AssetType.SCENE_IMAGE)
+                .localPath("/app/data/jobs/20/slides/scene_069_composed_frame.png")
+                .metaJson("{\"index\":69}").build();
+        SceneImageDto regenerated = new SceneImageDto();
+        regenerated.setIndex(70);
+        regenerated.setImagePath("/app/data/jobs/20/slides/scene_070_composed_frame.png");
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(regenerated));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.SCENE_IMAGE)).thenReturn(List.of(stale, other));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                imagesService, "persistGenerateResult", 20L, job, result);
+
+        verify(assetRepository).delete(stale);
+        verify(assetRepository, never()).delete(other);
+        verify(assetRepository).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE
+                && "/app/data/jobs/20/slides/scene_070_composed_frame.png".equals(a.getLocalPath())));
+    }
+
+    @Test
+    void persistGenerateResult_failedRegenerationKeepsTheGoodPreviousImageAndAddsNothing() {
+        VideoJob job = new VideoJob();
+        job.setId(20L);
+        Asset good = Asset.builder().jobId(20L).assetType(AssetType.SCENE_IMAGE)
+                .localPath("/app/data/jobs/20/slides/scene_070_composed_frame.png")
+                .metaJson("{\"index\":70}").build();
+        SceneImageDto failed = new SceneImageDto();
+        failed.setIndex(70);
+        failed.setImagePath(null);
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(failed));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.SCENE_IMAGE)).thenReturn(List.of(good));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                imagesService, "persistGenerateResult", 20L, job, result);
+
+        verify(assetRepository, never()).delete(good);
+        verify(assetRepository, never()).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE));
+    }
 }

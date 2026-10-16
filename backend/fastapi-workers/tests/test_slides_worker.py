@@ -247,10 +247,15 @@ def test_disclaimer_banner_goes_on_the_first_scene_after_the_intro_highlight(mon
 
     result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
 
+    # 장면 클립은 4초씩이라 8초 배너는 3번에서 시작해 4번까지 이어진다(2026-10-16 20번 Job 재현).
     banner_scenes = [s["index"] for s in result["scenes"] if s.get("disclaimer_banner")]
-    assert banner_scenes == [3]
+    assert banner_scenes == [3, 4]
     assert result["scenes"][3]["slide_layers"]["overlays"][-1]["type"] == "disclaimer_banner"
-    assert len(seen["composed"]) == 1
+    assert len(seen["composed"]) == 2
+    first, second = seen["composed"]
+    assert first["fade_in_seconds"] > 0 and first["fade_out_seconds"] == 0 and first["hold_to_end"] is True
+    assert second["fade_in_seconds"] == 0 and second["fade_out_seconds"] > 0 and second["hold_to_end"] is False
+    assert first["motion"] == "none" and second["motion"] == "none"
 
 
 def _highlight_scenes():
@@ -537,7 +542,7 @@ def test_explain_scene_uses_the_board_instead_of_looking_for_stock(monkeypatch, 
     assert searched == []
     assert out_scene["overlay_type"] == "equation" and out_scene["visual_type"] == "slide_equation"
     assert out_scene["slide_layers"]["base"]["type"] == "slide_board"
-    assert seen["composed"][0]["base"].endswith("board_background.png")
+    assert seen["composed"][0]["base"].endswith("board_background_v2.png")
     assert out_scene["slide_layers"]["overlays"][0]["icon"] == "money_stack"
 
 

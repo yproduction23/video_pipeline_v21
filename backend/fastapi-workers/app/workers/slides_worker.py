@@ -201,8 +201,11 @@ class SlidesWorker:
         from app.utils.statistic_chart_card import extract_numeric_series
 
         briefs: dict[int, dict] = {}
+        all_narrations = [narration_of(scene) for scene in scenes_meta]
         for index, scene in targets:
-            brief = {"narration": narration_of(scene)}
+            # 수치 오버레이 검증용: 같은 흐름에서 직전 두 장면이 이미 말한 내용(원문 그대로).
+            context = " ".join(all_narrations[max(0, index - 2):index]) if index < len(all_narrations) else ""
+            brief = {"narration": narration_of(scene), "context": context}
             capture = scene.get("article_capture")
             if capture:
                 series = capture.get("numeric_series") or extract_numeric_series(str(capture.get("quote") or ""))
@@ -217,6 +220,7 @@ class SlidesWorker:
         banner_index = self._disclaimer_scene_index(
             scenes_meta, {i for i, _ in targets}, self._highlight_boundary(script_meta_json),
         )
+        banner_plan = self._banner_schedule(scenes_meta, banner_index, {i for i, _ in targets})
 
         def render(item: tuple[int, dict]) -> dict:
             index, scene = item
@@ -224,7 +228,7 @@ class SlidesWorker:
                 index=index, scene=scene, job_id=job_id, job_dir=job_dir,
                 used_pixabay_ids=used_pixabay_ids, kling_state=kling_state,
                 overlay_plan=overlay_plan.get(index),
-                banner=index == banner_index,
+                banner=banner_plan.get(index),
                 # 전체 실행에서만 배경을 재사용한다. 단일 장면 다시 생성은 새 결과를 원하는 요청이다.
                 reuse_base=scene_indices is None,
             )
@@ -305,7 +309,7 @@ class SlidesWorker:
     def _render_scene(
         self, *, index: int, scene: dict, job_id: int, job_dir: Path,
         used_pixabay_ids: set[int], kling_state: dict | None = None,
-        overlay_plan: dict | None = None, banner: bool = False, reuse_base: bool = False,
+        overlay_plan: dict | None = None, banner: dict | None = None, reuse_base: bool = False,
     ) -> dict:
         narration = str(
             scene.get("subtitle_text") or scene.get("content") or scene.get("text") or ""
@@ -328,7 +332,7 @@ class SlidesWorker:
         # 단, Claude가 "설명 장면"(explain)으로 계획한 장면은 배경 영상을 찾지 않고 일관된
         # 칠판 배경 위에 인포그래픽을 크게 보여준다(레퍼런스 영상의 방식, 비용·시간도 줄어든다).
         try:
-            board_path = job_dir / "board_background.png"
+            board_path = job_dir / "board_background_v2.png"
             if overlay_plan and overlay_plan.get("explain") and ensure_board_background(str(board_path)):
                 out["image_path"] = str(board_path)
                 out["visual_type"] = "slide_board"
@@ -380,7 +384,9 @@ class SlidesWorker:
             out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "overlay_failed_base_only"]))
         if banner:
             try:
-                self._apply_disclaimer_banner(index=index, duration=duration, job_dir=job_dir, out=out)
+                self._apply_disclaimer_banner(
+                    index=index, duration=duration, job_dir=job_dir, out=out, schedule=banner,
+                )
             except Exception as exc:
                 logger.exception("슬라이드 장면 %s 고지 배너 실패", index)
                 out["overlay_failure_reason"] = str(exc)
@@ -553,13 +559,57 @@ class SlidesWorker:
         out["slide_layers"]["overlays"].append(spec)
         out["overlay_type"] = kind
 
-    def _apply_disclaimer_banner(self, *, index: int, duration: float, job_dir: Path, out: dict) -> None:
+    @staticmethod
+    def _banner_schedule(scenes_meta: list, first_index: int | None, target_indexes: set[int]) -> dict[int, dict]:
+        """고지 배너를 DISCLAIMER_SECONDS 동안 이어서 보여 주는 장면별 구간.
+
+        2026-10-16 20번 Job 재현: 장면 클립이 4초 안팎인데 배너를 한 장면에만 붙여 8초 계획이 3.8초로
+        끝났다. 첫 장면에서 이어 다음 장면들에도 남은 시간만큼 붙인다. 중간 장면은 페이드 없이 이어지고
+        마지막 조각에서만 사라진다."""
+        if first_index is None or not scenes_meta:
+            return {}
+        default = float(runtime_config.value("scene_duration_sec"))
+        remaining = DISCLAIMER_SECONDS
+        plan: dict[int, dict] = {}
+        index = first_index
+        first = True
+        while remaining > 0.05 and index < len(scenes_meta):
+            duration = scene_duration_seconds(scenes_meta[index], default)
+            start = 0.2 if first else 0.0
+            hold = min(remaining, max(duration - start - 0.05, 0.0))
+            if hold <= 0.05:
+                break
+            remaining -= hold
+            last = remaining <= 0.05
+            if index in target_indexes:
+                plan[index] = {
+                    "start_offset": start, "hold_seconds": hold,
+                    "fade_in_seconds": 0.35 if first else 0.0,
+                    "fade_out_seconds": 0.3 if last else 0.0,
+                    "hold_to_end": not last,
+                }
+            first = False
+            index += 1
+        if plan:
+            # 장면이 모자라 8초를 못 채워도 마지막 조각은 페이드로 사라진다.
+            plan[max(plan)].update(fade_out_seconds=0.3, hold_to_end=False)
+        return plan
+
+    def _apply_disclaimer_banner(
+        self, *, index: int, duration: float, job_dir: Path, out: dict, schedule: dict | None = None,
+    ) -> None:
         banner_png = job_dir / f"scene_{index:03d}_banner.png"
         if not render_disclaimer_banner(output_path=str(banner_png)):
             raise RuntimeError("고지 배너 렌더링 실패")
+        schedule = schedule or {
+            "start_offset": 0.2, "hold_seconds": DISCLAIMER_SECONDS,
+            "fade_in_seconds": 0.35, "fade_out_seconds": 0.3, "hold_to_end": False,
+        }
         self._compose_into_clip(
             index=index, duration=duration, job_dir=job_dir, out=out, overlay_png=banner_png,
-            suffix="banner", start_offset=0.2, hold_seconds=DISCLAIMER_SECONDS,
+            suffix="banner", start_offset=schedule["start_offset"], hold_seconds=schedule["hold_seconds"],
+            fade_in_seconds=schedule["fade_in_seconds"], fade_out_seconds=schedule["fade_out_seconds"],
+            hold_to_end=schedule["hold_to_end"], motion="none",
         )
         out["slide_layers"]["overlays"].append({"type": "disclaimer_banner", "overlay_png": str(banner_png)})
         out["disclaimer_banner"] = True
@@ -567,6 +617,8 @@ class SlidesWorker:
     def _compose_into_clip(
         self, *, index: int, duration: float, job_dir: Path, out: dict, overlay_png: Path,
         suffix: str, start_offset: float = 0.35, hold_seconds: float | None = None,
+        fade_in_seconds: float = 0.35, fade_out_seconds: float = 0.3, hold_to_end: bool = False,
+        motion: str = "rise",
     ) -> None:
         """현재 배경(영상 또는 이미지) 위에 오버레이를 시간에 맞춰 얹은 클립으로 장면을 갱신한다."""
         base_video = out.get("stock_video_path")
@@ -578,7 +630,8 @@ class SlidesWorker:
         if not compose_animated_overlay(
             base_path=str(base), overlay_path=str(overlay_png), output_path=str(clip_path),
             duration=duration, base_is_video=bool(base_video), start_offset=start_offset,
-            hold_seconds=hold_seconds,
+            hold_seconds=hold_seconds, fade_in_seconds=fade_in_seconds,
+            fade_out_seconds=fade_out_seconds, hold_to_end=hold_to_end, motion=motion,
         ):
             raise RuntimeError("오버레이 합성 실패")
         out["stock_video_path"] = str(clip_path)

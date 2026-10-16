@@ -202,6 +202,17 @@ public class ImagesService {
      * 고쳤을 때 다른 쪽이 조용히 어긋난다(2026-10-13 "검토 이미지 그대로 사용"
      * 기능 추가 시 발견).
      */
+    /** SCENE_IMAGE 자산 메타의 장면 번호. 읽을 수 없으면 null(교체 대상에서 제외). */
+    private Integer sceneIndexOf(Asset asset) {
+        try {
+            if (asset.getMetaJson() == null || asset.getMetaJson().isBlank()) return null;
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(asset.getMetaJson()).get("index");
+            return node != null && node.canConvertToInt() ? node.asInt() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void persistGenerateResult(Long jobId, VideoJob job, ImagesGenerateResponse result) {
         if (result.getScenes() != null) {
             for (SceneImageDto scene : result.getScenes()) {
@@ -210,9 +221,26 @@ public class ImagesService {
                 // 저장해 검수·재생성 대상으로 남긴다 — 여기서 NPE가 나면 나머지 장면 결과까지
                 // 저장되지 못한다.
                 String scenePath = scene.getImagePath();
+                List<Asset> existingScenes = assetRepository.findByJobIdAndAssetType(jobId, AssetType.SCENE_IMAGE);
                 boolean alreadyRegistered = scenePath != null
-                        && assetRepository.findByJobIdAndAssetType(jobId, AssetType.SCENE_IMAGE)
-                        .stream().anyMatch(existing -> scenePath.equals(existing.getLocalPath()));
+                        && existingScenes.stream().anyMatch(existing -> scenePath.equals(existing.getLocalPath()));
+                // 2026-10-16 20번 Job 재현: 실패했던 장면(경로 없음)을 다시 생성하면 새 자산이 추가만
+                // 되어 같은 장면 번호가 두 개로 남았다. 같은 장면 번호의 이전 자산은 새 결과로 교체한다.
+                // 새 결과가 또 실패(경로 없음)면 좋은 이전 이미지를 지키고, 실패 자리표시자는 하나만 둔다.
+                if (scene.getIndex() != null) {
+                    for (Asset existing : existingScenes) {
+                        if (!scene.getIndex().equals(sceneIndexOf(existing))) continue;
+                        boolean samePath = scenePath != null && scenePath.equals(existing.getLocalPath());
+                        if (samePath) continue;
+                        if (scenePath != null) {
+                            assetRepository.delete(existing);
+                        } else if (existing.getLocalPath() == null) {
+                            alreadyRegistered = true;
+                        } else {
+                            alreadyRegistered = true; // 좋은 이전 이미지가 있으면 실패 결과로 덮지 않는다
+                        }
+                    }
+                }
                 if (alreadyRegistered) continue;
                 Asset asset = Asset.builder()
                         .jobId(jobId)
