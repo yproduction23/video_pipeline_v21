@@ -237,7 +237,7 @@ export default function SlideProgressPanel({ jobId, running }) {
   )
 }
 
-const BACKGROUND_LABEL = { board: '칠판', stock: '스톡 영상', photo: 'AI 사진' }
+const BACKGROUND_LABEL = { board: '회색 배경', stock: '스톡 영상', photo: 'AI 사진' }
 const BACKGROUND_TONE = {
   board: 'bg-emerald-100 text-emerald-800 border-emerald-300',
   stock: 'bg-sky-100 text-sky-800 border-sky-300',
@@ -248,23 +248,83 @@ const OVERLAY_LABEL = {
   bullet_list: '목록', stat_chart: '수치 그래프', equation: '계산식', article_card: '기사 카드',
 }
 
-function overlayText(overlay) {
-  if (!overlay) return ''
-  return overlay.text || overlay.value || overlay.title || overlay.headline
-    || (overlay.nodes || []).map(n => n.label).join(' → ') || ''
+const BACKGROUND_HINT = {
+  board: '어두운 회색 배경 위에 후편집만 나와요',
+  stock: '스톡 영상을 깔아요',
+  photo: 'AI 사진(Gemini, 유료)을 만들어요',
 }
 
+const fmtTime = (seconds) => {
+  const total = Math.max(0, Math.round(seconds))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
 
-// 편집 계획서: 구간(연속된 같은 배경) 요약 + 장면별 후편집. 저장된 계획서를 그대로 실행한다.
-// 2026-10-16 운영자 요청: 계획서를 보고 문제 되는 장면을 표시하고 말로 수정 지시를 적으면 그 장면만
-// 다시 계획한다(필드를 손으로 고치는 편집기가 아니라 자동화 흐름을 유지한다).
+// 후편집이 화면에 정확히 무엇을 띄우는지(글자·숫자·항목)를 한 줄씩 풀어 쓴다.
+function overlayLines(overlay) {
+  if (!overlay) return []
+  const lines = []
+  const icon = overlay.icon ? ` (그림: ${overlay.icon})` : ''
+  switch (overlay.type) {
+    case 'key_text':
+      lines.push(`문구 “${overlay.text}”${icon}`)
+      break
+    case 'big_number':
+      lines.push(`큰 숫자 “${overlay.value}”${overlay.label ? ` · 소제목 ${overlay.label}` : ''}${icon}`)
+      break
+    case 'compare_numbers':
+      lines.push(`비교 “${overlay.headline}”${icon}`)
+      ;(overlay.rows || []).forEach(r => lines.push(`  · ${r.label}: ${r.value}`))
+      break
+    case 'flow':
+      lines.push(`흐름도 ${(overlay.nodes || []).map(n => `${n.label}${n.icon ? `(${n.icon})` : ''}`).join(' → ')}`)
+      break
+    case 'bullet_list':
+      lines.push(`목록 “${overlay.title}”`)
+      ;(overlay.items || []).forEach((item, k) => lines.push(`  ${k + 1}. ${item}`))
+      break
+    case 'stat_chart':
+      lines.push(`막대 그래프 “${overlay.title || ''}”`)
+      ;(overlay.items || []).forEach(item => lines.push(`  · ${item.label}: ${item.value_text}`))
+      if (!(overlay.items || []).length && overlay.use_article_series) lines.push('  · 기사 속 수치 계열')
+      break
+    case 'equation':
+      lines.push(`계산식 ${(overlay.left || []).join(` ${(overlay.ops || [])[0] || ''} `)} = ${overlay.result}${icon}`)
+      break
+    case 'article_card':
+      lines.push('기사 카드(보도 인용)')
+      break
+    default:
+      lines.push(overlay.type)
+  }
+  return lines
+}
+
+function backgroundLines(scene) {
+  if (scene.background === 'stock') {
+    const queries = (scene.stock_queries || []).join(' / ')
+    return [`스톡 검색어: ${queries || '(없음)'}`,
+      scene.fallback_key_text ? `못 찾으면 → 회색 배경 + “${scene.fallback_key_text}”` : null].filter(Boolean)
+  }
+  if (scene.background === 'photo') return [`AI 사진: ${scene.photo_brief || ''}`]
+  return ['어두운 회색 배경']
+}
+
+// 편집 계획서: 구간 카드(시간대·배경·후편집 요약) → 장면별 상세(내레이션·배경 검색어·화면에 뜰 내용·이유).
+// 2026-10-16 운영자 요청: "스톡 영상 씬 2~11"처럼 범위만 있으면 내용을 알 수 없다 — 무엇을 보여 주는지 풀어서 보여 준다.
+// 문제 장면을 체크하고 말로 수정 지시를 적으면 그 장면만 다시 계획한다(필드 직접 편집 없음).
 export function EditPlanSection({ plan, onReplan, busy }) {
   const summary = plan.summary || {}
   const scenes = plan.scenes || []
+  const sceneByIndex = Object.fromEntries(scenes.map(s => [s.index, s]))
   const notes = plan.review_notes || {}
   const [marked, setMarked] = useState({}) // { [index]: 수정 지시 }
   const [error, setError] = useState('')
   const markedIndexes = Object.keys(marked).map(Number).sort((a, b) => a - b)
+
+  // 장면별 시작 시각(누적)
+  const startAt = {}
+  let acc = 0
+  scenes.forEach((scene) => { startAt[scene.index] = acc; acc += scene.duration || 0 })
 
   const toggle = (index) => setMarked(prev => {
     const next = { ...prev }
@@ -284,12 +344,61 @@ export function EditPlanSection({ plan, onReplan, busy }) {
     }
   }
 
+  const renderScene = (scene) => {
+    const lines = overlayLines(scene.overlay)
+    const onFootage = scene.background !== 'board'
+    return (
+      <div key={scene.index} className={`py-2 ${scene.index in marked ? 'bg-amber-50' : ''}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex cursor-pointer items-center gap-1 font-bold text-slate-800">
+            <input type="checkbox" checked={scene.index in marked} onChange={() => toggle(scene.index)} />
+            #{scene.index + 1}
+          </label>
+          <span className="text-slate-500">
+            {fmtTime(startAt[scene.index])}~{fmtTime(startAt[scene.index] + (scene.duration || 0))} · {Math.round(scene.duration || 0)}초
+          </span>
+          {scene.overlay
+            ? <span className="rounded-full bg-violet-100 px-2 py-0.5 font-bold text-violet-700">
+                후편집 · {OVERLAY_LABEL[scene.overlay.type] || scene.overlay.type}
+              </span>
+            : <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-500">후편집 없음(영상 + 자막만)</span>}
+          {scene.revised && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 font-bold text-amber-700">수정됨</span>}
+          {scene.auto_repaired && <span className="rounded-full bg-sky-50 px-1.5 py-0.5 font-semibold text-sky-600">자동 보정</span>}
+        </div>
+        <p className="mt-1 text-slate-600">“{scene.narration}”</p>
+        <div className="mt-1 space-y-0.5 pl-3 text-slate-700">
+          {backgroundLines(scene).map((line, k) => (
+            <p key={`b${k}`}><b className="text-slate-500">배경</b> {line}</p>
+          ))}
+          {lines.map((line, k) => (
+            <p key={`o${k}`} className={line.startsWith('  ') ? 'pl-4' : ''}>
+              {k === 0 && <b className="text-violet-600">화면에 뜨는 내용 </b>}{line.trimStart()}
+            </p>
+          ))}
+          {scene.overlay && onFootage && (
+            <p className="text-slate-400">영상을 어둡게 눌러 그 위에 얹어요</p>
+          )}
+          {scene.reason && <p className="text-slate-400">이유: {scene.reason}</p>}
+          {notes[String(scene.index)] && !(scene.index in marked) && (
+            <p className="font-semibold text-amber-700">운영자 지시: {notes[String(scene.index)]}</p>
+          )}
+        </div>
+        {scene.index in marked && (
+          <input type="text" value={marked[scene.index]} maxLength={200}
+            onChange={(e) => setMarked(prev => ({ ...prev, [scene.index]: e.target.value }))}
+            placeholder="수정 지시 (예: 회색 배경으로 바꾸고 금리 상승 화살표를 보여 줘)"
+            className="mt-1 w-full rounded border border-amber-300 px-2 py-1 text-xs" />
+        )}
+      </div>
+    )
+  }
+
   return (
     <details open className="rounded-lg border border-slate-200 bg-white p-3">
       <summary className="cursor-pointer text-sm font-bold text-slate-900">
-        편집 계획서 · 칠판 {summary.board || 0} · 스톡 {summary.stock || 0} · AI 사진 {summary.photo || 0}
+        편집 계획서 · 회색 배경 {summary.board || 0} · 스톡 {summary.stock || 0} · AI 사진 {summary.photo || 0}
         <span className="ml-2 font-semibold text-slate-500">
-          후편집 {summary.overlay_scenes || 0}장면 · 예상 Gemini ₩{(summary.gemini_krw_expected || 0).toLocaleString()}
+          후편집 {summary.overlay_scenes || 0}장면 · 총 {fmtTime(plan.total_seconds || 0)} · 예상 Gemini ₩{(summary.gemini_krw_expected || 0).toLocaleString()}
         </span>
       </summary>
       {plan.quality && (
@@ -303,29 +412,10 @@ export function EditPlanSection({ plan, onReplan, busy }) {
           {plan.auto_repair_rounds ? <span className="ml-1 text-slate-400">(자동 보정 {plan.auto_repair_rounds}회)</span> : null}
         </p>
       )}
-      <div className="mt-2 space-y-1.5">
-        {(plan.segments || []).map(segment => (
-          <div key={segment.id} className="flex flex-wrap items-center gap-2 text-xs">
-            <span className={`rounded-full border px-2 py-0.5 font-bold ${BACKGROUND_TONE[segment.background] || ''}`}>
-              {BACKGROUND_LABEL[segment.background] || segment.background}
-            </span>
-            <span className="font-bold text-slate-800">
-              씬 {segment.range[0] + 1}{segment.range[1] !== segment.range[0] ? `~${segment.range[1] + 1}` : ''}
-            </span>
-            <span className="text-slate-500">{Math.round(segment.seconds)}초</span>
-            {segment.highlight && (
-              <span className="rounded-full bg-rose-100 px-2 py-0.5 font-bold text-rose-700">하이라이트</span>
-            )}
-            <span className="text-slate-600">
-              {(segment.overlay_types || []).map(t => OVERLAY_LABEL[t] || t).join(' · ') || '후편집 없음'}
-            </span>
-          </div>
-        ))}
-      </div>
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs">
         <span className="font-semibold text-amber-800">
-          문제 되는 장면은 ‘문제’를 체크하고 수정 지시를 적은 뒤 다시 계획하세요. 이미지는 만들지 않아요.
+          문제 되는 장면은 체크하고 수정 지시를 적은 뒤 다시 계획하세요. 이미지는 만들지 않아요.
         </span>
         <button type="button" onClick={submit} disabled={!markedIndexes.length || busy}
           className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 font-bold text-white disabled:opacity-50">
@@ -334,7 +424,6 @@ export function EditPlanSection({ plan, onReplan, busy }) {
         </button>
       </div>
       {error && <p className="mt-1 text-xs font-semibold text-rose-600">{error}</p>}
-
       {markedIndexes.length > 0 && (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs">
           <p className="mb-1 font-bold text-slate-700">문제 정리 ({markedIndexes.length}장면)</p>
@@ -346,43 +435,36 @@ export function EditPlanSection({ plan, onReplan, busy }) {
         </div>
       )}
 
-      <details open className="mt-3">
-        <summary className="cursor-pointer text-xs font-semibold text-slate-500">장면별 계획</summary>
-        <div className="mt-2 max-h-[420px] overflow-y-auto divide-y divide-slate-100 text-xs">
-          {scenes.map(scene => (
-            <div key={scene.index} className={`py-1.5 ${scene.index in marked ? 'bg-amber-50' : ''}`}>
-              <div className="flex gap-2">
-                <label className="flex w-14 shrink-0 cursor-pointer items-center gap-1 font-bold text-slate-700">
-                  <input type="checkbox" checked={scene.index in marked} onChange={() => toggle(scene.index)} />
-                  #{scene.index + 1}
-                </label>
-                <span className={`h-fit shrink-0 rounded-full border px-1.5 py-0.5 font-bold ${BACKGROUND_TONE[scene.background] || ''}`}>
-                  {BACKGROUND_LABEL[scene.background] || scene.background}
+      <div className="mt-3 space-y-2">
+        {(plan.segments || []).map(segment => {
+          const first = segment.range[0]
+          const last = segment.range[1]
+          const segScenes = segment.scenes.map(i => sceneByIndex[i]).filter(Boolean)
+          const withOverlay = segScenes.filter(s => s.overlay)
+          const counts = {}
+          withOverlay.forEach(s => { counts[s.overlay.type] = (counts[s.overlay.type] || 0) + 1 })
+          return (
+            <details key={segment.id} open className="rounded-lg border border-slate-200">
+              <summary className="cursor-pointer bg-slate-50 px-3 py-2 text-xs">
+                <span className={`mr-2 rounded-full border px-2 py-0.5 font-bold ${BACKGROUND_TONE[segment.background] || ''}`}>
+                  {BACKGROUND_LABEL[segment.background] || segment.background}
                 </span>
-                <span className="text-slate-700">
-                  {scene.overlay
-                    ? `${OVERLAY_LABEL[scene.overlay.type] || scene.overlay.type}${overlayText(scene.overlay) ? ` · ${overlayText(scene.overlay)}` : ''}`
-                    : '후편집 없음'}
-                  {scene.reason ? <span className="text-slate-400"> — {scene.reason}</span> : null}
-                  {scene.revised && (
-                    <span className="ml-1 rounded-full bg-amber-100 px-1.5 py-0.5 font-bold text-amber-700">수정됨</span>
-                  )}
+                <b className="text-slate-800">
+                  씬 {first + 1}{last !== first ? `~${last + 1}` : ''} · {fmtTime(startAt[first])}~{fmtTime(startAt[last] + (sceneByIndex[last]?.duration || 0))} ({segScenes.length}장면, {Math.round(segment.seconds)}초)
+                </b>
+                {segment.highlight && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 font-bold text-rose-700">하이라이트</span>}
+                <span className="ml-2 text-slate-500">
+                  {BACKGROUND_HINT[segment.background]} · 후편집 {withOverlay.length}장면
+                  {withOverlay.length > 0 && ` (${Object.entries(counts).map(([t, c]) => `${OVERLAY_LABEL[t] || t} ${c}`).join(', ')})`}
                 </span>
+              </summary>
+              <div className="divide-y divide-slate-100 px-3 text-xs">
+                {segScenes.map(renderScene)}
               </div>
-              <p className="ml-16 mt-0.5 text-slate-400">{scene.narration}</p>
-              {notes[String(scene.index)] && !(scene.index in marked) && (
-                <p className="ml-16 mt-0.5 font-semibold text-amber-700">지시: {notes[String(scene.index)]}</p>
-              )}
-              {scene.index in marked && (
-                <input type="text" value={marked[scene.index]} maxLength={200}
-                  onChange={(e) => setMarked(prev => ({ ...prev, [scene.index]: e.target.value }))}
-                  placeholder="수정 지시 (예: 칠판으로 바꾸고 금리 상승 화살표를 보여 줘)"
-                  className="ml-16 mt-1 w-[calc(100%-4rem)] rounded border border-amber-300 px-2 py-1 text-xs" />
-              )}
-            </div>
-          ))}
-        </div>
-      </details>
+            </details>
+          )
+        })}
+      </div>
     </details>
   )
 }
