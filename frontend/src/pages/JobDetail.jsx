@@ -689,6 +689,26 @@ export default function JobDetail() {
     onError: (err) => alert('스크립트 재시작 실패: ' + (err.response?.data?.message || err.message)),
   })
 
+  // 2026-10-16 운영자 요청: 승인해 넘어간 단계를 이전 단계로 되돌릴 수 있어야 한다.
+  const rewindMut = useMutation({
+    mutationFn: (gate) => jobsApi.rewindGate(id, gate),
+    onSuccess: () => {
+      qc.invalidateQueries(['job', id])
+      qc.invalidateQueries(['approvals', id])
+      qc.invalidateQueries(['assets', id])
+      qc.invalidateQueries(['slide-plan', id])
+    },
+    onError: (err) => alert('되돌리지 못했어요: ' + (err.response?.data?.message || err.message)),
+  })
+  const handleRewind = (step) => {
+    const label = stepLabelFor(step, job?.visualMode)
+    if (!window.confirm(`'${label}' 단계로 되돌릴까요?
+
+이 단계와 이후 단계의 승인이 해제되고, 다시 실행·승인해야 합니다.
+이미 만든 결과물은 지우지 않으며, 다시 실행하면 새 결과로 교체됩니다.`)) return
+    rewindMut.mutate(step.gate)
+  }
+
   // 슬라이드형 편집 계획서: 씬별 생성(비용 단계) 전에 만들고 확인한다.
   const isSlideJob = job?.visualMode === 'SLIDE'
   const { data: slidePlanData } = useQuery({
@@ -1329,6 +1349,19 @@ export default function JobDetail() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {ss === 'done' && !isAuto && ['SCRIPT', 'TTS', 'IMAGES'].includes(step.gate)
+                      && !['PUBLISHED', 'PUBLISH_PENDING', 'SHORTS_GENERATING'].includes(job.status) && (
+                      <button
+                        type="button"
+                        onClick={() => handleRewind(step)}
+                        disabled={rewindMut.isPending || !!runningStep}
+                        title="이 단계와 이후 단계의 승인을 해제하고 다시 실행합니다"
+                        className="flex items-center gap-1 text-xs bg-white text-slate-800 border border-slate-400 px-3 py-2 rounded-xl hover:bg-slate-100 transition font-semibold disabled:opacity-50"
+                      >
+                        {rewindMut.isPending && rewindMut.variables === step.gate ? <Loader size={12} className="animate-spin"/> : <RotateCcw size={12}/>}
+                        이 단계로 되돌리기
+                      </button>
+                    )}
                     {step.gate === 'SCRIPT' && ss === 'active' && scriptData?.requires_manual_review === true && (
                       <button
                         type="button"

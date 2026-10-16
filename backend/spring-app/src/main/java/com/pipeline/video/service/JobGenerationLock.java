@@ -26,6 +26,12 @@ public class JobGenerationLock {
         return inFlight.add(key(jobId, stage));
     }
 
+    /** 이 작업의 어느 단계든 생성이 진행 중이면 true(단계를 되돌리기 전에 확인한다). */
+    public boolean isAnyInFlight(Long jobId) {
+        String prefix = jobId + ":";
+        return inFlight.stream().anyMatch(key -> key.startsWith(prefix));
+    }
+
     public void release(Long jobId, String stage) {
         inFlight.remove(key(jobId, stage));
     }

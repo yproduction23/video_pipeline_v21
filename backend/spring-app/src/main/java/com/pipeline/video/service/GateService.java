@@ -37,6 +37,7 @@ public class GateService {
     private final ApprovalRepository approvalRepository;
     private final AutonomyService autonomyService;
     private final WorkflowOrchestrator workflowOrchestrator;
+    private final JobGenerationLock generationLock;
 
     private static final Map<GateName, JobStatus> NEXT_STATUS_ON_APPROVE = Map.of(
             GateName.KEYWORD, JobStatus.SCRIPT_PENDING,
@@ -146,6 +147,71 @@ public class GateService {
         } else {
             workflowOrchestrator.sendApproveSignal(jobId, gate.name());
         }
+    }
+
+    private static final List<GateName> GATE_ORDER = List.of(
+            GateName.KEYWORD, GateName.SCRIPT, GateName.TTS, GateName.IMAGES,
+            GateName.PREVIEW, GateName.SHORTS_SEGMENTS, GateName.SHORTS_PREVIEW);
+
+    // 2026-10-16 운영자 요청: 승인해 넘어간 단계를 다시 열 수 있어야 한다(대본·TTS·이미지). 키워드는 대본이 달라지므로 제외한다.
+    private static final java.util.Set<GateName> REWIND_TARGETS =
+            java.util.Set.of(GateName.SCRIPT, GateName.TTS, GateName.IMAGES);
+
+    /**
+     * 이미 승인한 단계를 다시 연다. 그 단계와 뒤 단계의 승인은 해제하고 상태를 그 단계의 대기 상태로 돌린다.
+     * 생성물(대본·음성·이미지)은 지우지 않는다 — 다시 실행하면 같은 자리에 교체된다.
+     *
+     * 사용자 주도(GUIDED) 작업에서만 허용한다: 생성은 UI가 직접 호출하고 워크플로는 게이트 신호만 기다리기 때문이다.
+     * AUTO는 워크플로가 단계를 직접 실행하므로 되돌리면 이중 실행·이중 과금 위험이 있어 거절한다.
+     * 워크플로가 끝났어도 앞 게이트 신호를 다시 보내 그 단계의 승인 대기까지 되살린다(신호는 중복 전송해도 안전하다).
+     */
+    @Transactional
+    public VideoJob rewindToGate(Long jobId, GateName target, String requestedBy) {
+        if (!REWIND_TARGETS.contains(target)) {
+            throw new IllegalArgumentException("되돌릴 수 있는 단계는 대본·TTS·이미지입니다: " + target);
+        }
+        VideoJob job = jobRepository.findById(jobId)
+                .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
+        if (job.getAutonomy() == Autonomy.AUTO) {
+            throw new IllegalStateException("AUTO 작업은 워크플로가 단계를 직접 실행하므로 되돌릴 수 없습니다. 중지 후 다시 시작해 주세요.");
+        }
+        if (job.getStatus() == JobStatus.PUBLISHED || job.getStatus() == JobStatus.PUBLISH_PENDING
+                || job.getStatus() == JobStatus.SHORTS_GENERATING) {
+            throw new IllegalStateException("업로드했거나 쇼츠를 만드는 중인 작업은 되돌릴 수 없습니다. 현재 상태: " + job.getStatus());
+        }
+        if (generationLock.isAnyInFlight(jobId)) {
+            throw new IllegalStateException("생성이 진행 중입니다. 끝난 뒤에 되돌려 주세요.");
+        }
+        boolean passed = approvalRepository.findByJobIdAndGate(jobId, target).stream()
+                .anyMatch(a -> "APPROVED".equals(a.getResult()) || "AUTO_APPROVED".equals(a.getResult()));
+        if (!passed) {
+            throw new IllegalStateException("아직 승인하지 않은 단계는 되돌릴 수 없습니다: " + target);
+        }
+
+        int from = GATE_ORDER.indexOf(target);
+        approvalRepository.deleteByJobIdAndGateIn(jobId, GATE_ORDER.subList(from, GATE_ORDER.size()));
+        JobStatus previous = job.getStatus();
+        job.setStatus(EXPECTED_STATUS.get(target));
+        jobRepository.save(job);
+        log.info("단계 되돌리기: job={} {} → {} (게이트 {} 이후 승인 해제, 요청자={})",
+                jobId, previous, job.getStatus(), target, requestedBy);
+
+        List<GateName> earlier = GATE_ORDER.subList(0, from);
+        Runnable restore = () -> {
+            workflowOrchestrator.startPipeline(jobId);
+            earlier.forEach(gate -> workflowOrchestrator.sendApproveSignal(jobId, gate.name()));
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    restore.run();
+                }
+            });
+        } else {
+            restore.run();
+        }
+        return job;
     }
 
     @Transactional

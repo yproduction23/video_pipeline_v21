@@ -3,6 +3,7 @@ package com.pipeline.video.controller;
 import com.pipeline.video.domain.Approval;
 import com.pipeline.video.domain.GateName;
 import com.pipeline.video.dto.GateApprovalRequest;
+import com.pipeline.video.dto.JobResponse;
 import com.pipeline.video.service.GateService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -15,6 +16,7 @@ import java.util.List;
  * 7개 게이트 공통 승인/거부 API
  * POST /api/jobs/{id}/gates/{gate}/approve
  * POST /api/jobs/{id}/gates/{gate}/reject
+ * POST /api/jobs/{id}/gates/{gate}/rewind  (승인한 대본·TTS·이미지 단계를 다시 연다)
  * GET  /api/jobs/{id}/approvals
  *
  * Phase 2-A에서는 SHORTS_SEGMENTS / SHORTS_PREVIEW 게이트만 실전 동작.
@@ -45,6 +47,14 @@ public class GateController {
             @AuthenticationPrincipal String username) {
         String comment = request != null ? request.getComment() : null;
         return ResponseEntity.ok(gateService.reject(jobId, gate, username, comment));
+    }
+
+    @PostMapping("/gates/{gate}/rewind")
+    public ResponseEntity<JobResponse> rewind(
+            @PathVariable Long jobId,
+            @PathVariable GateName gate,
+            @AuthenticationPrincipal String username) {
+        return ResponseEntity.ok(JobResponse.from(gateService.rewindToGate(jobId, gate, username)));
     }
 
     @GetMapping("/approvals")

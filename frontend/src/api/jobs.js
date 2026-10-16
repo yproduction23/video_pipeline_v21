@@ -6,6 +6,8 @@ export const jobsApi = {
   get: (id) => apiClient.get(`/jobs/${id}`).then(r => r.data),
   create: (data) => apiClient.post('/jobs', data).then(r => r.data),
   retryFromScript: (id) => apiClient.post(`/jobs/${id}/retry/script`).then(r => r.data),
+  // 승인한 대본·TTS·이미지 단계를 다시 연다(그 단계와 뒤 단계의 승인 해제)
+  rewindGate: (id, gate) => apiClient.post(`/jobs/${id}/gates/${gate}/rewind`).then(r => r.data),
 
   // Assets — 페이지 재진입 시 서버 상태 복원
   assets: (id, type) => {
