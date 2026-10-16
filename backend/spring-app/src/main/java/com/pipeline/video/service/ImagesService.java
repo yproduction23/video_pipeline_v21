@@ -245,6 +245,9 @@ public class ImagesService {
                 .assetType(AssetType.IMAGE_QC_REPORT)
                 .metaJson(safeJson(result))
                 .build());
+        PhonePushNotifier.stageCompleted(jobId, job.getTitle(), "씬별 생성 완료",
+                String.format("%d장면%s", result.getSceneCount(),
+                        result.isRequiresManualReview() ? " · 검토 필요 장면 있음" : " · 확인 후 확정"));
 
         if (autonomyService.isAuto(job)) {
             if (result.isRequiresManualReview()) {

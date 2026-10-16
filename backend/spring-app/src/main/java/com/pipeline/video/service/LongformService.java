@@ -208,6 +208,7 @@ public class LongformService {
         // ASSEMBLING → PREVIEW_PENDING
         job.setStatus(JobStatus.PREVIEW_PENDING);
         jobRepository.save(job);
+        PhonePushNotifier.stageCompleted(jobId, job.getTitle(), "영상 조립 완료", "미리보기 확인 후 승인");
 
         // [체크리스트 피드백 반영] 유튜브 패키지(썸네일, 제목, 더보기글, 태그) 자동 생성 추가
         try {

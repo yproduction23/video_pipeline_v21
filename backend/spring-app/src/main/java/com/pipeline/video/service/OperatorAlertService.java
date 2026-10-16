@@ -37,6 +37,7 @@ public class OperatorAlertService {
     private final RestTemplate restTemplate;
 
     public void notifyJobNeedsAttention(Long jobId, String title, String reason) {
+        PhonePushNotifier.needsAttention(jobId, title, reason);
         if (webhookUrl == null || webhookUrl.isBlank()) {
             log.info("ALERT_WEBHOOK_URL 미설정 — jobId={} 주의 필요 알림을 전송하지 않음 (UI에서 확인 필요)", jobId);
             return;

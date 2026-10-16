@@ -151,6 +151,9 @@ public class ScriptService {
                 .metaJson(safeJson(result))
                 .build();
         assetRepository.save(asset);
+        PhonePushNotifier.stageCompleted(jobId, job.getTitle(), "대본 생성 완료",
+                String.format("%d자%s", result.getScript() == null ? 0 : result.getScript().length(),
+                        Boolean.TRUE.equals(result.getRequiresManualReview()) ? " · 수동 검토 필요" : " · 검토 후 확정"));
 
         if (autonomyService.isAuto(job)) {
             if (Boolean.TRUE.equals(result.getRequiresManualReview())) {

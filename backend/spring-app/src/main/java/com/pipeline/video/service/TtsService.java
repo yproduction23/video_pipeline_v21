@@ -122,6 +122,8 @@ public class TtsService {
                 .metaJson(safeJson(result))
                 .build();
         assetRepository.save(asset);
+        PhonePushNotifier.stageCompleted(jobId, job.getTitle(), "음성 생성 완료",
+                String.format("%.0f초 · 확인 후 확정", result.getTotalDuration() == null ? 0.0 : result.getTotalDuration()));
 
         // AUTO 모드: 자동 confirm → IMAGES_PENDING
         if (autonomyService.isAuto(job)) {
