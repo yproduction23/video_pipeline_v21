@@ -407,3 +407,22 @@ def test_board_key_text_is_drawn_in_clean_red_without_a_stroke_halo(tmp_path):
     pixels = Image.open(out).convert("RGB").getdata()
     reds = [p for p in pixels if p[0] > 200 and p[1] < 80 and p[2] < 80]
     assert len(reds) > 3000  # 선명한 빨강 글자가 충분히 그려진다
+
+
+def test_source_credit_is_drawn_bottom_left_and_empty_publisher_is_ignored(tmp_path):
+    """레퍼런스의 "자료: 출처" 표기(2026-10-17): 왼쪽 아래에만 그리고, 출처가 없으면 그리지 않는다."""
+    from PIL import Image
+
+    from app.services.slide_overlay import add_source_credit
+
+    path = tmp_path / "overlay.png"
+    Image.new("RGBA", (1920, 1080), (0, 0, 0, 0)).save(path)
+
+    assert add_source_credit(str(path), "") is False
+    assert Image.open(path).getbbox() is None
+
+    assert add_source_credit(str(path), "서울신문 · 위키트리") is True
+    box = Image.open(path).getbbox()
+    assert box is not None
+    assert box[0] < 120 and box[2] < 700          # 왼쪽 가장자리에 붙어 있다
+    assert box[1] > 800                           # 화면 아래쪽

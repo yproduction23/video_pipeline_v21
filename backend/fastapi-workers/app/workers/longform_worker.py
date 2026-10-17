@@ -94,6 +94,7 @@ def _run_subprocess(cmd: str, job_id: int) -> int:
         unregister_process(job_id, p)
 
 NANUM_BOLD = r"C:\Windows\Fonts\malgunbd.ttf" if os.name == "nt" else "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"
+SLIDE_SUBTITLE_FONT_SIZE = 56  # 슬라이드형 흰 박스 자막 글자 크기(px, 1080p)
 NANUM_REGULAR = r"C:\Windows\Fonts\malgun.ttf" if os.name == "nt" else "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
 
 
@@ -1138,7 +1139,14 @@ class LongformWorker:
         font_size = runtime_config.value("subtitle_font_size")
         theme = runtime_config.value("subtitle_theme")
 
-        if theme == "knowledge":
+        if _is_slide_job(scenes or []):
+            # 슬라이드형(2026-10-17 레퍼런스 대조): 흰 불투명 박스 + 어두운 글자. BorderStyle=3에서 OutlineColour가 박스 색이고
+            # Outline 값이 박스 여백이다. 글자 크기는 레퍼런스(1080p 기준 약 56px)에 맞춘다.
+            style = (
+                f"Style: Main,{font_name},{SLIDE_SUBTITLE_FONT_SIZE},&H00181818,&H0000FFFF,"
+                "&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,12,0,2,70,70,64,1"
+            )
+        elif theme == "knowledge":
             # 반투명 다크 바 + 흰 글자 + 금색 강조 포인트.
             style = (
                 f"Style: Main,{font_name},{font_size},&H00FFFFFF,&H0000FFFF,"

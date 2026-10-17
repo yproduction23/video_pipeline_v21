@@ -323,6 +323,28 @@ def _save(image: Image.Image, output_path: str) -> bool:
     return Path(output_path).stat().st_size > 2_000
 
 
+def add_source_credit(png_path: str, publisher: str) -> bool:
+    """오버레이 PNG 왼쪽 아래에 "자료: 매체" 표기를 그린다(레퍼런스 방식). 출처가 비어 있으면 그리지 않는다."""
+    publisher = str(publisher or "").strip()
+    if not publisher:
+        return False
+    try:
+        with Image.open(png_path) as source:
+            image = source.convert("RGBA")
+        draw = ImageDraw.Draw(image)
+        font = _font(_FONT_REGULAR, 30)
+        text = f"자료: {publisher}"[:40]
+        x, y = 56, image.height - 150
+        draw.rectangle((x, y, x + 4, y + 36), fill=(255, 255, 255, 235))
+        draw.text((x + 18 + 2, y + 2), text, font=font, fill=(0, 0, 0, 160))
+        draw.text((x + 18, y), text, font=font, fill=(255, 255, 255, 240))
+        image.save(png_path)
+        return True
+    except Exception:
+        logger.warning("자료 출처 표기 실패: %s", png_path, exc_info=True)
+        return False
+
+
 def render_stat_overlay(*, title: str, items: list[dict], output_path: str, canvas: tuple[int, int] = CANVAS) -> bool:
     """어두운 스크림 위에 제목과 노란 막대 비교 그래프를 그린 전체 화면 RGBA PNG."""
     if not title or len(items) < 2:

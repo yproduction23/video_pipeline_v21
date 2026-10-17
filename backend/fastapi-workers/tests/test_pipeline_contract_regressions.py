@@ -85,3 +85,23 @@ def test_incomplete_dash_bubble_is_suppressed_by_the_common_subtitle_policy(tmp_
 
     assert _apply_speech_bubble_overlay(scene, "missing.mp4", tmp_path, 0, 3.0, 1) is True
     assert scene["overlay_provenance"][0]["skipped_reason"] == "script_caption_only_policy"
+
+
+def test_slide_job_subtitles_use_the_reference_white_box_and_character_jobs_keep_outline(tmp_path, monkeypatch):
+    """슬라이드형은 레퍼런스처럼 흰 박스 + 어두운 글자, 캐릭터 영상 자막은 기존 외곽선 스타일 그대로(2026-10-17)."""
+    monkeypatch.setitem(runtime_config._state, "subtitle_theme", "economy")
+    chunks = [{"text": "승인 원문입니다.", "start": 0.0, "duration": 1.5}]
+
+    slide_path = tmp_path / "slide.ass"
+    LongformWorker()._generate_ass(chunks, str(slide_path), scenes=[{"generation_method": "slide", "visual_type": "slide_stock_video"}])
+    slide = slide_path.read_text(encoding="utf-8-sig")
+    style = next(line for line in slide.splitlines() if line.startswith("Style: Main"))
+    fields = style.split(",")
+    assert fields[3] == "&H00181818"      # 어두운 글자
+    assert fields[5] == "&H00FFFFFF"      # 박스(OutlineColour) 흰색
+    assert fields[15] == "3"              # BorderStyle=3 불투명 박스
+    assert "승인 원문입니다." in slide
+
+    character_path = tmp_path / "character.ass"
+    LongformWorker()._generate_ass(chunks, str(character_path), scenes=[{"generation_method": "character"}])
+    assert ",1,5,2,2,70,70,58,1" in character_path.read_text(encoding="utf-8-sig")

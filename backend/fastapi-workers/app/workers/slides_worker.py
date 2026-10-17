@@ -45,6 +45,7 @@ from app.services.slide_sequence import render_sequence_clip
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
     DISCLAIMER_CARD_SECONDS,
+    add_source_credit,
     compose_animated_overlay,
     ensure_board_background,
     plan_slide_overlays,
@@ -750,6 +751,7 @@ class SlidesWorker:
                 out["visual_type"] = "slide_flow"
             if not layers:
                 raise RuntimeError(f"{kind} 렌더링 실패")
+            self._credit_source(layers[0], overlay_plan, capture, spec)
             # 요소가 내레이션 흐름대로 하나씩 나타난다: 레이어마다 시작 시점을 늦춘다.
             step = 0.9 if len(layers) > 1 else 0.0
             last_start = max(duration - 1.0, 0.35)
@@ -779,6 +781,7 @@ class SlidesWorker:
             ):
                 raise RuntimeError("목록 인포그래픽 렌더링 실패")
             spec.update(title=overlay_plan.get("title", ""), items=overlay_plan["items"])
+            self._credit_source(str(overlay_png), overlay_plan, capture, spec)
             out["visual_type"] = "slide_bullet_list"
         elif kind == "stat_chart":
             title, items = overlay_plan.get("title", ""), overlay_plan.get("items") or []
@@ -798,6 +801,9 @@ class SlidesWorker:
             if not render_stat_overlay(title=title, items=items, output_path=str(overlay_png)):
                 raise RuntimeError("통계 오버레이 렌더링 실패")
             spec.update(title=title, items=items)
+            self._credit_source(
+                str(overlay_png), overlay_plan, capture, spec, grounded=bool(overlay_plan.get("use_article_series")),
+            )
             out["visual_type"] = "slide_stat_chart"
         elif kind == "article_card":
             if not capture:
@@ -819,6 +825,25 @@ class SlidesWorker:
         spec["overlay_png"] = str(overlay_png)
         out["slide_layers"]["overlays"].append(spec)
         out["overlay_type"] = kind
+
+    @staticmethod
+    def _credit_source(png_path: str, overlay_plan: dict, capture: dict, spec: dict, grounded: bool = False) -> None:
+        """수치 오버레이에 "자료: 매체"를 붙인다. 그 장면의 기사 인용에 오버레이 수치가 실제로 있을 때만 붙인다
+        (출처를 추정해 잘못 표기하지 않는다). 기사 수치 계열로 만든 그래프는 근거가 확실하므로 바로 붙인다."""
+        publisher = str((capture or {}).get("publisher") or "").strip()
+        if not publisher:
+            return
+        if not grounded:
+            def tokens(text: str) -> set[str]:
+                return {t.replace(",", "") for t in re.findall(r"\d[\d,]*(?:\.\d+)?", text)}
+
+            shown = tokens(json.dumps(
+                [overlay_plan.get(k) for k in ("value", "rows", "items") if overlay_plan.get(k)], ensure_ascii=False,
+            ))
+            if not shown or not shown <= tokens(str(capture.get("quote") or "")):
+                return
+        if add_source_credit(png_path, publisher):
+            spec["source_credit"] = publisher
 
     @staticmethod
     def _banner_schedule(scenes_meta: list, first_index: int | None, target_indexes: set[int]) -> dict[int, dict]:

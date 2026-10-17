@@ -979,3 +979,38 @@ def test_kling_upgrade_runs_selected_scenes_in_parallel_with_one_provider_load(m
 
     assert [s["visual_type"] for s in result["scenes"]] == ["slide_kling_video"] * 3
     assert loads == [1]
+
+
+# ── 자료 출처 표기(2026-10-17): 수치가 그 장면의 기사 인용에 실제로 있을 때만 "자료: 매체"를 붙인다 ──
+
+def _credit_run(monkeypatch, tmp_path, overlay, capture):
+    worker = SlidesWorker()
+    scene = {"content": "외국인이 4조 5128억 원을 던졌습니다.", "start_seconds": 0, "end_seconds": 4}
+    if capture:
+        scene["article_capture"] = capture
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    _fake_composer(monkeypatch)
+    credits = []
+    monkeypatch.setattr(
+        "app.workers.slides_worker.add_source_credit", lambda path, publisher: credits.append(publisher) or True,
+    )
+    monkeypatch.setattr("app.workers.slides_worker.plan_slide_overlays", lambda briefs, **kw: {0: overlay})
+    worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+    return credits
+
+
+def test_source_credit_added_when_overlay_number_is_in_the_scene_article(monkeypatch, tmp_path):
+    credits = _credit_run(
+        monkeypatch, tmp_path, {"type": "big_number", "value": "4조 5128억", "label": "외국인 매도"},
+        {"publisher": "서울신문", "source_title": "제목", "quote": "외국인은 4조 5,128억 원을 순매도했다"},
+    )
+    assert credits == ["서울신문"]
+
+
+def test_no_source_credit_when_number_is_not_in_the_article_or_no_article(monkeypatch, tmp_path):
+    other = {"publisher": "서울신문", "source_title": "제목", "quote": "다른 수치 3.2%만 있는 기사"}
+    assert _credit_run(monkeypatch, tmp_path, {"type": "big_number", "value": "4조 5128억", "label": "x"}, other) == []
+    assert _credit_run(monkeypatch, tmp_path, {"type": "big_number", "value": "4조 5128억", "label": "x"}, None) == []
+    assert _credit_run(monkeypatch, tmp_path, {"type": "key_text", "text": "4조 5128억"},
+                       {"publisher": "서울신문", "source_title": "t", "quote": "4조 5128억"}) == []
