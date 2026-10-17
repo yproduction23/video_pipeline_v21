@@ -378,3 +378,34 @@ def test_the_opening_element_appears_almost_immediately():
     seq = design_sequence(run, plan, llm_call=_llm(DESIGN))
 
     assert min(e["at"] for e in seq["elements"]) <= 0.1 + 1e-6
+
+
+def test_list_is_laid_out_like_the_reference_with_left_aligned_numbered_rows_under_a_rule():
+    """2026-10-17 운영자 요청: 막대·목록 템플릿을 레퍼런스처럼 — 왼쪽 정렬 제목 + 구분선 + 노란 번호가 붙은 항목."""
+    element = {"id": "e1", "kind": "list", "slot": "center", "at": 0.2, "until": 9.0, "anim": "rise", "topic": 1,
+               "content": {"title": "낙폭의 원인", "items": ["실적 훼손", "수급 불안", "금리 상승"]}}
+
+    prims = expand_primitives({"elements": [element]})
+
+    texts = [p for p in prims if p["kind"] == "text"]
+    numbers = [p for p in texts if p["text"] in ("1", "2", "3")]
+    items = [p for p in texts if p["text"] in ("실적 훼손", "수급 불안", "금리 상승")]
+    assert [p["text"] for p in numbers] == ["1", "2", "3"] and len({p["pos"][0] for p in numbers}) == 1  # 번호가 한 줄로 정렬
+    assert all(p.get("align") == "left" for p in [*numbers, *items])
+    assert len({p["pos"][0] for p in items}) == 1 and items[0]["pos"][0] > numbers[0]["pos"][0]
+    assert any(p["kind"] == "rule" for p in prims)  # 제목 아래 구분선
+    assert [p["pos"][1] for p in items] == sorted(p["pos"][1] for p in items)
+    assert all(a["at"] < b["at"] for a, b in zip(items, items[1:]))  # 말하는 순서대로 하나씩
+
+
+def test_bars_have_yellow_value_labels_and_a_baseline_like_the_reference():
+    from app.services.slide_sequence import _bars_sprite
+
+    sprite = _bars_sprite("외국인 순매도", [
+        {"label": "7월", "value": 13.1, "value_text": "13.1조"}, {"label": "10월", "value": 9.9, "value_text": "9.9조"}], 1.0)
+
+    pixels = list(sprite.convert("RGBA").getdata())
+    yellow = [p for p in pixels if p[3] > 200 and p[0] > 230 and 150 < p[1] < 215 and p[2] < 80]
+    assert len(yellow) > 20000  # 막대와 값 글자가 노랗다
+    baseline = sprite.getpixel((30, 130 + 380 + 2))  # 첫 막대 왼쪽 바깥, 막대 바닥 바로 아래
+    assert baseline[3] > 150 and baseline[0] > 180  # 막대 아래 기준선

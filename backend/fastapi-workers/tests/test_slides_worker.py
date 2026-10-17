@@ -840,3 +840,48 @@ def test_stock_usability_is_judged_on_a_mid_clip_frame_not_the_black_fade_in_fir
     )
 
     assert ok is True and checked_at and checked_at[0] >= 1.0
+
+
+def test_stock_miss_uses_kling_when_enabled_and_does_not_pay_twice_for_the_same_scene(monkeypatch, tmp_path):
+    """2026-10-17 운영자 결정: Gemini 대체 이미지가 단조로우면 Kling으로 움직인다(장면당 Gemini ₩339 + Kling ₩490). 재실행에서 같은 장면의
+    클립은 캐시로 재사용해 다시 결제하지 않는다."""
+    import threading
+
+    kling_calls = []
+    ai_calls = []
+
+    def fake_ai(self, **kw):
+        ai_calls.append(kw.get("photo_brief"))
+        image = tmp_path / "bg.png"
+        image.write_bytes(b"png")
+        kw["out"]["image_path"] = str(image)
+        kw["out"]["visual_type"] = "slide_ai_background"
+
+    def fake_kling(**kw):
+        kling_calls.append(kw["scene_key"])
+        Path(kw["output_path"]).write_bytes(b"mp4" * 1000)
+        return {"ok": True, "request_id": "r1"}
+
+    monkeypatch.setattr(SlidesWorker, "_render_pixabay_scene", lambda self, **kw: False)
+    monkeypatch.setattr(SlidesWorker, "_render_ai_background_scene", fake_ai)
+    monkeypatch.setattr(SlidesWorker, "_apply_overlay", lambda self, **kw: None)
+    monkeypatch.setattr("app.workers.slides_worker.generate_slide_kling_clip", fake_kling)
+    monkeypatch.setattr("app.workers.slides_worker.generate_slide_direction", lambda n: {"pexels_query": "office"})
+    kling_state = {"streak": 0, "provider": object(), "provider_loaded": True}
+    state = {"used": 0, "max": 5, "lock": threading.Lock()}
+    scene = {"content": "불안한 투자자가 서류를 봅니다.", "start_seconds": 0, "end_seconds": 4}
+
+    def run(reuse):
+        return SlidesWorker()._render_scene(
+            index=0, scene=scene, job_id=1, job_dir=tmp_path, used_pixabay_ids=set(), overlay_plan=None,
+            base_plan={"background": "stock", "stock_queries": ["confused investor", "office"]},
+            ai_miss_state=state, kling_state=kling_state, reuse_base=reuse,
+        )
+
+    first = run(False)
+    second = run(True)
+
+    assert first["visual_type"] == "slide_kling_video" and first["base_fallback"] == "stock_miss_to_ai"
+    assert ai_calls[0] == "confused investor"  # 계획서의 촬영 설명으로 정지 이미지를 만든다
+    assert kling_calls == ["slide_kling:0"]  # 두 번째 실행은 캐시 재사용(재결제 없음)
+    assert second["visual_type"] == "slide_kling_video" and second["stock_video_path"].endswith("_kling.mp4")

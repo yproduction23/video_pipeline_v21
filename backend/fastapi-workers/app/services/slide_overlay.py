@@ -762,30 +762,30 @@ def render_flow_layers(
 
 
 def render_bullet_overlay(*, title: str, items: list[str], output_path: str, canvas: tuple[int, int] = CANVAS) -> bool:
-    """2~4개 항목을 번호 배지와 함께 보여주는 목록 인포그래픽."""
+    """2~4개 항목을 레퍼런스 목록 카드처럼 보여 준다: 왼쪽 정렬, 노란 태그, 굵은 흰 제목, 구분선, 노란 번호 항목."""
     items = [str(i).strip() for i in items if str(i).strip()][:4]
     if len(items) < 2:
         return False
     try:
         width, height = canvas
-        overlay = Image.new("RGBA", canvas, (0, 0, 0, 140))
+        overlay = Image.new("RGBA", canvas, (0, 0, 0, 150))
         draw = ImageDraw.Draw(overlay)
-        title_font = _font(_FONT_BOLD, 60)
-        item_font = _font(_FONT_BOLD, 56)
-        badge_font = _font(_FONT_BOLD, 44)
-        row_h = 112
-        block_h = (80 if title else 0) + len(items) * row_h
+        tag_font, title_font = _font(_FONT_BOLD, 44), _font(_FONT_BOLD, 88)
+        number_font, item_font = _font(_FONT_BOLD, 84), _font(_FONT_BOLD, 80)
+        row_h = 125
+        block_h = 240 + len(items) * row_h
+        left = 330
         y = (height - block_h) // 2
-        left = int(width * 0.22)
+        draw.text((left, y), "■ 정리", font=tag_font, fill=ACCENT)
         if title:
-            draw.text((left, y), str(title), font=title_font, fill=ACCENT)
-            y += 90
+            draw.text((left, y + 56), str(title), font=title_font, fill=(255, 255, 255, 255))
+        draw.rectangle((left, y + 168, left + 1260, y + 172), fill=(235, 236, 240, 230))
+        y += 220
         for number, item in enumerate(items, start=1):
-            draw.ellipse((left, y + 10, left + 72, y + 82), fill=ACCENT)
-            label = str(number)
-            lw = draw.textlength(label, font=badge_font)
-            draw.text((left + (72 - lw) / 2, y + 22), label, font=badge_font, fill=(16, 20, 32, 255))
-            draw.text((left + 100, y + 14), item, font=item_font, fill=(255, 255, 255, 255))
+            draw.text((left, y), str(number), font=number_font, fill=ACCENT)
+            draw.text((left + 120, y + 2), item, font=item_font, fill=(255, 255, 255, 255))
+            if number < len(items):
+                draw.rectangle((left, y + row_h - 14, left + 1260, y + row_h - 12), fill=(255, 255, 255, 50))
             y += row_h
         return _save(overlay, output_path)
     except Exception:

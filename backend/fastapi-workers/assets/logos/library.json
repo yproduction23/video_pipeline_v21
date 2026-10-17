@@ -1,0 +1,388 @@
+[
+ {
+  "slug": "samsung_electronics",
+  "label": "삼성전자",
+  "aliases": [
+   "삼성",
+   "Samsung"
+  ],
+  "file": "samsung_electronics.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Samsung Electronics logo (hangul).svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Samsung_Electronics_logo_(hangul).svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "sk_hynix",
+  "label": "SK하이닉스",
+  "aliases": [
+   "하이닉스",
+   "SK hynix"
+  ],
+  "file": "sk_hynix.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:SK Hynix.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:SK_Hynix.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "hyundai_motor",
+  "label": "현대차",
+  "aliases": [
+   "현대자동차",
+   "Hyundai"
+  ],
+  "file": "hyundai_motor.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Hyundai Motor Company logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Hyundai_Motor_Company_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "lg_energy_solution",
+  "label": "LG에너지솔루션",
+  "aliases": [
+   "LG엔솔"
+  ],
+  "file": "lg_energy_solution.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:LG Energy Solution logo EN.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:LG_Energy_Solution_logo_EN.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "lg_electronics",
+  "label": "LG전자",
+  "aliases": [
+   "LG"
+  ],
+  "file": "lg_electronics.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:LG Electronics Logo (modern).svg",
+   "page": "https://commons.wikimedia.org/wiki/File:LG_Electronics_Logo_(modern).svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "samsung_biologics",
+  "label": "삼성바이오로직스",
+  "aliases": [
+   "삼성바이오"
+  ],
+  "file": "samsung_biologics.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Samsung Biologics Logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Samsung_Biologics_Logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "celltrion",
+  "label": "셀트리온",
+  "aliases": [],
+  "file": "celltrion.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Celltrion logo.png",
+   "page": "https://commons.wikimedia.org/wiki/File:Celltrion_logo.png",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "posco",
+  "label": "POSCO홀딩스",
+  "aliases": [
+   "포스코",
+   "POSCO"
+  ],
+  "file": "posco.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:POSCO logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:POSCO_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "naver",
+  "label": "네이버",
+  "aliases": [
+   "NAVER"
+  ],
+  "file": "naver.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Naver logo initial.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Naver_logo_initial.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "kb_financial",
+  "label": "KB금융",
+  "aliases": [
+   "KB국민은행",
+   "국민은행",
+   "KB"
+  ],
+  "file": "kb_financial.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:KB logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:KB_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "shinhan",
+  "label": "신한은행",
+  "aliases": [
+   "신한"
+  ],
+  "file": "shinhan.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Shinhan Bank Logo (ENG).svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Shinhan_Bank_Logo_(ENG).svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "hana",
+  "label": "하나금융",
+  "aliases": [
+   "하나은행"
+  ],
+  "file": "hana.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Hana Financial Group Logo (eng).svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Hana_Financial_Group_Logo_(eng).svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "samsung_sdi",
+  "label": "삼성SDI",
+  "aliases": [],
+  "file": "samsung_sdi.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Samsung SDI logo (english).svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Samsung_SDI_logo_(english).svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "hyundai_mobis",
+  "label": "현대모비스",
+  "aliases": [],
+  "file": "hyundai_mobis.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Hyundai Mobis Logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Hyundai_Mobis_Logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "hanwha_aerospace",
+  "label": "한화에어로스페이스",
+  "aliases": [
+   "한화"
+  ],
+  "file": "hanwha_aerospace.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Hanwha Aerospace Logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Hanwha_Aerospace_Logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "doosan_enerbility",
+  "label": "두산에너빌리티",
+  "aliases": [
+   "두산"
+  ],
+  "file": "doosan_enerbility.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Doosan logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Doosan_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "nvidia",
+  "label": "엔비디아",
+  "aliases": [
+   "NVIDIA"
+  ],
+  "file": "nvidia.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Nvidia logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Nvidia_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "micron",
+  "label": "마이크론",
+  "aliases": [
+   "Micron"
+  ],
+  "file": "micron.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Micron Technology logo 2024.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Micron_Technology_logo_2024.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "apple",
+  "label": "애플",
+  "aliases": [
+   "Apple"
+  ],
+  "file": "apple.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Apple logo black.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Apple_logo_black.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "tesla",
+  "label": "테슬라",
+  "aliases": [
+   "Tesla"
+  ],
+  "file": "tesla.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Tesla-cz-logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Tesla-cz-logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "microsoft",
+  "label": "마이크로소프트",
+  "aliases": [
+   "Microsoft"
+  ],
+  "file": "microsoft.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Microsoft logo (2012).svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Microsoft_logo_(2012).svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "coreweave",
+  "label": "코어위브",
+  "aliases": [
+   "CoreWeave"
+  ],
+  "file": "coreweave.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:CoreWeave logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:CoreWeave_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "tsmc",
+  "label": "TSMC",
+  "aliases": [
+   "대만 TSMC"
+  ],
+  "file": "tsmc.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Tsmc-text.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Tsmc-text.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "samsung_life",
+  "label": "삼성생명",
+  "aliases": [],
+  "file": "samsung_life.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:Samsung Life Insurance logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:Samsung_Life_Insurance_logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "kt",
+  "label": "KT",
+  "aliases": [],
+  "file": "kt.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:KT Logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:KT_Logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ },
+ {
+  "slug": "skt",
+  "label": "SK텔레콤",
+  "aliases": [
+   "SKT"
+  ],
+  "file": "skt.png",
+  "source": {
+   "site": "Wikimedia Commons",
+   "title": "File:SK Telecom Logo.svg",
+   "page": "https://commons.wikimedia.org/wiki/File:SK_Telecom_Logo.svg",
+   "license": "Public domain",
+   "retrieved": "2026-10-17"
+  }
+ }
+]

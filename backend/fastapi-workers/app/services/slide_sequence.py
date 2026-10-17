@@ -23,6 +23,7 @@ from typing import Callable
 from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
+from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
 from app.services.slide_templates import expand_topic
 from app.services.slide_overlay import (
     _FONT_BOLD, _FONT_DISPLAY, EMPHASIS_RED, _font, _in_narration, spell_like_narration as _spell_like_narration,
@@ -95,7 +96,10 @@ _SEQUENCE_SYSTEM = (
     "4. 같은 템플릿 안의 항목은 항상 같은 구조여야 한다(둘 다 아이콘+글, 또는 둘 다 숫자+글, 또는 둘 다 글).\n"
     "5. 아이콘은 그 순간 말하는 대상을 직접 그린 것만 쓴다(예: '반도체'→chip, '외국인'→foreigner). 뜻이 정확히 맞지 않으면 "
     "아이콘 없이 글만 쓴다. 같은 아이콘을 구간에서 두 번 쓰지 않는다. 장식용 아이콘은 쓰지 않는다.\n"
-    "6. 글은 핵심어(2~3단어)만. 자막 문장을 그대로 되풀이하지 않는다.\n\n"
+    "6. 글은 핵심어(2~3단어)만. 자막 문장을 그대로 되풀이하지 않는다.\n"
+    "7. 같은 단위의 숫자 2~4개를 비교하면(현재 vs 과거, A사 vs B사, 기간별 수치) 아이콘 비교(compare_pair)보다 막대(bars)를 우선한다 — "
+    "레퍼런스 영상의 가장 대표적인 카드다. 이유·조건·종류를 2~4개 나열하면(\"첫째, 둘째\", \"A와 B와 C\") list를 우선한다. "
+    "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n\n"
     "[템플릿] 주제 객체의 필드: template, scene(구간에 포함된 장면 번호), anchor(그 장면 내레이션에 글자 그대로 있는 구절 — "
     "이 말을 하는 순간에 주제가 시작된다) + 템플릿별 필드.\n"
     '- "title_number": 제목 + 큰 숫자. {"title": 선택, 4~16자 핵심어, "number": {"value": 내레이션에 글자 그대로 있는 숫자 구절 16자 이내, '
@@ -116,6 +120,11 @@ _SEQUENCE_SYSTEM = (
     "- 주제 순서는 시간 순서이며 anchor가 앞 주제보다 뒤여야 한다.\n"
     '출력은 JSON만: {"topics":[{"template":"...","scene":번호,"anchor":"...", ...}]}'
 )
+
+
+def _system_prompt() -> str:
+    hint = logo_prompt_hint()
+    return _SEQUENCE_SYSTEM + ("\n" + hint if hint else "")
 
 
 def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
@@ -304,7 +313,7 @@ def _tight_rect(prim: dict) -> tuple[float, float, float, float]:
     sprite = _sprite_for(prim, 1.0)
     box = sprite.getchannel("A").getbbox() or (0, 0, sprite.width, sprite.height)
     cx, cy = prim["pos"]
-    left, top = cx - sprite.width / 2, cy - sprite.height / 2
+    left, top = (cx if prim.get("align") == "left" else cx - sprite.width / 2), cy - sprite.height / 2
     top = max(min(top, SUBTITLE_SAFE_BOTTOM - sprite.height), 20)  # render_frame과 같은 보정
     return (left + box[0], top + box[1], left + box[2], top + box[3])
 
@@ -474,7 +483,10 @@ class _TemplateContext:
         return _validate_content(kind, content, scene, self.scenes)
 
     def icon(self, name: object) -> str | None:
-        return name if isinstance(name, str) and name in ICON_NAMES else None
+        if isinstance(name, str) and name in ICON_NAMES:
+            return name
+        label = resolve_logo(name)  # 회사 로고(이름·별칭이 정확히 일치할 때만)
+        return f"{LOGO_PREFIX}{label}" if label else None
 
     def time(self, scene: int, anchor: object) -> float:
         target = self._scene(scene)
@@ -655,7 +667,7 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
     failures: list[str] = []
 
     def attempt(extra: str = "") -> list[dict]:
-        raw = _call_llm(_SEQUENCE_SYSTEM, prompt + extra, llm_call=llm_call)
+        raw = _call_llm(_system_prompt(), prompt + extra, llm_call=llm_call)
         cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
         match = re.search(r"\{[\s\S]*\}", cleaned)
         data = json.loads(match.group(0) if match else cleaned)
@@ -804,6 +816,12 @@ def _number_sprite(
 
 
 def _icon_sprite(name: str, size: int = 400) -> Image.Image:
+    if name.startswith(LOGO_PREFIX):
+        logo = logo_sprite(name, height=min(size, 340))
+        if logo is not None:
+            pad = Image.new("RGBA", (logo.width + 40, logo.height + 40), (0, 0, 0, 0))
+            pad.alpha_composite(logo, (20, 20))
+            return pad
     sprite = Image.new("RGBA", (size + 40, size + 40), (0, 0, 0, 0))
     draw_icon(ImageDraw.Draw(sprite), name, (size + 40) // 2, (size + 40) // 2, size)
     return sprite
@@ -838,21 +856,23 @@ def _bars_sprite(title: str, items: list[dict], p: float) -> Image.Image:
     sprite = Image.new("RGBA", (width, base_h + 260), (0, 0, 0, 0))
     draw = ImageDraw.Draw(sprite)
     if title:
-        tw = draw.textlength(title, font=_font(_FONT_BOLD, 58))
-        draw.text(((width - tw) / 2, 0), title, font=_font(_FONT_BOLD, 58), fill=WHITE + (255,))
+        tw = draw.textlength(title, font=_font(_FONT_BOLD, 64))
+        draw.text(((width - tw) / 2, 0), title, font=_font(_FONT_BOLD, 64), fill=WHITE + (255,))
     top = max(float(item.get("value") or 0) for item in items) or 1.0
+    # 레퍼런스 막대 카드: 노란 막대, 막대 위 노란 값 글자, 아래 회색 기준선
+    draw.rectangle((20, 130 + base_h + 1, width - 20, 130 + base_h + 3), fill=(200, 202, 208, 230))
     for k, item in enumerate(items):
         h = max(int(base_h * float(item.get("value") or 0) / top * _ease_out(p)), 6)
-        x = 60 + k * slot + 40
-        draw.rectangle((x, 130 + base_h - h, x + slot - 80, 130 + base_h), fill=ACCENT[:3] + (255,))
+        x = 60 + k * slot + 28
+        draw.rectangle((x, 130 + base_h - h, x + slot - 56, 130 + base_h), fill=ACCENT[:3] + (255,))
         if p > 0.65:
             label = str(item.get("value_text") or "")
-            lw = draw.textlength(label, font=_font(_FONT_BOLD, 46))
-            draw.text((x + (slot - 80 - lw) / 2, 130 + base_h - h - 60), label, font=_font(_FONT_BOLD, 46),
-                      fill=WHITE + (255,))
+            lw = draw.textlength(label, font=_font(_FONT_BOLD, 56))
+            draw.text((x + (slot - 56 - lw) / 2, 130 + base_h - h - 72), label, font=_font(_FONT_BOLD, 56),
+                      fill=ACCENT[:3] + (255,))
         name = str(item.get("label") or "")
-        nw = draw.textlength(name, font=_font(_FONT_BOLD, 40))
-        draw.text((x + (slot - 80 - nw) / 2, 130 + base_h + 20), name, font=_font(_FONT_BOLD, 40), fill=(200, 200, 205, 255))
+        nw = draw.textlength(name, font=_font(_FONT_BOLD, 44))
+        draw.text((x + (slot - 56 - nw) / 2, 130 + base_h + 22), name, font=_font(_FONT_BOLD, 44), fill=(235, 236, 240, 255))
     return sprite
 
 
@@ -917,11 +937,21 @@ def expand_primitives(sequence: dict) -> list[dict]:
             prims.append({**base, "kind": "bars", "at": at, "pos": (cx, cy), "title": content.get("title", ""),
                           "items": content["items"]})
         elif kind == "list":
-            prims.append({**base, "kind": "text", "at": at, "pos": (cx, cy - 250), "text": content["title"],
-                          "size": 72, "color": ACCENT[:3]})
+            # 레퍼런스 목록 카드: 왼쪽 정렬 — 작은 노란 태그, 굵은 흰 제목, 구분선, 노란 번호가 붙은 항목
+            left = 330
+            top = cy - 40 - len(content["items"]) * 62
+            prims.append({**base, "kind": "text", "at": at, "pos": (left, top), "align": "left", "text": "■ 정리", "size": 44,
+                          "color": ACCENT[:3], "max_width": 600})
+            prims.append({**base, "kind": "text", "at": round(at + 0.1, 2), "pos": (left, top + 80), "align": "left",
+                          "text": content["title"], "size": 88, "color": WHITE, "max_width": 1300})
+            prims.append({**base, "kind": "rule", "at": round(at + 0.2, 2), "pos": (left, top + 150), "width": 1260})
             for k, item in enumerate(content["items"]):
-                prims.append({**base, "kind": "text", "at": round(at + 0.55 + k * 0.75, 2),
-                              "pos": (cx, cy - 90 + k * 130), "text": f"{k + 1}  {item}", "size": 84, "color": WHITE})
+                y = top + 240 + k * 125
+                t = round(at + 0.6 + k * 0.8, 2)
+                prims.append({**base, "kind": "text", "at": t, "pos": (left, y), "align": "left", "text": str(k + 1),
+                              "size": 84, "color": ACCENT[:3], "max_width": 120})
+                prims.append({**base, "kind": "text", "at": t, "pos": (left + 120, y), "align": "left", "text": str(item),
+                              "size": 80, "color": WHITE, "max_width": 1100})
         elif kind == "rows":
             prims.append({**base, "kind": "text", "at": at, "pos": (cx, cy - 260), "text": content["headline"],
                           "size": 88, "color": WHITE})
@@ -963,6 +993,10 @@ def _sprite_for(prim: dict, p: float) -> Image.Image:
         return _bars_sprite(prim["title"], prim["items"], p if prim["anim"] == "grow" else 1.0)
     if kind == "row":
         return _row_sprite(prim["label"], prim["value"], prim["color"])
+    if kind == "rule":
+        sprite = Image.new("RGBA", (prim["width"], 8), (0, 0, 0, 0))
+        ImageDraw.Draw(sprite).rectangle((0, 2, prim["width"], 5), fill=(235, 236, 240, 230))
+        return sprite
     return _node_sprite(prim["label"], prim.get("icon"))
 
 
@@ -994,7 +1028,7 @@ def render_frame(base: Image.Image, prims: list[dict], t: float, cache: dict) ->
         if scale != 1.0:
             sprite = sprite.resize((max(1, int(sprite.width * scale)), max(1, int(sprite.height * scale))))
         rise = 0 if prim["anim"] == "pop" else int(40 * (1 - _ease_out(p)))
-        x = int(prim["pos"][0] - sprite.width / 2)
+        x = int(prim["pos"][0] if prim.get("align") == "left" else prim["pos"][0] - sprite.width / 2)
         y = int(prim["pos"][1] - sprite.height / 2)
         y = min(y, SUBTITLE_SAFE_BOTTOM - sprite.height)  # 하단 자막과 겹치지 않게 위로 올린다
         y = max(y, 20) + rise

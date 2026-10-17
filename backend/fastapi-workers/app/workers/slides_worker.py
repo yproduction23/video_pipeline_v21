@@ -478,11 +478,19 @@ class SlidesWorker:
                 if not rendered and planned_background == "stock" and self._claim_ai_replacement(ai_miss_state):
                     # 2026-10-16 운영자 결정: 스톡이 내용과 안 맞으면 회색 배경 대신 Gemini 이미지로 대체한다(영상당 상한).
                     queries = (base_plan or {}).get("stock_queries") or []
+                    brief = str(queries[0]) if queries else ""
                     try:
-                        self._render_ai_background_scene(
-                            index=index, narration=narration, job_id=job_id, job_dir=job_dir, out=out,
-                            reuse_base=reuse_base, photo_brief=str(queries[0]) if queries else "",
-                        )
+                        if kling_state is not None:
+                            # Kling이 켜져 있으면 Gemini 정지 이미지를 Kling 영상으로 움직인다(단조로움 해소).
+                            self._render_kling_scene(
+                                index=index, narration=narration, duration=duration, job_id=job_id, job_dir=job_dir,
+                                out=out, kling_state=kling_state, reuse_base=reuse_base, photo_brief=brief,
+                            )
+                        else:
+                            self._render_ai_background_scene(
+                                index=index, narration=narration, job_id=job_id, job_dir=job_dir, out=out,
+                                reuse_base=reuse_base, photo_brief=brief,
+                            )
                         out["base_fallback"] = "stock_miss_to_ai"
                         out["quality_flags"] = list(dict.fromkeys([
                             *out.get("quality_flags", []), f"stock_miss_ai:{out.get('stock_miss_reason', 'unknown')}",
@@ -951,15 +959,24 @@ class SlidesWorker:
 
     def _render_kling_scene(
         self, *, index: int, narration: str, duration: float, job_id: int,
-        job_dir: Path, out: dict, kling_state: dict, reuse_base: bool = False,
+        job_dir: Path, out: dict, kling_state: dict, reuse_base: bool = False, photo_brief: str = "",
     ) -> None:
         """스톡에 없는 장면: Gemini 배경 정지 이미지를 만들고 Kling으로 움직인다.
         Kling이 실패해도 조용히 넘기지 않고 장면에 사유를 남겨 검수 대상으로 올린다
-        (정지 이미지는 longform이 그대로 쓸 수 있는 안전망)."""
+        (정지 이미지는 longform이 그대로 쓸 수 있는 안전망). 같은 장면의 클립은 캐시로 재사용해 다시 결제하지 않는다."""
+        cache_text = f"{narration}|{photo_brief}" if photo_brief else narration
+        if reuse_base:
+            cached = _read_base_cache(job_dir, index, "kling", cache_text)
+            if cached and cached.get("video_path") and cached.get("image_path"):
+                out["image_path"] = cached["image_path"]
+                out["stock_video_path"] = cached["video_path"]
+                out["visual_type"] = "slide_kling_video"
+                out["base_reused"] = True
+                return
         direction = generate_slide_direction(narration)
         self._render_ai_background_scene(
             index=index, narration=narration, job_id=job_id, job_dir=job_dir, out=out,
-            reuse_base=reuse_base,
+            reuse_base=reuse_base, photo_brief=photo_brief,
         )
         if not kling_state["provider_loaded"]:
             kling_state["provider_loaded"] = True
@@ -986,6 +1003,7 @@ class SlidesWorker:
             out["visual_type"] = "slide_kling_video"
             out["kling_request_id"] = result.get("request_id")
             kling_state["streak"] += 1
+            _write_base_cache(job_dir, index, "kling", cache_text, video_path=str(clip_path), image_path=out["image_path"])
         else:
             out["kling_failure_reason"] = result["reason"]
             out["quality_flags"] = list(dict.fromkeys([
