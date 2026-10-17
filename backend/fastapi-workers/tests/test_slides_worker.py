@@ -1014,3 +1014,70 @@ def test_no_source_credit_when_number_is_not_in_the_article_or_no_article(monkey
     assert _credit_run(monkeypatch, tmp_path, {"type": "big_number", "value": "4조 5128억", "label": "x"}, None) == []
     assert _credit_run(monkeypatch, tmp_path, {"type": "key_text", "text": "4조 5128억"},
                        {"publisher": "서울신문", "source_title": "t", "quote": "4조 5128억"}) == []
+
+
+# ── 같은 스톡을 두 번 쓰지 않는다(2026-10-17): ID가 달라도 화면이 같은 영상은 건너뛴다 ──
+
+def test_frame_signature_matches_same_footage_and_separates_different_footage(tmp_path):
+    from PIL import Image, ImageDraw
+
+    from app.workers.slides_worker import _frame_distance, _frame_signature
+
+    def frame(name, shapes, size=(320, 180)):
+        image = Image.new("RGB", size, (30, 30, 30))
+        draw = ImageDraw.Draw(image)
+        for box, color in shapes:
+            draw.rectangle(box, fill=color)
+        path = tmp_path / name
+        image.save(path)
+        return str(path)
+
+    a = frame("a.png", [((20, 20, 160, 100), (220, 200, 40))])
+    a_resized = frame("a2.png", [((40, 40, 320, 200), (220, 200, 40))], size=(640, 360))  # 같은 장면, 해상도만 다름
+    b = frame("b.png", [((200, 90, 300, 170), (40, 80, 220)), ((10, 10, 90, 60), (200, 60, 60))])
+
+    assert _frame_distance(_frame_signature(a), _frame_signature(a_resized)) <= 8
+    assert _frame_distance(_frame_signature(a), _frame_signature(b)) > 8
+
+
+def _duplicate_stock_setup(monkeypatch, tmp_path, signatures):
+    """검색 결과 3개(9, 10, 11). 다운로드 파일에 URL을 적어 두고, 화면 서명은 URL별로 가짜로 정한다."""
+    worker = SlidesWorker()
+    scenes = [
+        {"content": f"장면 {i} 입니다.", "start_seconds": i * 4, "end_seconds": i * 4 + 4} for i in range(2)
+    ]
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared(scenes))
+    monkeypatch.setattr("app.workers.slides_worker.SLIDE_MAX_WORKERS", 1)  # 장면을 순서대로 처리해 결과를 확정한다
+    _stub_base_layer(monkeypatch, tmp_path, stock=True)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.search_candidates",
+        lambda query, **kw: [{"pixabay_id": i, "download_url": f"https://example/v{i}.mp4", "tags": "t"} for i in (9, 10, 11)],
+    )
+    monkeypatch.setattr("app.workers.slides_worker.select_best_candidate", lambda n, c, **kw: 0)
+    monkeypatch.setattr("app.workers.slides_worker.download_clip", lambda url, path: Path(path).write_bytes(url.encode()))
+    monkeypatch.setattr(
+        "app.workers.slides_worker._stock_signature",
+        lambda video_path: signatures[Path(video_path).read_bytes().decode().rsplit("/", 1)[1]],
+    )
+    return worker
+
+
+def test_near_duplicate_stock_clip_is_skipped_for_the_next_candidate(monkeypatch, tmp_path):
+    # v9와 v10은 화면이 같고(서명 동일) v11만 다르다.
+    worker = _duplicate_stock_setup(monkeypatch, tmp_path, {"v9.mp4": 0b1010, "v10.mp4": 0b1010, "v11.mp4": (1 << 40) - 1})
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    assert [s["pixabay_id"] for s in result["scenes"]] == [9, 11]
+    assert [s["visual_type"] for s in result["scenes"]] == ["slide_stock_video"] * 2
+
+
+def test_scene_falls_to_the_ai_background_when_every_candidate_repeats_a_used_clip(monkeypatch, tmp_path):
+    worker = _duplicate_stock_setup(monkeypatch, tmp_path, {"v9.mp4": 7, "v10.mp4": 7, "v11.mp4": 7})
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    first, second = result["scenes"]
+    assert first["visual_type"] == "slide_stock_video" and first["pixabay_id"] == 9
+    assert second["visual_type"] == "slide_ai_background"
+    assert second["stock_miss_reason"] == "near_duplicate_of_used_clip"

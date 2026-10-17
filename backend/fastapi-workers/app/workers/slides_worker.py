@@ -126,6 +126,55 @@ def _frame_is_usable(frame_path: str) -> bool:
         return True  # 판단할 수 없으면 막지 않는다
 
 
+SIGNATURE_MAX_DISTANCE = 8  # dHash 64비트 중 이만큼 이하로 다르면 같은 화면으로 본다
+MAX_DUPLICATE_RETRIES = 3    # 같은 화면이라 버린 뒤 다른 후보를 다시 고르는 횟수
+
+
+def _frame_signature(frame_path: str) -> int | None:
+    """프레임의 화면 서명(dHash 64비트). 같은 영상을 다른 해상도·ID로 올린 클립도 거의 같은 값이 나온다."""
+    try:
+        from PIL import Image
+
+        with Image.open(frame_path) as image:
+            gray = image.convert("L").resize((9, 8))
+        pixels = list(gray.getdata())
+        bits = 0
+        for row in range(8):
+            for column in range(8):
+                bits = (bits << 1) | (1 if pixels[row * 9 + column] > pixels[row * 9 + column + 1] else 0)
+        return bits
+    except Exception:
+        return None  # 판단할 수 없으면 막지 않는다
+
+
+def _frame_distance(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def _stock_signature(video_path: str) -> int | None:
+    """스톡 클립 중간 프레임(1.2초)의 화면 서명. 첫 프레임은 검은 페이드인인 경우가 많다."""
+    probe = Path(video_path).with_suffix(".sig.png")
+    try:
+        if not _extract_first_frame_at(str(video_path), str(probe), 1.2):
+            return None
+        return _frame_signature(str(probe))
+    finally:
+        probe.unlink(missing_ok=True)
+
+
+class UsedStock(set):
+    """이번 영상에서 이미 쓴 스톡: 클립 ID(set 본체)와 화면 서명. 같은 스톡을 두 번 쓰지 않는다(2026-10-17 운영자 결정)."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.signatures: list[int] = []
+
+    def repeats(self, signature: int | None) -> bool:
+        return signature is not None and any(
+            _frame_distance(signature, used) <= SIGNATURE_MAX_DISTANCE for used in self.signatures
+        )
+
+
 def _prime_used_stock_ids(job_dir: Path, narrations: list[str], keep_indexes: set[int], used_ids: set) -> set[int]:
     """실행 전에, 그대로 두는 장면(캐시 재사용·이번에 다시 만들지 않는 장면)의 스톡 클립 ID를 먼저 등록한다.
 
@@ -138,10 +187,13 @@ def _prime_used_stock_ids(job_dir: Path, narrations: list[str], keep_indexes: se
         pixabay_id = (cached or {}).get("pixabay_id")
         if not pixabay_id:
             continue
-        if pixabay_id in used_ids:
+        signature = _stock_signature(cached["video_path"]) if cached.get("video_path") and hasattr(used_ids, "repeats") else None
+        if pixabay_id in used_ids or (hasattr(used_ids, "repeats") and used_ids.repeats(signature)):
             conflicts.add(index)
         else:
             used_ids.add(pixabay_id)
+            if signature is not None and hasattr(used_ids, "signatures"):
+                used_ids.signatures.append(signature)
     return conflicts
 
 
@@ -227,7 +279,7 @@ class SlidesWorker:
         job_dir.mkdir(parents=True, exist_ok=True)
 
         generated: list[dict] = []
-        used_pixabay_ids: set[int] = set()
+        used_pixabay_ids = UsedStock()
         # 2026-10-15 운영자 결정: 스톡에 없는 장면의 Kling 사용 여부는 평가 중이라
         # 런타임 설정(slide_kling_enabled, 기본 꺼짐)으로 전환한다. 켜면 Kling을
         # 연속 MAX_CONSECUTIVE_KLING개 만든 뒤 다음 폴백 장면은 Gemini 정지
@@ -913,15 +965,21 @@ class SlidesWorker:
         if reuse_base:
             cached = _read_base_cache(job_dir, index, "stock", narration)
             if cached and cached.get("video_path"):
+                cached_signature = _stock_signature(cached["video_path"]) if hasattr(used_pixabay_ids, "repeats") else None
                 with _PIXABAY_LOCK:
-                    used_pixabay_ids.add(cached.get("pixabay_id"))
-                out["stock_video_path"] = cached["video_path"]
-                if cached.get("image_path"):
-                    out["image_path"] = cached["image_path"]
-                out["visual_type"] = "slide_stock_video"
-                out["pixabay_id"] = cached.get("pixabay_id")
-                out["base_reused"] = True
-                return True
+                    repeated = hasattr(used_pixabay_ids, "repeats") and used_pixabay_ids.repeats(cached_signature)
+                    if not repeated:
+                        used_pixabay_ids.add(cached.get("pixabay_id"))
+                        if cached_signature is not None and hasattr(used_pixabay_ids, "signatures"):
+                            used_pixabay_ids.signatures.append(cached_signature)
+                if not repeated:
+                    out["stock_video_path"] = cached["video_path"]
+                    if cached.get("image_path"):
+                        out["image_path"] = cached["image_path"]
+                    out["visual_type"] = "slide_stock_video"
+                    out["pixabay_id"] = cached.get("pixabay_id")
+                    out["base_reused"] = True
+                    return True
         if planned_queries:
             # 계획서의 검색어(장면 맥락을 이미 반영)를 그대로 쓴다. 한국 현장 우선 → 일반 검색 순서.
             direction = {"pexels_query": planned_queries[0], "alt_queries": list(planned_queries[1:])}
@@ -944,78 +1002,101 @@ class SlidesWorker:
                 if generic.lower() not in {q.lower() for q in queries}:
                     queries.append(generic)
 
-        seen_ids: set[int] = set()
-        clip = None
         search_log: list[dict] = []
         out["stock_search_log"] = search_log
-        for position, query in enumerate(queries):
-            try:
-                found = _throttled_search(query, min_duration_seconds=int(min(duration, 3)))
-            except PixabayVideoUnavailableError:
-                if position == 0:
-                    raise  # 첫 검색부터 실패하면 기존처럼 장면 오류로 올린다(조용히 유료 폴백하지 않는다).
-                logger.warning("슬라이드 장면 %s 대체 검색어 조회 실패, 남은 검색어를 건너뜀", index)
-                break
-            fresh = [
-                c for c in found
-                if c["pixabay_id"] not in claimed and c["pixabay_id"] not in seen_ids
-            ]
-            seen_ids.update(c["pixabay_id"] for c in fresh)
-            entry = {"query": query, "found": len(found), "fresh": len(fresh), "selected": False}
-            search_log.append(entry)
-            if not fresh:
-                continue
-            # 계획서가 정한 스톡 장면은 레퍼런스처럼 주제·분위기에 어울리는 일반 영상이면 충분하다.
-            best_index = (
-                select_best_candidate(narration, fresh, relaxed=True, vision=True) if planned_queries
-                else select_best_candidate(narration, fresh)
-            )
-            if best_index is None:
-                continue
-            candidate = fresh[best_index]
-            with _PIXABAY_LOCK:
-                # 병렬 처리 중 다른 장면이 같은 클립을 먼저 가져갔으면 이 후보는 쓰지 않는다.
-                if candidate["pixabay_id"] in used_pixabay_ids:
+        # 같은 화면이라 버린 클립은 다음 선택에서 제외하고 다른 후보를 다시 고른다.
+        for _attempt in range(MAX_DUPLICATE_RETRIES + 1):
+            seen_ids: set[int] = set()
+            clip = None
+            for position, query in enumerate(queries):
+                try:
+                    found = _throttled_search(query, min_duration_seconds=int(min(duration, 3)))
+                except PixabayVideoUnavailableError:
+                    if position == 0:
+                        raise  # 첫 검색부터 실패하면 기존처럼 장면 오류로 올린다(조용히 유료 폴백하지 않는다).
+                    logger.warning("슬라이드 장면 %s 대체 검색어 조회 실패, 남은 검색어를 건너뜀", index)
+                    break
+                fresh = [
+                    c for c in found
+                    if c["pixabay_id"] not in claimed and c["pixabay_id"] not in seen_ids
+                ]
+                seen_ids.update(c["pixabay_id"] for c in fresh)
+                entry = {"query": query, "found": len(found), "fresh": len(fresh), "selected": False}
+                search_log.append(entry)
+                if not fresh:
                     continue
-                used_pixabay_ids.add(candidate["pixabay_id"])
-            clip = candidate
-            entry["selected"] = True
-            out["stock_query"] = query
+                # 계획서가 정한 스톡 장면은 레퍼런스처럼 주제·분위기에 어울리는 일반 영상이면 충분하다.
+                best_index = (
+                    select_best_candidate(narration, fresh, relaxed=True, vision=True) if planned_queries
+                    else select_best_candidate(narration, fresh)
+                )
+                if best_index is None:
+                    continue
+                candidate = fresh[best_index]
+                with _PIXABAY_LOCK:
+                    # 병렬 처리 중 다른 장면이 같은 클립을 먼저 가져갔으면 이 후보는 쓰지 않는다.
+                    if candidate["pixabay_id"] in used_pixabay_ids:
+                        continue
+                    used_pixabay_ids.add(candidate["pixabay_id"])
+                clip = candidate
+                entry["selected"] = True
+                out["stock_query"] = query
+                break
+            if clip is None and out.get("stock_miss_reason") == "near_duplicate_of_used_clip":
+                return False
+            if clip is None:
+                if any(item["fresh"] for item in search_log):
+                    out["stock_miss_reason"] = "candidates_rejected_by_selection"
+                elif any(item["found"] for item in search_log):
+                    out["stock_miss_reason"] = "all_candidates_already_used"
+                else:
+                    out["stock_miss_reason"] = "no_search_results"
+                return False
+            video_path = job_dir / f"scene_{index:03d}_stock.mp4"
+            try:
+                download_clip(clip["download_url"], str(video_path))
+            except PixabayVideoUnavailableError as exc:
+                # 끝내 못 받으면 장면 전체를 실패시키지 않고 스톡 미적중으로 처리한다(AI 이미지·회색 배경으로 내려간다).
+                logger.warning("슬라이드 장면 %s 스톡 클립 다운로드 실패: %s", index, exc)
+                with _PIXABAY_LOCK:
+                    used_pixabay_ids.discard(clip["pixabay_id"])
+                out["stock_miss_reason"] = "download_failed"
+                return False
+            frame_path = job_dir / f"scene_{index:03d}_stock_frame.png"
+            _extract_first_frame(str(video_path), str(frame_path))
+            # 첫 프레임은 검은 페이드인인 경우가 많아, 클립 중간 프레임으로 밝기·단조로움을 판단한다.
+            check_path = job_dir / f"scene_{index:03d}_stock_check.png"
+            checked = _extract_first_frame_at(str(video_path), str(check_path), 1.2)
+            usable = _frame_is_usable(str(check_path)) if checked else True
+            Path(check_path).unlink(missing_ok=True)
+            if not usable:
+                # 안개·흰 하늘뿐인 밝은 영상, 단색 영상: 자막이 안 읽히므로 스톡 미적중으로 처리한다.
+                logger.warning("슬라이드 장면 %s 스톡 클립이 너무 밝거나 단조로워 쓰지 않음", index)
+                with _PIXABAY_LOCK:
+                    used_pixabay_ids.discard(clip["pixabay_id"])
+                for leftover in (video_path, frame_path):
+                    Path(leftover).unlink(missing_ok=True)
+                out["stock_miss_reason"] = "frame_unusable"
+                return False
+            signature = _stock_signature(str(video_path)) if hasattr(used_pixabay_ids, "repeats") else None
+            with _PIXABAY_LOCK:
+                repeated = hasattr(used_pixabay_ids, "repeats") and used_pixabay_ids.repeats(signature)
+                if repeated:
+                    used_pixabay_ids.discard(clip["pixabay_id"])
+                elif signature is not None and hasattr(used_pixabay_ids, "signatures"):
+                    used_pixabay_ids.signatures.append(signature)
+            if repeated:
+                logger.warning("슬라이드 장면 %s 스톡 클립이 이미 쓴 영상과 같은 화면 — 다른 후보를 고름", index)
+                claimed.add(clip["pixabay_id"])
+                for leftover in (video_path, frame_path):
+                    Path(leftover).unlink(missing_ok=True)
+                out["stock_miss_reason"] = "near_duplicate_of_used_clip"
+                continue
+            out["stock_miss_reason"] = None
             break
-        if clip is None:
-            if any(item["fresh"] for item in search_log):
-                out["stock_miss_reason"] = "candidates_rejected_by_selection"
-            elif any(item["found"] for item in search_log):
-                out["stock_miss_reason"] = "all_candidates_already_used"
-            else:
-                out["stock_miss_reason"] = "no_search_results"
+        else:
             return False
-        video_path = job_dir / f"scene_{index:03d}_stock.mp4"
-        try:
-            download_clip(clip["download_url"], str(video_path))
-        except PixabayVideoUnavailableError as exc:
-            # 끝내 못 받으면 장면 전체를 실패시키지 않고 스톡 미적중으로 처리한다(AI 이미지·회색 배경으로 내려간다).
-            logger.warning("슬라이드 장면 %s 스톡 클립 다운로드 실패: %s", index, exc)
-            with _PIXABAY_LOCK:
-                used_pixabay_ids.discard(clip["pixabay_id"])
-            out["stock_miss_reason"] = "download_failed"
-            return False
-        frame_path = job_dir / f"scene_{index:03d}_stock_frame.png"
-        _extract_first_frame(str(video_path), str(frame_path))
-        # 첫 프레임은 검은 페이드인인 경우가 많아, 클립 중간 프레임으로 밝기·단조로움을 판단한다.
-        check_path = job_dir / f"scene_{index:03d}_stock_check.png"
-        checked = _extract_first_frame_at(str(video_path), str(check_path), 1.2)
-        usable = _frame_is_usable(str(check_path)) if checked else True
-        Path(check_path).unlink(missing_ok=True)
-        if not usable:
-            # 안개·흰 하늘뿐인 밝은 영상, 단색 영상: 자막이 안 읽히므로 스톡 미적중으로 처리한다.
-            logger.warning("슬라이드 장면 %s 스톡 클립이 너무 밝거나 단조로워 쓰지 않음", index)
-            with _PIXABAY_LOCK:
-                used_pixabay_ids.discard(clip["pixabay_id"])
-            for leftover in (video_path, frame_path):
-                Path(leftover).unlink(missing_ok=True)
-            out["stock_miss_reason"] = "frame_unusable"
-            return False
+        out.pop("stock_miss_reason", None)
         out["stock_video_path"] = str(video_path)
         # image_path는 의미 정렬 QA와, longform 영상 클립 처리가 실패할 때의
         # 정지 이미지 안전망 둘 다로 쓰인다.
