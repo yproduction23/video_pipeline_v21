@@ -107,36 +107,45 @@ def search_candidates(query: str, *, min_duration_seconds: int = 3, per_page: in
     return results
 
 
-_DOWNLOAD_ATTEMPTS = 4
-_DOWNLOAD_SLOTS = threading.BoundedSemaphore(3)  # 동시 다운로드 제한(한꺼번에 받으면 CDN이 429를 돌려준다)
+_DOWNLOAD_ATTEMPTS = 6
+_DOWNLOAD_SLOTS = threading.BoundedSemaphore(1)  # 순차 다운로드(병렬로 받으면 CDN이 429를 돌려준다 — 2026-10-16 9022 재현)
+_DOWNLOAD_GAP_SECONDS = 1.0
+_last_download_at = 0.0
 
 
 def download_clip(download_url: str, output_path: str) -> None:
-    """클립을 받는다. 429·5xx·연결 실패는 대기 후 재시도한다(2026-10-16 9020 시험 실행: 한꺼번에 받다 13장면 실패)."""
+    """클립을 받는다. 429·5xx·연결 실패는 대기 후 재시도한다(2026-10-16 9020·9022 시험 실행: 병렬로 받다 장면 실패).
+
+    받는 동안에도 슬롯을 잡아 한 번에 하나씩만 내려받는다."""
+    global _last_download_at
     last_error = ""
     response = None
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         try:
             with _DOWNLOAD_SLOTS:
+                gap = _DOWNLOAD_GAP_SECONDS - (time.monotonic() - _last_download_at)
+                if gap > 0:
+                    time.sleep(gap)
                 response = requests.get(download_url, timeout=60, stream=True)
+                if response.status_code == 200:
+                    with open(output_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=1 << 20):
+                            f.write(chunk)
+                    _last_download_at = time.monotonic()
+                    return
+                _last_download_at = time.monotonic()
         except (requests.Timeout, requests.ConnectionError) as exc:
             last_error = f"연결 실패: {exc}"
             response = None
         else:
-            if response.status_code == 200:
-                break
             last_error = f"HTTP {response.status_code}"
             if response.status_code not in (429, 500, 502, 503, 504):
                 break
         if attempt < _DOWNLOAD_ATTEMPTS:
-            wait = 2.0 * attempt
+            wait = 3.0 * attempt  # 3·6·9·12·15초: 속도 제한이 풀릴 시간을 준다
             try:
                 wait = max(wait, min(float(getattr(response, "headers", {}).get("Retry-After", 0)), 30.0))
             except (TypeError, ValueError):
                 pass
             time.sleep(wait)
-    if response is None or response.status_code != 200:
-        raise PixabayVideoUnavailableError(f"Pixabay 클립 다운로드 실패: {last_error}")
-    with open(output_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=1 << 20):
-            f.write(chunk)
+    raise PixabayVideoUnavailableError(f"Pixabay 클립 다운로드 실패: {last_error}")

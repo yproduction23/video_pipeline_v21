@@ -111,6 +111,18 @@ def _read_base_cache(job_dir: Path, index: int, kind: str, narration: str) -> di
     return meta if meta.get("image_path") or meta.get("video_path") else None
 
 
+def _frame_is_usable(frame_path: str) -> bool:
+    """자막이 읽히는 프레임인지: 너무 밝거나(평균 휘도 > 205) 거의 단색(표준편차 < 14)이면 쓰지 않는다."""
+    try:
+        from PIL import Image, ImageStat
+
+        with Image.open(frame_path) as image:
+            stat = ImageStat.Stat(image.convert("L").resize((160, 90)))
+        return stat.mean[0] <= 205 and stat.stddev[0] >= 14
+    except Exception:
+        return True  # 판단할 수 없으면 막지 않는다
+
+
 def _prime_used_stock_ids(job_dir: Path, narrations: list[str], keep_indexes: set[int], used_ids: set) -> set[int]:
     """실행 전에, 그대로 두는 장면(캐시 재사용·이번에 다시 만들지 않는 장면)의 스톡 클립 ID를 먼저 등록한다.
 
@@ -910,6 +922,20 @@ class SlidesWorker:
             return False
         frame_path = job_dir / f"scene_{index:03d}_stock_frame.png"
         _extract_first_frame(str(video_path), str(frame_path))
+        # 첫 프레임은 검은 페이드인인 경우가 많아, 클립 중간 프레임으로 밝기·단조로움을 판단한다.
+        check_path = job_dir / f"scene_{index:03d}_stock_check.png"
+        checked = _extract_first_frame_at(str(video_path), str(check_path), 1.2)
+        usable = _frame_is_usable(str(check_path)) if checked else True
+        Path(check_path).unlink(missing_ok=True)
+        if not usable:
+            # 안개·흰 하늘뿐인 밝은 영상, 단색 영상: 자막이 안 읽히므로 스톡 미적중으로 처리한다.
+            logger.warning("슬라이드 장면 %s 스톡 클립이 너무 밝거나 단조로워 쓰지 않음", index)
+            with _PIXABAY_LOCK:
+                used_pixabay_ids.discard(clip["pixabay_id"])
+            for leftover in (video_path, frame_path):
+                Path(leftover).unlink(missing_ok=True)
+            out["stock_miss_reason"] = "frame_unusable"
+            return False
         out["stock_video_path"] = str(video_path)
         # image_path는 의미 정렬 QA와, longform 영상 클립 처리가 실패할 때의
         # 정지 이미지 안전망 둘 다로 쓰인다.

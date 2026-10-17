@@ -787,3 +787,56 @@ def test_a_failed_stock_download_is_a_stock_miss_not_a_failed_scene(monkeypatch,
 
     assert ok is False and out["stock_miss_reason"] == "download_failed"
     assert 5 not in used  # 못 받은 클립은 다른 장면이 다시 시도할 수 있게 풀어 준다
+
+
+def test_a_blank_or_washed_out_stock_frame_is_rejected_as_unusable(tmp_path):
+    """2026-10-16 9021 시험 영상: 안개·흰 하늘뿐인 밝은 스톡이 뽑혀 자막이 안 읽혔다. 너무 밝거나 단색에 가까운 프레임은 쓰지 않는다."""
+    from PIL import Image
+
+    from app.workers.slides_worker import _frame_is_usable
+
+    washed = tmp_path / "washed.png"
+    Image.new("RGB", (160, 90), (232, 234, 236)).save(washed)
+    flat_dark = tmp_path / "flat.png"
+    Image.new("RGB", (160, 90), (30, 30, 32)).save(flat_dark)
+    good = tmp_path / "good.png"
+    image = Image.new("RGB", (160, 90), (40, 40, 50))
+    for x in range(80, 160):
+        for y in range(90):
+            image.putpixel((x, y), (150, 140, 120))  # 어두운 쪽과 밝은 쪽이 있는 실제 장면 같은 프레임
+    image.save(good)
+
+    assert _frame_is_usable(str(washed)) is False
+    assert _frame_is_usable(str(flat_dark)) is False
+    assert _frame_is_usable(str(good)) is True
+
+
+def test_stock_usability_is_judged_on_a_mid_clip_frame_not_the_black_fade_in_first_frame(monkeypatch, tmp_path):
+    """2026-10-16 9022 시험 실행: 클립 첫 프레임은 검은 페이드인인 경우가 많아 멀쩡한 야경 클립이 6장면 "단색"으로 거절됐다."""
+    from PIL import Image
+
+    candidate = {"pixabay_id": 8, "download_url": "https://example/v.mp4", "tags": "city"}
+    _stock_search_harness(monkeypatch, tmp_path, {"city skyline": [candidate], "business office": [candidate]})
+    checked_at = []
+
+    def fake_frame_at(video, path, seconds):
+        checked_at.append(seconds)
+        image = Image.new("RGB", (160, 90), (30, 30, 40))
+        for x in range(80, 160):
+            for y in range(90):
+                image.putpixel((x, y), (150, 140, 120))
+        image.save(path)
+        return True
+
+    monkeypatch.setattr("app.workers.slides_worker._extract_first_frame_at", fake_frame_at)
+    # 첫 프레임은 완전한 검정(페이드인)
+    monkeypatch.setattr("app.workers.slides_worker._extract_first_frame",
+                        lambda v, p: Image.new("RGB", (160, 90), (0, 0, 0)).save(p) or True)
+    out: dict = {}
+
+    ok = SlidesWorker()._render_pixabay_scene(
+        index=0, narration="문장입니다.", duration=4.0, job_dir=tmp_path, used_pixabay_ids=set(), out=out,
+        planned_queries=["city skyline"],
+    )
+
+    assert ok is True and checked_at and checked_at[0] >= 1.0
