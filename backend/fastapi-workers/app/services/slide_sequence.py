@@ -48,15 +48,15 @@ SLOTS = {
 KINDS = {"text", "number", "icon", "arrow", "bars", "list", "rows", "flow"}
 ANIMS = {"rise", "draw", "count", "grow"}  # 튀어나옴(pop)은 산만해 쓰지 않는다
 # 한 요소가 나타나는 데 걸리는 시간(초)
-ENTER_SECONDS = {"text": 0.45, "number": 0.9, "icon": 0.4, "arrow": 0.7, "bars": 0.9, "row": 0.5, "node": 0.45,
-                 "item": 0.4, "title": 0.4}
+ENTER_SECONDS = {"text": 0.32, "number": 0.7, "icon": 0.32, "arrow": 0.6, "bars": 0.8, "row": 0.4, "node": 0.35,
+                 "item": 0.35, "title": 0.32}
 EXIT_FADE_SECONDS = 0.25
 # 하단 자막(영상 하단 약 y 900 이후)과 겹치지 않도록 요소 아래쪽 한계, 좌우·모서리 자리의 최대 폭.
 SUBTITLE_SAFE_BOTTOM = 890
 SIDE_SLOT_MAX_WIDTH = 820
 WIDE_SLOT_MAX_WIDTH = 1500
 _SIDE_SLOTS = {"left", "right", "upper_left", "upper_right", "lower_left", "lower_right"}
-OPENING_LATEST_SECONDS = 0.3
+OPENING_LATEST_SECONDS = 0.1
 # 2026-10-16 운영자 요청: 구조와 애니메이션 순서는 복잡하지 않고 단순하며 보기 편해야 한다.
 # 20번 Job 1:17~1:33 재현(2초마다 같은 자리에서 서로 다른 아이콘 교체, 빈 화면) 뒤 레퍼런스 10~33초를 다시 분석해
 # 개수 제한이 아니라 "주제 단위로 쌓고, 주제가 바뀔 때만 비운다"로 바꿨다(레퍼런스는 5~6개가 동시에 있어도 짝지어져 읽힌다).
@@ -65,6 +65,7 @@ MAX_TOPIC_SECONDS = 11.0             # 한 주제가 이보다 길게 정지해 
 FIXED_TOPIC_MIN_SECONDS = 2.5        # 템플릿 주제는 합치지 않으므로 이보다 짧으면 버린다
 MAX_ELEMENTS_PER_TEMPLATE = 8
 MIN_ELEMENT_SECONDS = 1.5            # 주제가 끝나기 전 이만큼도 안 남으면 새 요소를 만들지 않는다
+TOPIC_OVERLAP_SECONDS = 0.12         # 주제 전환 때 앞 주제 요소를 남겨 두는 시간(화면이 비는 깜빡임 방지)
 MIN_UPDATE_SECONDS = 1.5             # 같은 종류 숫자를 제자리에서 바꿀 때 앞 값이 머무는 최소 시간
 MAX_ELEMENTS_PER_TOPIC = 5
 RECT_MARGIN = 24                     # 요소 사이 최소 간격(px)
@@ -420,9 +421,11 @@ def resolve_lifetimes(elements: list[dict], duration: float, *, merge_short: boo
     result: list[dict] = []
     for k, group in enumerate(survivors):
         end = survivors[k + 1][0]["at"] if k + 1 < len(survivors) else duration
+        # 주제가 바뀔 때 앞 요소를 잠깐(TOPIC_OVERLAP_SECONDS) 더 남겨 교차한다 — 새 요소가 투명에서 시작해도 화면이 비지 않는다.
+        stay = end + TOPIC_OVERLAP_SECONDS if k + 1 < len(survivors) else end
         for element in group:
             element["topic"] = k + 1
-            element["until"] = round(min(element["until"], end), 2) if "until" in element else round(end, 2)
+            element["until"] = round(min(element["until"], stay), 2) if "until" in element else round(stay, 2)
             element["until"] = round(max(element["until"], element["at"] + 0.6), 2)
             result.append(element)
     result.sort(key=lambda e: e["at"])

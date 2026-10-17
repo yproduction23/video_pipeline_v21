@@ -129,7 +129,7 @@ def test_topics_are_laid_out_by_the_template_and_not_moved_by_the_free_placement
     assert sorted(e["pos"][0] for e in pair_icons) == [560, 1360]
     topic_one_until = {e["until"] for e in seq["elements"] if e["topic"] == 1}
     topic_two_start = min(e["at"] for e in seq["elements"] if e["topic"] == 2)
-    assert topic_one_until == {topic_two_start}  # 주제가 바뀔 때 한꺼번에 사라지고 바로 이어진다
+    assert topic_one_until == {round(topic_two_start + 0.12, 2)}  # 주제가 바뀔 때 한꺼번에 사라지고(잠깐 교차) 바로 이어진다
 
 
 def _design_with_judge(topics, ok):

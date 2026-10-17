@@ -120,7 +120,7 @@ def test_same_topic_accumulates_and_only_a_topic_change_clears_the_screen():
     kept = resolve_lifetimes(elements, 16.0)
 
     until = {e["id"]: e["until"] for e in kept}
-    assert until["a"] == until["b"] == until["c"] == 9.0  # 주제가 끝날 때까지 남는다(2초 만에 교체되지 않는다)
+    assert until["a"] == until["b"] == until["c"] == 9.0 + 0.12  # 주제가 끝날 때까지 남는다(2초 만에 교체되지 않는다), 전환 때 잠깐 교차
     assert until["d"] == 16.0
 
 
@@ -159,7 +159,7 @@ def test_a_topic_with_only_icons_or_arrows_is_dropped_and_the_previous_one_conti
     kept = resolve_lifetimes(elements, 20.0, merge_short=False)
 
     assert [e["id"] for e in kept] == ["a", "b", "e"]
-    assert {e["id"]: e["until"] for e in kept}["a"] == 14.0
+    assert {e["id"]: e["until"] for e in kept}["a"] == 14.0 + 0.12
 
 
 def test_elements_that_would_overlap_are_relocated_or_dropped():
@@ -356,3 +356,25 @@ def test_a_short_topic_slows_the_flow_so_each_step_still_has_time_to_land():
     prims = [p for p in expand_primitives({"elements": [flow]}) if p["kind"] == "node"]
 
     assert prims[-1]["at"] - flow["at"] <= 1.6  # 짧은 주제에서는 간격을 줄여 마지막 단계도 충분히 머문다
+
+
+def test_a_topic_change_overlaps_briefly_so_the_screen_never_flashes_empty():
+    """2026-10-16 9022 시험 영상: 주제가 바뀔 때 앞 요소는 사라지고 새 요소는 투명에서 시작해 화면이 0.25~1초씩 24번 비었다.
+    앞 주제의 요소를 새 주제가 나온 직후까지 잠깐 남겨 교차한다."""
+    elements = [_el("a", "text", "top", 0.3, 1), _el("b", "number", "right", 2.0, 1),
+                _el("c", "text", "top", 8.0, 2), _el("d", "number", "right", 9.0, 2)]
+
+    kept = resolve_lifetimes(elements, 15.0)
+
+    until_first = {e["until"] for e in kept if e["topic"] == 1}
+    assert until_first == {8.0 + 0.12}
+    assert [e["until"] for e in kept if e["topic"] == 2] == [15.0, 15.0]
+
+
+def test_the_opening_element_appears_almost_immediately():
+    plan = _plan(duration=6.0)
+    run = board_runs(plan)[0]
+
+    seq = design_sequence(run, plan, llm_call=_llm(DESIGN))
+
+    assert min(e["at"] for e in seq["elements"]) <= 0.1 + 1e-6
