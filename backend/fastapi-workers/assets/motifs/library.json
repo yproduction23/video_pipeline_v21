@@ -1,0 +1,149 @@
+[
+ {
+  "slug": "dollar_stack",
+  "label": "달러 지폐 더미",
+  "aliases": [
+   "달러",
+   "지폐",
+   "현금",
+   "돈다발"
+  ],
+  "file": "dollar_stack.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "gold_bars",
+  "label": "금괴",
+  "aliases": [
+   "금",
+   "골드",
+   "금값"
+  ],
+  "file": "gold_bars.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "siren",
+  "label": "경광등",
+  "aliases": [
+   "사이렌",
+   "경보",
+   "사이드카",
+   "서킷브레이커"
+  ],
+  "file": "siren.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "chip",
+  "label": "반도체 칩",
+  "aliases": [
+   "반도체",
+   "칩",
+   "메모리"
+  ],
+  "file": "chip.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "investor",
+  "label": "정장 투자자",
+  "aliases": [
+   "투자자",
+   "기관 투자자",
+   "외국인 투자자"
+  ],
+  "file": "investor.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "falling_chart",
+  "label": "하락 막대차트",
+  "aliases": [
+   "하락",
+   "폭락",
+   "급락",
+   "내림세"
+  ],
+  "file": "falling_chart.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "hourglass",
+  "label": "모래시계",
+  "aliases": [
+   "시간",
+   "기간",
+   "타이머"
+  ],
+  "file": "hourglass.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "bank_building",
+  "label": "은행 건물",
+  "aliases": [
+   "은행",
+   "금융기관",
+   "중앙은행"
+  ],
+  "file": "bank_building.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "rocket_chart",
+  "label": "로켓 상승",
+  "aliases": [
+   "로켓",
+   "급등",
+   "상승세"
+  ],
+  "file": "rocket_chart.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-17",
+   "ledger_job": 9100
+  }
+ }
+]

@@ -166,3 +166,54 @@ def test_a_summary_label_containing_a_number_is_never_sent_for_approval():
 
     assert len(calls) == 1  # 숫자가 든 요약 문구는 검수 없이 거절(숫자는 원문 일치만 허용)
     assert seq["source"] == "fallback_overlays"
+
+
+# ── 연속 일수 달력(streak): 달력이 나오고 날짜 칸마다 순서대로 X 표시(2026-10-17 운영자 요청) ──
+
+def _streak_topic(count="8거래일"):
+    return {"template": "streak", "scene": 1, "anchor": "8거래일 연속", "count": count, "title": "외국인 순매도"}
+
+
+def test_streak_draws_a_calendar_for_the_number_of_days_said_in_the_narration():
+    seq = _design([_streak_topic()])
+
+    streaks = _by_kind(seq, "streak")
+    assert len(streaks) == 1
+    assert streaks[0]["content"] == {"count": 8, "phrase": "8거래일"}
+    assert streaks[0]["anim"] == "draw"
+
+
+def test_streak_with_a_day_count_not_in_the_narration_or_out_of_range_is_dropped():
+    assert _by_kind(_design([_streak_topic("9거래일")]), "streak") == []    # 내레이션에 없는 숫자
+    assert _by_kind(_design([_streak_topic("1거래일")]), "streak") == []    # 연속이 아님
+
+
+def test_streak_sprite_marks_one_more_day_as_the_animation_progresses():
+    from app.services.slide_sequence import _streak_sprite
+
+    def red_pixels(p):
+        image = _streak_sprite(8, "8거래일", p)
+        return sum(1 for r, g, b, a in image.getdata() if a > 200 and r > 200 and g < 90 and b < 90)
+
+    assert red_pixels(0.0) == 0
+    assert 0 < red_pixels(0.4) < red_pixels(0.7) < red_pixels(1.0)
+    assert _streak_sprite(8, "8거래일", 1.0).height <= 700     # 하단 자막 영역을 침범하지 않는다
+
+
+def test_streak_splits_eight_days_into_two_even_rows_and_wide_motifs_stay_narrow():
+    from app.services.slide_sequence import MOTIF_MAX_WIDTH, _icon_sprite, _streak_sprite
+
+    sprite = _streak_sprite(8, "8거래일", 1.0)
+    # 4+4 배치: 7+1이면 카드 폭이 7칸 기준이지만 4+4면 4칸 기준이라 훨씬 좁다
+    assert sprite.width < 4 * 170 + 2 * 60 + 5
+    # 가로로 긴 소재(달러 지폐 더미)가 숫자 옆 자리를 침범하지 않는다
+    assert _icon_sprite("motif:달러 지폐 더미", 340).width <= MOTIF_MAX_WIDTH + 40
+
+
+def test_motif_names_and_aliases_are_accepted_as_icons_in_a_designed_topic():
+    topic = {"template": "title_number", "scene": 1, "anchor": "7.57퍼센트", "title": "코스피",
+             "number": {"value": "7.57퍼센트", "label": "폭락"}, "icon": "폭락"}
+    seq = _design([topic])
+
+    icons = _by_kind(seq, "icon")
+    assert [e["content"]["name"] for e in icons] == ["motif:하락 막대차트"]

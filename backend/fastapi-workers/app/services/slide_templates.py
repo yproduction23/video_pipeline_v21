@@ -11,13 +11,15 @@
 - flow         : 2~3단계 연결(아이콘+글 → 아이콘+글 → …)
 - headline_sub : 굵은 빨간 한 줄 + 작은 보조 문구
 - bars / list / rows : 막대 비교, 번호 목록, 숫자 행(화면 전체)
+- streak       : 연속 일수 달력(날짜 칸마다 X 표시가 차례로 그려진다)
 """
 from __future__ import annotations
 
+import re
 from typing import Callable, Protocol
 
 CANVAS_W, CANVAS_H = 1920, 1080
-TEMPLATES = ("title_number", "compare_pair", "flow", "headline_sub", "bars", "list", "rows")
+TEMPLATES = ("title_number", "compare_pair", "flow", "headline_sub", "bars", "list", "rows", "streak")
 OPERATORS = ("+", "vs", "→", "=")
 GRAY = "gray"
 
@@ -174,6 +176,26 @@ def _flow(topic: dict, ctx: Context, scene: int, anchor: str, start: float) -> l
     return [_element("flow", scene, anchor, start, content, (CANVAS_W // 2, 520))]
 
 
+STREAK_MIN_DAYS, STREAK_MAX_DAYS = 2, 14
+
+
+def _streak(topic: dict, ctx: Context, scene: int, anchor: str, start: float) -> list[dict]:
+    """연속 일수 달력. 일수 문구는 내레이션에 글자 그대로 있어야 하고(기존 숫자 검증), 2~14일만 그린다."""
+    raw = str(topic.get("count") or "").strip()
+    number = ctx.content("number", {"value": raw, "label": ""}, scene) if raw else None
+    digits = re.search(r"\d+", str((number or {}).get("value") or ""))
+    if not number or not digits or not STREAK_MIN_DAYS <= int(digits.group()) <= STREAK_MAX_DAYS:
+        return []
+    title = ctx.text(scene, topic.get("title"), "white") if topic.get("title") else None
+    elements: list[dict] = []
+    if title:
+        elements.append(_element("text", scene, anchor, start, title, (CANVAS_W // 2, 170), size=80, max_width=1500))
+    elements.append(_element(
+        "streak", scene, anchor, start + (0.2 if title else 0.0),
+        {"count": int(digits.group()), "phrase": str(number["value"])}, (CANVAS_W // 2, 560), anim="draw"))
+    return elements
+
+
 def _headline_sub(topic: dict, ctx: Context, scene: int, anchor: str, start: float) -> list[dict]:
     headline = ctx.text(scene, topic.get("headline"), "red")
     if not headline:
@@ -206,4 +228,5 @@ _HANDLERS: dict[str, Callable] = {
     "bars": _full_screen("bars", "items"),
     "list": _full_screen("list", "items"),
     "rows": _full_screen("rows", "rows"),
+    "streak": _streak,
 }

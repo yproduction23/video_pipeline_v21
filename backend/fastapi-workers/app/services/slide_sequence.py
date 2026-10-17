@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
+from app.services.slide_motifs import PREFIX as MOTIF_PREFIX, motif_prompt_hint, motif_sprite, resolve_motif
 from app.services.slide_templates import expand_topic
 from app.services.slide_overlay import (
     _FONT_BOLD, _FONT_DISPLAY, EMPHASIS_RED, _font, _in_narration, spell_like_narration as _spell_like_narration,
@@ -46,7 +47,7 @@ SLOTS = {
     "upper_left": (520, 320), "upper_right": (1400, 320),
     "lower_left": (520, 740), "lower_right": (1400, 740),
 }
-KINDS = {"text", "number", "icon", "arrow", "bars", "list", "rows", "flow"}
+KINDS = {"text", "number", "icon", "arrow", "bars", "list", "rows", "flow", "streak"}
 ANIMS = {"rise", "draw", "count", "grow"}  # 튀어나옴(pop)은 산만해 쓰지 않는다
 # 한 요소가 나타나는 데 걸리는 시간(초)
 ENTER_SECONDS = {"text": 0.32, "number": 0.7, "icon": 0.32, "arrow": 0.6, "bars": 0.8, "row": 0.4, "node": 0.35,
@@ -70,10 +71,11 @@ TOPIC_OVERLAP_SECONDS = 0.12         # 주제 전환 때 앞 주제 요소를 �
 MIN_UPDATE_SECONDS = 1.5             # 같은 종류 숫자를 제자리에서 바꿀 때 앞 값이 머무는 최소 시간
 MAX_ELEMENTS_PER_TOPIC = 5
 RECT_MARGIN = 24                     # 요소 사이 최소 간격(px)
-_WIDE_KINDS = {"bars", "list", "rows", "flow"}            # 화면 전체를 쓰는 요소(center 전용)
-_ANCHOR_KINDS = {"text", "number", "bars", "list", "rows", "flow"}  # 주제에는 글자·숫자가 하나 이상 있어야 한다
+_WIDE_KINDS = {"bars", "list", "rows", "flow", "streak"}            # 화면 전체를 쓰는 요소(center 전용)
+_ANCHOR_KINDS = {"text", "number", "bars", "list", "rows", "flow", "streak"}  # 주제에는 글자·숫자가 하나 이상 있어야 한다
 _UPDATABLE_KINDS = {"number", "text"}                     # 같은 종류끼리만 제자리 교체 허용(아이콘은 교체 금지)
 _SLOT_FALLBACKS = ["left", "right", "upper_left", "upper_right", "lower_left", "lower_right", "top", "bottom"]
+MOTIF_MAX_WIDTH = 400                # 소재 일러스트 최대 폭(px)
 MAX_TEXT_CHARS = 16                  # 자막과 같은 문장을 되풀이하지 않도록 핵심어만
 
 _KIND_TO_OVERLAY = {
@@ -110,6 +112,8 @@ _SEQUENCE_SYSTEM = (
     '- "flow": 2~3단계 연결(원인→결과). {"nodes": [{"label": 2~8자, "icon": 선택}, …]} 아이콘은 모두 쓰거나 모두 쓰지 않는다.\n'
     '- "headline_sub": 굵은 빨간 한 줄(핵심 주장) + 작은 보조 문구. {"headline": 4~16자, "sub": 선택, 2~16자}\n'
     '- "bars": 막대 비교. {"title": 18자 이내(숫자 금지), "items": [{"label": 대상, "value_text": 숫자+단위 그대로}] 2~4개}\n'
+    '- "streak": 연속 일수 달력. 내레이션이 "N일(거래일) 연속"을 말할 때 달력이 나오고 날짜 칸마다 X 표시가 차례로 그려진다. '
+    '{"count": 내레이션에 글자 그대로 있는 일수 구절(예: "8거래일", "5일") 2~14일, "title": 선택, 2~12자 핵심어}\n'
     '- "list": 번호 목록. {"title": 18자 이내(숫자 금지), "items": [24자 이내 구절 2~4개]}\n'
     '- "rows": 숫자 행 비교. {"headline": 12자 이내 구절, "rows": [{"label": 6자 이내(숫자 금지), "value": 숫자 구절}] 2~3개}\n'
     "아이콘 이름: " + ", ".join(f"{name}({ICON_HINTS[name]})" for name in ICON_NAMES) + "\n\n"
@@ -123,8 +127,8 @@ _SEQUENCE_SYSTEM = (
 
 
 def _system_prompt() -> str:
-    hint = logo_prompt_hint()
-    return _SEQUENCE_SYSTEM + ("\n" + hint if hint else "")
+    hints = [hint for hint in (logo_prompt_hint(), motif_prompt_hint()) if hint]
+    return _SEQUENCE_SYSTEM + "".join("\n" + hint for hint in hints)
 
 
 def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
@@ -486,7 +490,10 @@ class _TemplateContext:
         if isinstance(name, str) and name in ICON_NAMES:
             return name
         label = resolve_logo(name)  # 회사 로고(이름·별칭이 정확히 일치할 때만)
-        return f"{LOGO_PREFIX}{label}" if label else None
+        if label:
+            return f"{LOGO_PREFIX}{label}"
+        motif = resolve_motif(name)  # 미리 그려 둔 소재 일러스트(이름·별칭이 정확히 일치할 때만)
+        return f"{MOTIF_PREFIX}{motif}" if motif else None
 
     def time(self, scene: int, anchor: object) -> float:
         target = self._scene(scene)
@@ -815,7 +822,54 @@ def _number_sprite(
     return sprite
 
 
+def _streak_sprite(count: int, phrase: str, p: float) -> Image.Image:
+    """연속 일수 달력: 달력 카드가 나오고 날짜 칸(동그라미)마다 X가 차례로 그려진 뒤 일수 문구가 나온다. 날짜 숫자는 쓰지 않는다."""
+    rows = 1 if count <= 7 else 2          # 8일은 4+4처럼 줄을 고르게 나눈다(7+1로 한 칸만 남기지 않는다)
+    cols = -(-count // rows)
+    cell, pad, header, footer = 170, 60, 84, 170
+    width, height = cols * cell + pad * 2, header + rows * cell + pad + footer
+    sprite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(sprite)
+    card_bottom = header + rows * cell + pad
+    card_alpha = int(255 * min(p / 0.12, 1.0))
+    draw.rounded_rectangle((0, 0, width, card_bottom), radius=34, fill=(244, 245, 248, card_alpha))
+    draw.rounded_rectangle((0, 0, width, header + 20), radius=34, fill=ACCENT[:3] + (card_alpha,))
+    draw.rectangle((0, header - 10, width, header + 20), fill=(244, 245, 248, card_alpha))
+    for ring in (width * 0.26, width * 0.74):
+        draw.rounded_rectangle((ring - 9, -14, ring + 9, 34), radius=9, fill=(60, 64, 72, card_alpha))
+    marked = max(0.0, (p - 0.15) / 0.75) * count      # 0..count: 정수 부분은 완성된 X, 소수 부분은 그리는 중인 X
+    for k in range(count):
+        cx = pad + (k % cols) * cell + cell // 2
+        cy = header + pad // 2 + (k // cols) * cell + cell // 2
+        r = 58
+        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=ACCENT[:3] + (card_alpha,), width=8)
+        done = min(max(marked - k, 0.0), 1.0)
+        if done <= 0:
+            continue
+        first, second = min(done / 0.5, 1.0), max((done - 0.5) / 0.5, 0.0)
+        reach = r * 0.78
+        draw.line((cx - reach, cy - reach, cx - reach + 2 * reach * first, cy - reach + 2 * reach * first),
+                  fill=(229, 57, 53, 255), width=14)
+        if second > 0:
+            draw.line((cx + reach, cy - reach, cx + reach - 2 * reach * second, cy - reach + 2 * reach * second),
+                      fill=(229, 57, 53, 255), width=14)
+    if p > 0.92:
+        text = _text_sprite(phrase, 120, ACCENT[:3], max_width=width)
+        alpha = min((p - 0.92) / 0.08, 1.0)
+        text.putalpha(text.getchannel("A").point(lambda v, a=alpha: int(v * a)))
+        sprite.alpha_composite(text, ((width - text.width) // 2, card_bottom + 20))
+    return sprite
+
+
 def _icon_sprite(name: str, size: int = 400) -> Image.Image:
+    if name.startswith(MOTIF_PREFIX):
+        art = motif_sprite(name, height=min(size, 360))
+        if art is not None and art.width > MOTIF_MAX_WIDTH:  # 가로로 긴 소재가 옆의 숫자·글을 침범하지 않게 폭도 제한한다
+            art = art.resize((MOTIF_MAX_WIDTH, max(int(art.height * MOTIF_MAX_WIDTH / art.width), 1)), Image.LANCZOS)
+        if art is not None:
+            pad = Image.new("RGBA", (art.width + 40, art.height + 40), (0, 0, 0, 0))
+            pad.alpha_composite(art, (20, 20))
+            return pad
     if name.startswith(LOGO_PREFIX):
         logo = logo_sprite(name, height=min(size, 340))
         if logo is not None:
@@ -933,6 +987,9 @@ def expand_primitives(sequence: dict) -> list[dict]:
                           "icon_size": element.get("icon_size", 400)})
         elif kind == "arrow":
             prims.append({**base, "kind": "arrow", "at": at, "pos": (cx, cy), "direction": content["direction"]})
+        elif kind == "streak":
+            prims.append({**base, "kind": "streak", "at": at, "pos": (cx, cy), "count": content["count"],
+                          "phrase": content["phrase"], "enter": min(max(1.0 + 0.45 * content["count"], 2.5), 6.5)})
         elif kind == "bars":
             prims.append({**base, "kind": "bars", "at": at, "pos": (cx, cy), "title": content.get("title", ""),
                           "items": content["items"]})
@@ -989,6 +1046,8 @@ def _sprite_for(prim: dict, p: float) -> Image.Image:
         return _icon_sprite(prim["name"], prim.get("icon_size", 400))
     if kind == "arrow":
         return _arrow_sprite(prim["direction"], p if prim["anim"] != "pop" else 1.0, prim.get("size", 300))
+    if kind == "streak":
+        return _streak_sprite(prim["count"], prim["phrase"], p)
     if kind == "bars":
         return _bars_sprite(prim["title"], prim["items"], p if prim["anim"] == "grow" else 1.0)
     if kind == "row":
@@ -1001,7 +1060,7 @@ def _sprite_for(prim: dict, p: float) -> Image.Image:
 
 
 def _animated(prim: dict) -> bool:
-    return prim["kind"] in ("arrow", "bars") or (prim["kind"] == "number" and prim["anim"] == "count")
+    return prim["kind"] in ("arrow", "bars", "streak") or (prim["kind"] == "number" and prim["anim"] == "count")
 
 
 def render_frame(base: Image.Image, prims: list[dict], t: float, cache: dict) -> Image.Image:
@@ -1009,7 +1068,7 @@ def render_frame(base: Image.Image, prims: list[dict], t: float, cache: dict) ->
     for number, prim in enumerate(prims):
         if t < prim["at"] or t >= prim["until"]:
             continue
-        enter = ENTER_SECONDS.get(prim["kind"], 0.45)
+        enter = prim.get("enter") or ENTER_SECONDS.get(prim["kind"], 0.45)
         p = min((t - prim["at"]) / enter, 1.0)
         alpha = min(_ease_out(p) * 1.4, 1.0)
         fade_out = min((prim["until"] - t) / EXIT_FADE_SECONDS, 1.0)
