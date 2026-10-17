@@ -34,15 +34,24 @@ def test_logos_resolve_only_on_an_exact_name_or_alias_and_skip_missing_files(tmp
     assert "삼성전자" in slide_logos.logo_prompt_hint()
 
 
-def test_logo_sprite_is_a_white_card_that_fits_wide_and_square_logos(tmp_path, monkeypatch):
+def test_logo_sprite_has_no_white_card_and_turns_dark_neutral_marks_white(tmp_path, monkeypatch):
+    """2026-10-17 운영자 피드백: "누끼 따서 흰 배경 없이". 배경은 투명, 검은 로고는 흰색으로 바꿔 어두운 화면에서 읽히게 한다."""
     _library(tmp_path, monkeypatch)
+    Image.new("RGBA", (300, 300), (255, 255, 255, 255)).save(tmp_path / "hynix.png")  # 흰 배경 PNG
+    image = Image.open(tmp_path / "hynix.png")
+    for x in range(100, 200):
+        for y in range(100, 200):
+            image.putpixel((x, y), (10, 10, 10, 255))  # 검은 마크
+    image.save(tmp_path / "hynix.png")
+    slide_logos._library.cache_clear()
 
-    wide, square = slide_logos.logo_sprite("삼성전자"), slide_logos.logo_sprite("SK하이닉스")
+    colored, dark = slide_logos.logo_sprite("삼성전자"), slide_logos.logo_sprite("SK하이닉스")
 
-    assert wide.height == square.height == 300
-    assert slide_logos.CARD_MIN_WIDTH <= square.width <= wide.width <= slide_logos.CARD_MAX_WIDTH
-    assert wide.getpixel((10, 150))[:3] == (250, 250, 250)  # 흰 카드
-    assert wide.getpixel((wide.width // 2, 150))[:3] == (20, 40, 160)  # 가운데에 로고
+    assert colored.getpixel((2, 2))[3] == 0 and dark.getpixel((2, 2))[3] == 0  # 모서리는 투명(흰 카드 없음)
+    center = dark.getpixel((dark.width // 2, dark.height // 2))
+    assert center[:3] == (255, 255, 255) and center[3] == 255  # 검은 마크는 흰색으로
+    brand = colored.getpixel((colored.width // 2, colored.height // 2))
+    assert brand[:3] == (20, 40, 160)  # 색이 있는 로고는 색을 지킨다
     assert slide_logos.logo_sprite("없는회사") is None
 
 

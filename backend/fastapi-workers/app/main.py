@@ -1260,6 +1260,8 @@ class ImagesGenerateRequest(BaseModel):
     visual_mode: Optional[str] = None
     # 슬라이드형: true면 편집 계획서만 만들어 저장하고 이미지는 만들지 않는다(비용 0).
     plan_only: Optional[bool] = False
+    # 슬라이드형 후작업(2026-10-17): 이미 만든 Gemini 정지 이미지를 Kling 클립으로 바꾼다. scene_indices와 함께 쓴다.
+    kling_upgrade: Optional[bool] = False
 
 
 @app.post("/workers/images/generate")
@@ -1275,6 +1277,7 @@ def images_generate(request: ImagesGenerateRequest):
                 budget_limit_krw=request.budget_limit_krw,
                 scene_indices=request.scene_indices,
                 plan_only=bool(request.plan_only),
+                kling_upgrade=bool(request.kling_upgrade),
             )
         return get_images_worker().generate(
             tts_meta_json=request.tts_meta,

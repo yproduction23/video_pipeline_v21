@@ -97,6 +97,8 @@ class SlideProgress:
                 item.update(
                     status="failed" if failed else "done",
                     visual_type=out.get("visual_type"),
+                    # 후편집이 얹힌 뒤의 visual_type과 별개로, 배경 층이 무엇인지(Kling 후작업 대상 판단용)
+                    base_type=((out.get("slide_layers") or {}).get("base") or {}).get("type") or out.get("visual_type"),
                     overlay_type=out.get("overlay_type"),
                     has_thumb=thumb,
                     # 돋보기(확대 보기)용: 완성된 장면의 원본 파일. 영상이 있으면 영상을 보여준다.

@@ -12,6 +12,8 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# 2026-10-17 시험: fal 대기열에서 180초를 넘겨 포기한 요청 9/11건이 실패 처리됐다 — 10분까지 기다린다.
+SLIDE_KLING_POLL_TIMEOUT_SEC = 600
 SLIDE_KLING_NEGATIVE = (
     "text, letters, numbers, digits, watermark, logo, signage, subtitles, captions, "
     "face morphing, body distortion, extra people, cartoon, illustration, "
@@ -91,6 +93,7 @@ def generate_slide_kling_clip(
             image_url=start_image_url,
             negative_prompt=prompt["negative_prompt"],
             fal_only=True,
+            poll_timeout_sec=SLIDE_KLING_POLL_TIMEOUT_SEC,
         )
     except Exception as exc:
         audit.after_attempt(attempt_id, outcome="failed")

@@ -479,6 +479,19 @@ public class FastApiClient {
                                                   Float loraScale, String autonomyMode,
                                                   java.math.BigDecimal budgetLimitKrw, String budgetPolicyVersion,
                                                   List<Integer> sceneIndices, String visualMode) {
+        return generateImages(jobId, ttsMetaJson, scriptMetaJson, characterImagePath, characterStylePrompt,
+                characterPosesDir, loraModelId, loraTriggerWord, loraScale, autonomyMode,
+                budgetLimitKrw, budgetPolicyVersion, sceneIndices, visualMode, false);
+    }
+
+    /** klingUpgrade: 슬라이드형 후작업 — 선택 장면의 Gemini 정지 이미지를 Kling 클립으로 바꾼다(2026-10-17). */
+    public ImagesGenerateResponse generateImages(Long jobId, String ttsMetaJson, String scriptMetaJson,
+                                                  String characterImagePath, String characterStylePrompt,
+                                                  String characterPosesDir,
+                                                  String loraModelId, String loraTriggerWord,
+                                                  Float loraScale, String autonomyMode,
+                                                  java.math.BigDecimal budgetLimitKrw, String budgetPolicyVersion,
+                                                  List<Integer> sceneIndices, String visualMode, boolean klingUpgrade) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("job_id", jobId);
@@ -511,6 +524,9 @@ public class FastApiClient {
             // 2026-10-02 사용자 요청: 검토 필요 목록에서 고른 씬만 재시도한다.
             if (sceneIndices != null && !sceneIndices.isEmpty()) {
                 bodyMap.put("scene_indices", sceneIndices);
+            }
+            if (klingUpgrade) {
+                bodyMap.put("kling_upgrade", true);
             }
             return objectMapper.readValue(
                     postJson(fastApiUrl + "/workers/images/generate", bodyMap),

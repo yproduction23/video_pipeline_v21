@@ -23,6 +23,8 @@ from app.providers.base import VideoProvider, GeneratedAsset
 
 logger = logging.getLogger(__name__)
 
+FAL_POLL_TIMEOUT_SEC = 180
+
 
 class KlingProvider(VideoProvider):
     """
@@ -150,7 +152,10 @@ class KlingProvider(VideoProvider):
         if fal_key:
             try:
                 negative_prompt = kwargs.get("negative_prompt")
-                success, req_id = self._generate_fal_api(prompt, output_path, duration, fal_key, image_url, negative_prompt=negative_prompt)
+                success, req_id = self._generate_fal_api(
+                    prompt, output_path, duration, fal_key, image_url, negative_prompt=negative_prompt,
+                    poll_timeout_sec=int(kwargs.get("poll_timeout_sec") or FAL_POLL_TIMEOUT_SEC),
+                )
                 if success:
                     logger.info(f"Fal.ai Kling 비디오 생성 성공: {output_path}")
                     return GeneratedAsset(
@@ -190,7 +195,8 @@ class KlingProvider(VideoProvider):
         self._generate_ffmpeg_fallback(output_path, duration, image_path)
         return GeneratedAsset(asset_type="video", local_path=output_path, duration=duration)
 
-    def _generate_fal_api(self, prompt: str, output_path: str, duration: int, fal_key: str, image_url: str = None, negative_prompt: str = None) -> tuple[bool, str | None]:
+    def _generate_fal_api(self, prompt: str, output_path: str, duration: int, fal_key: str, image_url: str = None, negative_prompt: str = None,
+                          poll_timeout_sec: int = 180) -> tuple[bool, str | None]:
         """
         Fal.ai HTTP Queue API를 통해 Kling 비디오 클립 생성 (비동기 폴링).
 
@@ -262,8 +268,9 @@ class KlingProvider(VideoProvider):
             status_url = resp_json.get("status_url") or f"https://queue.fal.run/{model_id}/requests/{request_id}/status"
             result_url = resp_json.get("response_url") or f"https://queue.fal.run/{model_id}/requests/{request_id}"
             
-            # 최대 180초 폴링
-            for i in range(36):
+            # 기본 180초(36회) 폴링. 슬라이드 Kling 후작업처럼 대기열이 긴 호출은 더 길게 기다린다.
+            polls = max(1, int(poll_timeout_sec) // 5)
+            for i in range(polls):
                 time.sleep(5)
                 status_resp = requests.get(status_url, headers=headers, timeout=30)
                 if status_resp.status_code not in (200, 202):
@@ -272,7 +279,7 @@ class KlingProvider(VideoProvider):
                     
                 status_data = status_resp.json()
                 status = status_data.get("status")
-                logger.info(f"Fal.ai 폴링 [{i+1}/36] 상태: {status}")
+                logger.info(f"Fal.ai 폴링 [{i+1}/{polls}] 상태: {status}")
                 
                 if status == "COMPLETED":
                     res_resp = requests.get(result_url, headers=headers, timeout=30)
@@ -290,7 +297,7 @@ class KlingProvider(VideoProvider):
                 elif status in ("FAILED", "CANCELLED"):
                     logger.error(f"Fal.ai 생성 실패 상태: {status_data}")
                     return False, request_id
-            logger.warning("Fal.ai 폴링 시간 초과 (180초)")
+            logger.warning("Fal.ai 폴링 시간 초과 (%d초) request_id=%s — fal에서 계속 진행·과금될 수 있다", poll_timeout_sec, request_id)
             return False, request_id
         except Exception as e:
             logger.error(f"Fal.ai API 예외 발생: {e}")

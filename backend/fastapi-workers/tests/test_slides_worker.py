@@ -885,3 +885,97 @@ def test_stock_miss_uses_kling_when_enabled_and_does_not_pay_twice_for_the_same_
     assert ai_calls[0] == "confused investor"  # 계획서의 촬영 설명으로 정지 이미지를 만든다
     assert kling_calls == ["slide_kling:0"]  # 두 번째 실행은 캐시 재사용(재결제 없음)
     assert second["visual_type"] == "slide_kling_video" and second["stock_video_path"].endswith("_kling.mp4")
+
+
+# ── Kling 후작업(2026-10-17): 완성된 장면의 Gemini 정지 이미지를 Kling 클립으로 바꾼다 ──
+
+def _kling_upgrade_setup(monkeypatch, tmp_path, scene_count=3):
+    """Kling이 꺼진 기본 흐름으로 먼저 전체를 만들어 Gemini 정지 이미지 캐시를 깔아 둔다."""
+    worker, calls = _stock_miss_worker(monkeypatch, tmp_path, scene_count, [])
+    import app.runtime_config as runtime_config
+
+    monkeypatch.setitem(runtime_config._state, "slide_kling_enabled", False)
+    monkeypatch.setattr(SlidesWorker, "_apply_overlay", lambda self, **kw: None)  # 가짜 PNG는 합성하지 않는다
+    gemini_calls = []
+
+    def fake_bg(prompt_en, output_path, *, job_id, scene_key):
+        gemini_calls.append(scene_key)
+        Path(output_path).write_bytes(b"fake-bg")
+
+    monkeypatch.setattr("app.workers.slides_worker.generate_korean_slide_background", fake_bg)
+    first = worker.generate(job_id=5, tts_meta_json=None, script_meta_json="{}")
+    assert [s["visual_type"] for s in first["scenes"]] == ["slide_ai_background"] * scene_count
+    gemini_calls.clear()
+    return worker, calls, gemini_calls
+
+
+def test_kling_upgrade_turns_cached_gemini_still_into_clip_without_new_gemini_call(monkeypatch, tmp_path):
+    worker, calls, gemini_calls = _kling_upgrade_setup(monkeypatch, tmp_path)
+    kling_calls = []
+
+    def fake_kling(**kw):
+        kling_calls.append((kw["scene_key"], kw["image_path"]))
+        Path(kw["output_path"]).write_bytes(b"fake-mp4")
+        return {"ok": True, "request_id": "r-up"}
+
+    monkeypatch.setattr("app.workers.slides_worker.generate_slide_kling_clip", fake_kling)
+
+    result = worker.generate(job_id=5, tts_meta_json=None, script_meta_json="{}", scene_indices=[1], kling_upgrade=True)
+
+    assert [s["index"] for s in result["scenes"]] == [1]
+    scene = result["scenes"][0]
+    assert scene["visual_type"] == "slide_kling_video"
+    assert scene["stock_video_path"].endswith("scene_001_kling.mp4")
+    assert [key for key, _ in kling_calls] == ["slide_kling:1"]
+    assert kling_calls[0][1].endswith("scene_001_bg.png")
+    assert gemini_calls == []  # 이미 있는 정지 이미지를 쓰므로 Gemini 비용이 다시 나가지 않는다
+    assert "kling_upgrade" in scene["quality_flags"]
+
+
+def test_kling_upgrade_skips_scenes_without_a_gemini_still(monkeypatch, tmp_path):
+    worker, calls, gemini_calls = _kling_upgrade_setup(monkeypatch, tmp_path, scene_count=1)
+    (tmp_path / "jobs" / "5" / "slides" / "scene_000_bg.png").unlink()
+    kling_calls = []
+    monkeypatch.setattr(
+        "app.workers.slides_worker.generate_slide_kling_clip",
+        lambda **kw: kling_calls.append(kw) or {"ok": True},
+    )
+
+    result = worker.generate(job_id=5, tts_meta_json=None, script_meta_json="{}", scene_indices=[0], kling_upgrade=True)
+
+    assert result["scenes"] == []
+    assert kling_calls == [] and gemini_calls == []
+    assert any("Kling으로 바꿀 수 있는" in reason for reason in result["review_reasons"])
+
+
+def test_kling_upgrade_failure_keeps_the_still_and_reports_reason(monkeypatch, tmp_path):
+    worker, calls, gemini_calls = _kling_upgrade_setup(monkeypatch, tmp_path, scene_count=1)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.generate_slide_kling_clip",
+        lambda **kw: {"ok": False, "reason": "kling_request_failed: x"},
+    )
+
+    result = worker.generate(job_id=5, tts_meta_json=None, script_meta_json="{}", scene_indices=[0], kling_upgrade=True)
+
+    scene = result["scenes"][0]
+    assert scene["visual_type"] == "slide_ai_background"
+    assert scene["kling_failure_reason"] == "kling_request_failed: x"
+    assert gemini_calls == []
+    assert result["requires_manual_review"] is True
+
+
+def test_kling_upgrade_runs_selected_scenes_in_parallel_with_one_provider_load(monkeypatch, tmp_path):
+    worker, calls, gemini_calls = _kling_upgrade_setup(monkeypatch, tmp_path, scene_count=3)
+    loads = []
+    monkeypatch.setattr("app.providers.factory.get_video_provider", lambda: loads.append(1) or object())
+
+    def fake_kling(**kw):
+        Path(kw["output_path"]).write_bytes(b"fake-mp4")
+        return {"ok": True, "request_id": kw["scene_key"]}
+
+    monkeypatch.setattr("app.workers.slides_worker.generate_slide_kling_clip", fake_kling)
+
+    result = worker.generate(job_id=5, tts_meta_json=None, script_meta_json="{}", scene_indices=[0, 1, 2], kling_upgrade=True)
+
+    assert [s["visual_type"] for s in result["scenes"]] == ["slide_kling_video"] * 3
+    assert loads == [1]

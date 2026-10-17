@@ -10,7 +10,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageFilter
 
 logger = logging.getLogger(__name__)
 
@@ -60,28 +60,61 @@ def logo_prompt_hint(directory: Path | str | None = None) -> str:
     return "회사 로고(icon 필드에 이 이름을 그대로 쓰면 로고가 그려진다): " + ", ".join(library)
 
 
+def _cutout(logo: Image.Image) -> Image.Image:
+    """흰 배경을 없애고(누끼), 어두운 무채색 글자·마크는 흰색으로 바꿔 어두운 화면에서도 읽히게 한다."""
+    logo = logo.convert("RGBA")
+    pixels = logo.load()
+    width, height = logo.size
+    corners = [pixels[0, 0], pixels[width - 1, 0], pixels[0, height - 1], pixels[width - 1, height - 1]]
+    opaque_white_background = all(c[3] > 240 and min(c[:3]) > 235 for c in corners)
+    for y in range(height):
+        for x in range(width):
+            r, g, b, a = pixels[x, y]
+            if a == 0:
+                continue
+            if opaque_white_background and min(r, g, b) > 235:
+                pixels[x, y] = (255, 255, 255, 0)
+                continue
+            luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            if luminance < 95 and max(r, g, b) - min(r, g, b) < 45:  # 검정·짙은 회색 → 흰색
+                pixels[x, y] = (255, 255, 255, a)
+    return logo
+
+
+def _with_rim(logo: Image.Image, radius: int = 5) -> Image.Image:
+    """로고 둘레에 얇은 밝은 테두리를 둬 짙은 색 로고도 어두운 배경에서 분리되게 한다."""
+    alpha = logo.getchannel("A")
+    grown = alpha.filter(ImageFilter.MaxFilter(radius * 2 + 1))
+    rim = Image.new("RGBA", logo.size, (245, 245, 248, 0))
+    rim.putalpha(grown.point(lambda v: int(v * 0.8)))
+    rim.alpha_composite(logo)
+    return rim
+
+
 def logo_sprite(name: str, directory: Path | str | None = None, height: int = CARD_HEIGHT) -> Image.Image | None:
-    """흰 둥근 카드 위에 로고를 올린 스프라이트. 로고를 못 찾으면 None."""
+    """배경 없이(누끼) 로고만 그린 스프라이트. 로고를 못 찾으면 None."""
     label = resolve_logo(name, directory)
     if not label:
         return None
     entry = _library(str(directory or LOGO_DIR))["labels"][label]
     try:
         with Image.open(entry["path"]) as source:
-            logo = source.convert("RGBA")
+            logo = _cutout(source.copy())
     except OSError:
         logger.warning("로고 파일을 열지 못함: %s", entry.get("path"))
         return None
+    box = logo.getchannel("A").getbbox()
+    if box:
+        logo = logo.crop(box)  # 투명 여백 제거
     scale = height / CARD_HEIGHT
-    inner_h = int(height * 0.62)
+    target_h = int(height * 0.7)
+    max_w = int(CARD_MAX_WIDTH * scale)
     ratio = logo.width / max(logo.height, 1)
-    inner_w = int(inner_h * ratio)
-    card_w = int(min(max(inner_w + 90 * scale, CARD_MIN_WIDTH * scale), CARD_MAX_WIDTH * scale))
-    if inner_w > card_w - 70 * scale:  # 아주 가로로 긴 로고는 폭에 맞춘다
-        inner_w = int(card_w - 70 * scale)
-        inner_h = int(inner_w / max(ratio, 0.01))
-    logo = logo.resize((max(inner_w, 1), max(inner_h, 1)), Image.LANCZOS)
-    card = Image.new("RGBA", (card_w, height), (0, 0, 0, 0))
-    ImageDraw.Draw(card).rounded_rectangle((0, 0, card_w - 1, height - 1), radius=int(34 * scale), fill=(250, 250, 250, 255))
-    card.alpha_composite(logo, ((card_w - logo.width) // 2, (height - logo.height) // 2))
-    return card
+    target_w = int(target_h * ratio)
+    if target_w > max_w:
+        target_w, target_h = max_w, int(max_w / max(ratio, 0.01))
+    logo = logo.resize((max(target_w, 1), max(target_h, 1)), Image.LANCZOS)
+    pad = 8
+    canvas = Image.new("RGBA", (logo.width + pad * 2, logo.height + pad * 2), (0, 0, 0, 0))
+    canvas.alpha_composite(logo, (pad, pad))
+    return _with_rim(canvas)

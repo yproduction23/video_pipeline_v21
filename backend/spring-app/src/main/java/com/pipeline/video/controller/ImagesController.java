@@ -33,7 +33,8 @@ public class ImagesController {
             @RequestBody(required = false) ImagesGenerateRequest request,
             @AuthenticationPrincipal String username) {
         List<Integer> sceneIndices = request == null ? null : request.getSceneIndices();
-        return ResponseEntity.ok(imagesService.generate(jobId, username, sceneIndices));
+        boolean klingUpgrade = request != null && request.isKlingUpgrade();
+        return ResponseEntity.ok(imagesService.generate(jobId, username, sceneIndices, klingUpgrade));
     }
 
     /** 슬라이드형 씬별 생성 진행 상황: 장면 분할 개수와 지금까지 만들어진 장면. */

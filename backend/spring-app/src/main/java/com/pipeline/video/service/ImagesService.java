@@ -103,6 +103,15 @@ public class ImagesService {
             ImageProviderTemporarilyUnavailableException.class
     })
     public ImagesGenerateResponse generate(Long jobId, String username, List<Integer> sceneIndices) {
+        return generate(jobId, username, sceneIndices, false);
+    }
+
+    /** klingUpgrade가 true면 선택한 장면의 Gemini 정지 이미지를 Kling 클립으로 바꾼다(슬라이드형 후작업). */
+    @Transactional(noRollbackFor = {
+            ImageProviderRetryRequiredException.class,
+            ImageProviderTemporarilyUnavailableException.class
+    })
+    public ImagesGenerateResponse generate(Long jobId, String username, List<Integer> sceneIndices, boolean klingUpgrade) {
         VideoJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
 
@@ -124,6 +133,9 @@ public class ImagesService {
 
         // 슬라이드형: 수동·가이드 모드는 편집 계획서를 확인한 뒤에만 이미지를 만든다(비용이 나가는 단계).
         // AUTO는 자동화 목적상 워커가 계획서를 만들고 이어서 생성한다. 일부 장면 재생성은 기존 계획서를 쓴다.
+        if (klingUpgrade && (job.getVisualMode() != VisualMode.SLIDE || sceneIndices == null || sceneIndices.isEmpty())) {
+            throw new IllegalStateException("Kling 후작업은 슬라이드형 작업에서 바꿀 장면을 골라야 실행할 수 있습니다.");
+        }
         if (job.getVisualMode() == VisualMode.SLIDE && !autonomyService.isAuto(job)
                 && (sceneIndices == null || sceneIndices.isEmpty())) {
             Map<String, Object> planResponse = fastApiClient.getSlideEditPlan(jobId);
@@ -173,12 +185,17 @@ public class ImagesService {
 
         ImagesGenerateResponse result;
         try {
-            result = fastApiClient.generateImages(
-                    jobId, ttsMetaJson, scriptMetaJson, character.imagePath(), character.stylePrompt(), character.posesDir(),
-                    character.loraModelId(), character.loraTriggerWord(), character.loraScale(),
-                    job.getAutonomy() == null ? null : job.getAutonomy().name(),
-                    remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION, sceneIndices,
-                    job.getVisualMode() == null ? null : job.getVisualMode().name());
+            String visualModeName = job.getVisualMode() == null ? null : job.getVisualMode().name();
+            String autonomyName = job.getAutonomy() == null ? null : job.getAutonomy().name();
+            result = klingUpgrade
+                    ? fastApiClient.generateImages(
+                            jobId, ttsMetaJson, scriptMetaJson, character.imagePath(), character.stylePrompt(), character.posesDir(),
+                            character.loraModelId(), character.loraTriggerWord(), character.loraScale(), autonomyName,
+                            remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION, sceneIndices, visualModeName, true)
+                    : fastApiClient.generateImages(
+                            jobId, ttsMetaJson, scriptMetaJson, character.imagePath(), character.stylePrompt(), character.posesDir(),
+                            character.loraModelId(), character.loraTriggerWord(), character.loraScale(), autonomyName,
+                            remainingBudget, PricingConfig.GEMINI_IMAGE_ONLY_POLICY_VERSION, sceneIndices, visualModeName);
         } catch (RuntimeException e) {
             if (isImageGenerationAlreadyRunning(e)) {
                 // GUIDED 화면의 명시적 생성 요청과 Temporal 재개가 동시에 도착할

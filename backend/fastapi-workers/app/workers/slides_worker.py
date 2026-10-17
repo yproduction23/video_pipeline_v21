@@ -71,6 +71,8 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 # 스톡이 없어 Kling으로 만든 장면이 이 개수만큼 이어지면 다음 폴백은 Gemini 정지
 # 이미지로 대체한다(비용·시각 리듬 상한, 운영자 결정 2026-10-15).
 MAX_CONSECUTIVE_KLING = 2
+# Kling 후작업의 동시 요청 수: 요청 1건이 수 분 걸려 직렬이면 너무 느리고, 너무 많으면 공급자 대기열에서 시간 초과가 난다.
+KLING_UPGRADE_MAX_WORKERS = 3
 
 # 배경 층 병렬 생성 동시 작업 수. Kling을 켜면 연속 규칙 때문에 순차 처리한다.
 SLIDE_MAX_WORKERS = max(1, int(os.getenv("SLIDE_MAX_WORKERS", "6")))
@@ -197,6 +199,7 @@ class SlidesWorker:
         budget_limit_krw: int | None = None,
         scene_indices: list[int] | None = None,
         plan_only: bool = False,
+        kling_upgrade: bool = False,
         **_ignored_character_kwargs,
     ) -> dict:
         """**_ignored_character_kwargs: character_image_path/style/poses_dir,
@@ -204,7 +207,7 @@ class SlidesWorker:
         받기만 하고 쓰지 않는다 — Spring이 images_worker와 같은 호출부로
         두 워커를 모두 부를 수 있게 한다."""
         progress = _NullProgress() if plan_only else SlideProgress(
-            job_id, DATA_DIR, keep_existing=scene_indices is not None,
+            job_id, DATA_DIR, keep_existing=scene_indices is not None or kling_upgrade,
         )
         progress.preparing()
         try:
@@ -228,18 +231,47 @@ class SlidesWorker:
         # 런타임 설정(slide_kling_enabled, 기본 꺼짐)으로 전환한다. 켜면 Kling을
         # 연속 MAX_CONSECUTIVE_KLING개 만든 뒤 다음 폴백 장면은 Gemini 정지
         # 이미지로 대체하고 카운터를 리셋한다(장면 순서대로 처리).
+        # 2026-10-17 운영자 결정: Kling은 기본 흐름에서 빼고 완성된 영상의 후작업(kling_upgrade)으로 쓴다.
+        # 후작업은 이미 만든 Gemini 정지 이미지를 움직이므로 Gemini 비용이 다시 나가지 않는다.
         kling_state = (
             {"streak": 0, "provider": None, "provider_loaded": False}
-            if bool(runtime_config.value("slide_kling_enabled")) else None
+            if kling_upgrade or bool(runtime_config.value("slide_kling_enabled")) else None
         )
         targets = [
             (index, scene) for index, scene in enumerate(scenes_meta)
             if scene_indices is None or index in scene_indices
         ]
+        skipped_for_kling: list[int] = []
+        if kling_upgrade:
+            saved_plan = load_plan(job_id, DATA_DIR)
+            saved_scenes = {item["index"]: item for item in (saved_plan or {}).get("scenes", [])}
+            eligible = []
+            for index, scene in targets:
+                brief = self._kling_upgrade_brief(saved_scenes.get(index))
+                if self._cached_ai_still(job_dir, index, scene, brief):
+                    eligible.append((index, scene))
+                else:
+                    skipped_for_kling.append(index)
+            targets = eligible
+            if targets:
+                self._load_kling_provider(kling_state)  # 병렬 장면이 공급자를 동시에 만들지 않게 먼저 한 번 연다
         # 사용자 요청(2026-10-15): 장면이 몇 개로 나뉘었는지 먼저 알리고, 끝난 장면을
         # 하나씩 UI에 쌓아 보여준다(progress.json + 썸네일, UI가 폴링).
         def narration_of(scene: dict) -> str:
             return str(scene.get("subtitle_text") or scene.get("content") or scene.get("text") or "").strip()
+
+        if kling_upgrade and not targets:
+            progress.finish("completed")
+            return {
+                "job_id": job_id, "scenes": [], "scene_count": 0, "gifs": [], "gif_count": 0,
+                "tts_subtitle_sync": prepared.tts_subtitle_sync, "evidence_audit": prepared.evidence_audit,
+                "visual_mode": "SLIDE", "requires_manual_review": True,
+                "review_reasons": [
+                    "Kling으로 바꿀 수 있는 AI 배경 장면이 없습니다 — Gemini 정지 이미지가 있는 장면만 바꿀 수 있습니다"
+                    f"(건너뜀: {skipped_for_kling})."
+                ],
+                "edit_plan": None,
+            }
 
         progress.start([{"index": index, "text": narration_of(scene)} for index, scene in targets])
 
@@ -337,14 +369,17 @@ class SlidesWorker:
                 sequence=sequences_by_scene.get(index), ai_miss_state=ai_miss_state,
                 # 전체 실행에서만 배경을 재사용한다. 단일 장면 다시 생성은 새 결과를 원하는 요청이다.
                 reuse_base=scene_indices is None and index not in cache_conflicts,
+                kling_upgrade=kling_upgrade,
             )
             progress.scene_done(index, out)
             return out
 
         try:
-            if kling_state is None and len(targets) > 1:
+            if (kling_state is None or kling_upgrade) and len(targets) > 1:
                 # 배경 층은 장면끼리 독립이라 병렬로 만든다(map이 순서를 보존한다).
-                with ThreadPoolExecutor(max_workers=SLIDE_MAX_WORKERS) as pool:
+                # Kling 후작업은 요청이 길어(수 분) 동시 요청 수를 제한한다.
+                workers = min(SLIDE_MAX_WORKERS, KLING_UPGRADE_MAX_WORKERS) if kling_upgrade else SLIDE_MAX_WORKERS
+                with ThreadPoolExecutor(max_workers=workers) as pool:
                     generated.extend(pool.map(render, targets))
             else:
                 generated.extend(render(item) for item in targets)
@@ -380,6 +415,8 @@ class SlidesWorker:
             for scene in generated
             if scene.get("slide_generation_error")
         ]
+        if skipped_for_kling:
+            review_reasons.append(f"Kling으로 바꿀 수 없어 건너뛴 장면(Gemini 정지 이미지 없음): {skipped_for_kling}")
         review_reasons += [
             f"장면 {scene['index']}: Kling 생성 실패로 정지 이미지 사용 ({scene.get('kling_failure_reason')})"
             for scene in generated
@@ -429,6 +466,7 @@ class SlidesWorker:
         used_pixabay_ids: set[int], kling_state: dict | None = None,
         overlay_plan: dict | None = None, banner: dict | None = None, reuse_base: bool = False,
         base_plan: dict | None = None, sequence: dict | None = None, ai_miss_state: dict | None = None,
+        kling_upgrade: bool = False,
     ) -> dict:
         narration = str(
             scene.get("subtitle_text") or scene.get("content") or scene.get("text") or ""
@@ -453,7 +491,16 @@ class SlidesWorker:
         try:
             board_path = job_dir / "board_background_v4.png"
             planned_background = (base_plan or {}).get("background")
-            if planned_background == "board" or (
+            if kling_upgrade:
+                # 후작업: 이미 만든 Gemini 정지 이미지를 Kling 클립으로 움직인다(새 Gemini 호출 없음).
+                self._render_kling_scene(
+                    index=index, narration=narration, duration=duration, job_id=job_id, job_dir=job_dir,
+                    out=out, kling_state=kling_state, reuse_base=True,
+                    photo_brief=self._kling_upgrade_brief(base_plan),
+                )
+                out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "kling_upgrade"]))
+                rendered = True
+            elif planned_background == "board" or (
                 not base_plan and overlay_plan and overlay_plan.get("explain")
             ):
                 if not ensure_board_background(str(board_path)):
@@ -957,6 +1004,34 @@ class SlidesWorker:
         )
         return True
 
+    @staticmethod
+    def _load_kling_provider(kling_state: dict) -> None:
+        if kling_state["provider_loaded"]:
+            return
+        kling_state["provider_loaded"] = True
+        try:
+            from app.providers.factory import get_video_provider
+
+            kling_state["provider"] = get_video_provider()
+        except Exception:
+            logger.exception("Kling 비디오 프로바이더 로드 실패")
+
+    @staticmethod
+    def _kling_upgrade_brief(base_plan: dict | None) -> str:
+        """Gemini 정지 이미지를 만들 때 쓴 촬영 설명(캐시 키) — 사진 장면은 photo_brief, 스톡 대체는 첫 검색어."""
+        plan = base_plan or {}
+        if plan.get("background") == "photo":
+            return str(plan.get("photo_brief") or "")
+        queries = plan.get("stock_queries") or []
+        return str(queries[0]) if plan.get("background") == "stock" and queries else ""
+
+    @staticmethod
+    def _cached_ai_still(job_dir: Path, index: int, scene: dict, brief: str) -> bool:
+        narration = str(scene.get("subtitle_text") or scene.get("content") or scene.get("text") or "").strip()
+        cache_text = f"{narration}|{brief}" if brief else narration
+        cached = _read_base_cache(job_dir, index, "bg", cache_text)
+        return bool(cached and cached.get("image_path"))
+
     def _render_kling_scene(
         self, *, index: int, narration: str, duration: float, job_id: int,
         job_dir: Path, out: dict, kling_state: dict, reuse_base: bool = False, photo_brief: str = "",
@@ -978,14 +1053,7 @@ class SlidesWorker:
             index=index, narration=narration, job_id=job_id, job_dir=job_dir, out=out,
             reuse_base=reuse_base, photo_brief=photo_brief,
         )
-        if not kling_state["provider_loaded"]:
-            kling_state["provider_loaded"] = True
-            try:
-                from app.providers.factory import get_video_provider
-
-                kling_state["provider"] = get_video_provider()
-            except Exception:
-                logger.exception("Kling 비디오 프로바이더 로드 실패")
+        self._load_kling_provider(kling_state)
         clip_path = job_dir / f"scene_{index:03d}_kling.mp4"
         result = generate_slide_kling_clip(
             video_provider=kling_state["provider"],

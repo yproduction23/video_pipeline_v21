@@ -6,6 +6,7 @@ import com.pipeline.video.domain.AssetType;
 import com.pipeline.video.domain.GateName;
 import com.pipeline.video.domain.JobStatus;
 import com.pipeline.video.domain.VideoJob;
+import com.pipeline.video.domain.VisualMode;
 import com.pipeline.video.dto.ImagesGenerateResponse;
 import com.pipeline.video.dto.SceneImageDto;
 import com.pipeline.video.repository.AssetRepository;
@@ -248,6 +249,26 @@ class ImagesServiceAutoGateTest {
         imagesService.generate(1L, "SONG", List.of(1, 3));
 
         verify(fastApiClient).generateImages(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), eq(List.of(1, 3)), any());
+    }
+
+    @Test
+    void klingUpgradeRequiresSlideModeAndSelectedScenes() {
+        VideoJob job = new VideoJob();
+        job.setId(1L);
+        job.setStatus(JobStatus.IMAGES_PENDING);
+        job.setVisualMode(VisualMode.SLIDE);
+        when(jobRepository.findById(1L)).thenReturn(Optional.of(job));
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> imagesService.generate(1L, "SONG", null, true));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> imagesService.generate(1L, "SONG", List.of(), true));
+
+        job.setVisualMode(VisualMode.CHARACTER);
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+                () -> imagesService.generate(1L, "SONG", List.of(2), true));
+        verify(fastApiClient, org.mockito.Mockito.never()).generateImages(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), anyBoolean());
     }
 
     /**

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Loader, CheckCircle, AlertTriangle, RotateCcw, ZoomIn, X } from 'lucide-react'
+import { Loader, CheckCircle, AlertTriangle, RotateCcw, ZoomIn, X, Film } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import apiClient from '../api/client'
 import { jobsApi } from '../api/jobs'
+
+// Kling 5초 클립 1개의 예상 비용(원). 2026-10-17 시험 장부 기준이며 실제 청구액은 fal 콘솔로 대조한다.
+const KLING_CLIP_KRW = 490
 
 const TYPE_LABEL = {
   slide_stock_video: '스톡 영상',
@@ -105,6 +108,26 @@ export default function SlideProgressPanel({ jobId, running }) {
     }
   }
 
+  // 후작업(2026-10-17 운영자 결정): Kling은 기본 흐름에서 빼고, 완성된 장면 중 단조로운 AI 배경만 골라 영상으로 바꾼다.
+  const klingCandidates = scenes.filter(s => s.status === 'done' && s.base_type === 'slide_ai_background').map(s => s.index)
+  const klingUpgrade = async (indexes) => {
+    if (!indexes.length || regenerating) return
+    const estimate = (indexes.length * KLING_CLIP_KRW).toLocaleString()
+    if (!window.confirm(`${indexes.length}개 장면을 Kling 영상으로 바꿉니다.\n예상 비용 약 ₩${estimate} (장당 약 ₩${KLING_CLIP_KRW}, 실제 청구액은 fal 콘솔에서 확인)\n장면당 몇 분 걸릴 수 있어요. 진행할까요?`)) return
+    setRegenerating(true)
+    setActionError('')
+    try {
+      await jobsApi.generateImages(jobId, indexes, { klingUpgrade: true })
+      queryClient.invalidateQueries(['job', String(jobId)])
+      queryClient.invalidateQueries(['assets', String(jobId)])
+      queryClient.invalidateQueries(['slide-progress', jobId])
+    } catch (e) {
+      setActionError(e.response?.data?.message || e.message || 'Kling 변환에 실패했습니다.')
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
   if (!data || data.status === 'none') return null
   const total = data.total || 0
   const done = data.done || 0
@@ -149,6 +172,13 @@ export default function SlideProgressPanel({ jobId, running }) {
           </span>
         </div>
         <p className="mt-0.5 line-clamp-2 text-slate-500 leading-snug">{scene.text}</p>
+        {scene.status === 'done' && scene.base_type === 'slide_ai_background' && !flagged && (
+          <button type="button" disabled={regenerating || data.status === 'running' || preparing}
+            onClick={() => klingUpgrade([scene.index])}
+            className="mt-1 inline-flex items-center gap-1 rounded border border-indigo-400 px-1.5 py-0.5 font-bold text-indigo-700 disabled:opacity-50">
+            <Film size={10} />Kling으로 바꾸기
+          </button>
+        )}
         {(failed || flagged) && scene.status !== 'pending' && (
           <div className="mt-1 space-y-1">
             {scene.error && <p className="text-rose-600 leading-snug line-clamp-2">{scene.error}</p>}
@@ -181,7 +211,7 @@ export default function SlideProgressPanel({ jobId, running }) {
           <div className="h-full bg-cyan-600 transition-all" style={{ width: `${percent}%` }} />
         </div>
       )}
-      {(problemIndexes.length > 0 || actionError) && (
+      {(problemIndexes.length > 0 || klingCandidates.length > 0 || actionError) && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           {problemIndexes.length > 0 && (
             <button type="button" disabled={regenerating || data.status === 'running' || preparing}
@@ -189,6 +219,13 @@ export default function SlideProgressPanel({ jobId, running }) {
               className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 font-bold text-white disabled:opacity-50">
               {regenerating ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />}
               문제 장면 {problemIndexes.length}개 다시 생성
+            </button>
+          )}
+          {klingCandidates.length > 0 && (
+            <button type="button" disabled={regenerating || data.status === 'running' || preparing}
+              onClick={() => klingUpgrade(klingCandidates)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 font-bold text-white disabled:opacity-50">
+              <Film size={12} />AI 배경 {klingCandidates.length}개 Kling 영상으로 바꾸기
             </button>
           )}
           {actionError && <span className="font-semibold text-rose-600">{actionError}</span>}

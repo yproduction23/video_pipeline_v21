@@ -119,3 +119,15 @@ def test_scene_media_endpoint_serves_the_final_clip_and_blocks_foreign_paths(mon
     assert image.status_code == 200 and image.headers["content-type"] == "image/png"
     assert client.get("/workers/slides/progress/8/scene/2").status_code == 404
     assert client.get("/workers/slides/progress/8/scene/9").status_code == 404
+
+
+def test_scene_done_reports_the_base_layer_type_separately_from_overlay_type(tmp_path):
+    """Kling 후작업 대상(AI 배경)은 후편집이 얹힌 뒤의 visual_type이 아니라 배경 층 종류로 판단한다."""
+    progress = SlideProgress(8, tmp_path)
+    progress.start([{"index": 0, "text": "장면"}])
+    progress.scene_done(0, {
+        "visual_type": "slide_key_text", "overlay_type": "key_text",
+        "slide_layers": {"base": {"type": "slide_ai_background"}, "overlays": []},
+    })
+
+    assert read_progress(8, tmp_path)["scenes"][0]["base_type"] == "slide_ai_background"
