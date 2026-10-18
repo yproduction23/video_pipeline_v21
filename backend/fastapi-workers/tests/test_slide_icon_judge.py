@@ -66,3 +66,26 @@ def test_topic_icons_are_removed_per_use_and_flow_loses_all_icons_if_any_fails()
     assert result[0].get("icon") is None
     assert all(n.get("icon") is None for n in result[1]["nodes"])          # 일부만 통과 → 흐름은 전부 뺀다
     assert result[2]["a"]["icon"] == "bank" and result[2]["b"]["icon"] == "chart_down"
+
+
+def test_missing_flow_icons_are_filled_from_the_library_only_when_every_node_gets_one():
+    """2026-10-18 운영자 피드백: 흐름도 노드가 글자 상자뿐이다 — 라이브러리에 있는 그림만 붙이고, 일부만 붙으면 구조가 깨지므로 적용하지 않는다."""
+    import json
+
+    from app.services.slide_icon_judge import fill_missing_icons_in_topics, suggest_icons
+
+    run = [{"index": 0, "narration": "자사주 매입이 은행의 하방을 받쳐 줍니다."}]
+    topic = {"template": "flow", "scene": 0, "nodes": [{"label": "자사주 매입"}, {"label": "하방 지지"}]}
+
+    def reply(results):
+        return lambda system, messages, max_tokens: json.dumps({"results": results}, ensure_ascii=False)
+
+    both = fill_missing_icons_in_topics([dict(topic, nodes=[dict(n) for n in topic["nodes"]])], run,
+                                        llm_call=reply([{"id": 0, "icon": "buy"}, {"id": 1, "icon": "shield"}]))
+    assert [n["icon"] for n in both[0]["nodes"]] == ["buy", "shield"]
+
+    partial = fill_missing_icons_in_topics([dict(topic, nodes=[dict(n) for n in topic["nodes"]])], run,
+                                           llm_call=reply([{"id": 0, "icon": "buy"}, {"id": 1, "icon": ""}]))
+    assert all("icon" not in n for n in partial[0]["nodes"])                 # 일부만이면 모두 글자로 둔다
+
+    assert suggest_icons([{"id": 0, "label": "x", "narration": "y"}], llm_call=reply([{"id": 0, "icon": "없는그림"}])) == {}   # 라이브러리에 없는 이름은 버린다

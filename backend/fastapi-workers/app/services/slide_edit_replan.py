@@ -12,7 +12,7 @@ import re
 import time
 
 from app.services.slide_concepts import apply_concepts, design_concepts
-from app.services.slide_icon_judge import strip_unjudged_icons_from_plan
+from app.services.slide_icon_judge import fill_missing_icons_in_plan, strip_unjudged_icons_from_plan
 from app.services.slide_text_judge import drop_fake_lists_in_plan, fix_key_texts_in_plan
 from app.services.slide_title_judge import fix_titles_in_plan
 from app.services.slide_edit_plan import (
@@ -360,6 +360,7 @@ def build_edit_plan_with_repair(
         plan["visual_concepts"] = concepts
         plan = apply_concepts(plan, concepts)
         refresh_plan(plan)
+    plan = fill_missing_icons_in_plan(plan, llm_call=llm_call)  # 빠진 흐름도 아이콘 자리에 라이브러리의 맞는 그림을 먼저 붙인다
     plan = strip_unjudged_icons_from_plan(plan, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다(글은 그대로)
     plan = fix_titles_in_plan(plan, llm_call=llm_call)  # 그래프 제목의 대상이 현재 장면과 어긋나면 고치거나 뺀다
     plan = fix_key_texts_in_plan(plan, llm_call=llm_call)  # 잘려서 뜻이 뒤집히는 강조 문구는 바꾸거나 뺀다

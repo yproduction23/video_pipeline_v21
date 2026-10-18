@@ -233,6 +233,14 @@ MAX_ITEM_REPEATS = 2              # 같은 소재(예: 지폐 더미)를 쓸 수
 MAX_ANIM_SECONDS = 8.0
 
 
+def _meaning_key(part: str, params: dict) -> tuple:
+    """같은 설명인지 가리는 열쇠: 부품 + 소재(움직이는 것·분위기 소품) + 방향·정도. 라벨 문구는 장면마다 달라 열쇠에 넣지 않는다."""
+    thing = str(params.get("item") or params.get("motif") or params.get("source_motif") or params.get("target_motif") or "")
+    direction = str(params.get("direction") or params.get("level") or params.get("trend") or params.get("heavier")
+                    or params.get("state") or params.get("result") or "")
+    return (part, thing, direction)
+
+
 def apply_concepts(plan: dict, concepts: dict | None) -> dict:
     """연출 단계가 고른 움직임 부품을 계획서 장면 후편집으로 바꾼다.
 
@@ -280,16 +288,13 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
         start = starts[index]
         if any(abs(c["start"] - start) < MIN_PART_GAP_SECONDS for c in chosen):
             continue
-        before = max((c for c in chosen if c["start"] < start), key=lambda c: c["start"], default=None)
-        after = min((c for c in chosen if c["start"] > start), key=lambda c: c["start"], default=None)
-        if any(c and c["part"] == part for c in (before, after)):
-            continue
         item = str(params.get("item") or "")
         if item and item_uses.get(item, 0) >= MAX_ITEM_REPEATS:
             continue
-        # 같은 부품에 같은 소재를 60초 안에 다시 쓰지 않는다(같은 설명의 반복, 2026-10-18 피드백).
-        if any(c["part"] == part and str(c["params"].get("item") or "") == item and abs(c["start"] - start) < REPEAT_WINDOW_SECONDS
-               for c in chosen):
+        # 개수가 아니라 뜻으로 거른다(2026-10-18 운영자 피드백): 같은 부품이어도 소재·방향·대상이 다르면 이어서 쓸 수 있고,
+        # 같은 부품·같은 소재·같은 방향의 설명은 60초 안에 되풀이하지 않는다.
+        key = _meaning_key(part, params)
+        if any(_meaning_key(c["part"], c["params"]) == key and abs(c["start"] - start) < REPEAT_WINDOW_SECONDS for c in chosen):
             continue
         # 연출 단계가 "아직 같은 이야기"라고 한 장면(span_to)까지만 이어서 천천히 진행한다(2026-10-18: 이야기가 바뀐 뒤에도 그림이 남았다).
         span = [index]

@@ -195,3 +195,19 @@ def test_same_part_with_the_same_item_is_not_repeated_within_a_minute():
     heads = [s["index"] for s in updated["scenes"] if (s.get("overlay") or {}).get("type") == "motion_part"
              and s["overlay"]["span"]["head"] == s["index"]]
     assert heads == [0, 6, 18]
+
+
+def test_same_part_with_a_different_meaning_can_follow_but_the_same_explanation_is_not_repeated():
+    """2026-10-18 운영자 피드백: 개수가 아니라 뜻에 맞게. 같은 부품이어도 방향·소재가 다르면 이어서 쓰고, 같은 설명은 60초 안에 되풀이하지 않는다."""
+    from app.services.slide_concepts import apply_concepts
+
+    plan = _scenes_plan(12, 4.0)
+    chart = lambda i, direction: {"index": i, "evokes": "x", "tool": "motif_chart", "tool_ready": True, "motifs": [], "importance": 2,
+                                  "params": {"direction": direction, "label": "외국인이"}}
+    concepts = {"concepts": [chart(0, "fall"), chart(4, "rise"), chart(8, "fall")], "missing": []}
+
+    updated = apply_concepts(plan, concepts)
+
+    heads = [s["index"] for s in updated["scenes"] if (s.get("overlay") or {}).get("type") == "motion_part"
+             and s["overlay"]["span"]["head"] == s["index"]]
+    assert heads == [0, 4]                     # 하락 → 상승은 이어서, 두 번째 하락(32초 뒤)은 같은 설명이라 뺀다

@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
-from app.services.slide_icon_judge import strip_unjudged_icons_from_topics
+from app.services.slide_icon_judge import fill_missing_icons_in_topics, strip_unjudged_icons_from_topics
 from app.services.slide_text_judge import drop_fake_lists_in_topics, fix_key_texts_in_topics
 from app.services.slide_title_judge import fix_titles_in_topics
 from app.services.slide_streak import streak_sprite as _streak_sprite
@@ -622,6 +622,7 @@ def _topics_to_elements(
     raw_topics: list, run: list[dict], plan: dict, llm_call=None, failures: list[str] | None = None,
 ) -> list[dict]:
     """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
+    raw_topics = fill_missing_icons_in_topics(raw_topics, run, llm_call=llm_call)  # 빠진 아이콘 자리에 라이브러리의 맞는 그림을 먼저 붙인다
     raw_topics = strip_unjudged_icons_from_topics(raw_topics, run, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다
     raw_topics = fix_titles_in_topics(raw_topics, run, llm_call=llm_call)  # 그래프 제목의 대상이 어긋나면 고치거나 뺀다
     raw_topics = fix_key_texts_in_topics(raw_topics, run, llm_call=llm_call)  # 잘려서 뜻이 뒤집히는 문구는 바꾸거나 뺀다

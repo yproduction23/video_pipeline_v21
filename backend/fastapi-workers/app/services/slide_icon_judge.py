@@ -128,3 +128,127 @@ def strip_unjudged_icons_from_topics(topics: list, run: list[dict], *, llm_call=
             for n in group:
                 uses[n][0]["icon"] = None
     return topics
+
+
+# ---------------------------------------------------------------- 빠진 아이콘 채우기 ----
+
+_SUGGEST_SYSTEM = (
+    "너는 한국 경제 해설 영상의 그림 고르는 사람이다. 흐름도·비교 항목마다 글(라벨)과 그 장면 내레이션이 주어진다. 아래 '그림 목록'에서 그 라벨이 가리키는 "
+    "대상을 직접 그린 그림 하나를 고른다(상징·장식·막연한 연상은 안 된다). 맞는 그림이 없으면 빈 문자열로 둔다. 회사 이름이면 로고 목록의 이름을 그대로 쓴다. "
+    "확신이 없으면 빈 문자열이다.\n"
+    '출력은 JSON만: {"results":[{"id":번호,"icon":"그림 이름 또는 빈 문자열"}]}'
+)
+
+
+def _library_hint() -> str:
+    from app.services.slide_icons import ICON_NAMES
+    from app.services.slide_logos import logo_labels
+    from app.services.slide_motifs import motif_labels
+
+    icons = ", ".join(f"{name}({ICON_HINTS[name]})" for name in ICON_NAMES)
+    motifs = ", ".join(f"{MOTIF_PREFIX}{label}" for label in motif_labels())
+    return f"그림 목록 — 아이콘: {icons}\n소재(일러스트): {motifs}\n회사 로고: {', '.join(logo_labels())}"
+
+
+def _valid_icon(name: object) -> str | None:
+    from app.services.slide_icons import ICON_NAMES
+    from app.services.slide_logos import resolve_logo
+    from app.services.slide_motifs import resolve_motif
+
+    if not isinstance(name, str) or not name.strip():
+        return None
+    name = name.strip()
+    if name in ICON_NAMES:
+        return name
+    logo = resolve_logo(name)
+    if logo:
+        return f"{LOGO_PREFIX}{logo}"
+    motif = resolve_motif(name)
+    return f"{MOTIF_PREFIX}{motif}" if motif else None
+
+
+def suggest_icons(items: list[dict], *, llm_call=None) -> dict[int, str]:
+    """items[{id, label, narration}] → {id: 그림 이름}. 라이브러리에 실제로 있는 이름만 돌려주고, 호출이 실패하면 빈 결과(글만 남긴다).
+
+    2026-10-18 운영자 피드백: 연상(그림)이 더 필요한데 흐름도 9개 중 6개가 글자 상자뿐이었다 — 아이콘 판정이 "뜻이 확실하지 않으면 뗀다"로만 동작해서다.
+    빠진 자리에는 라이브러리에서 맞는 그림을 먼저 골라 붙이고(이 뒤에 기존 적합성 판정이 다시 거른다), 맞는 게 없으면 글로 둔다."""
+    if not items:
+        return {}
+    lines = [f'{item["id"]}. 라벨="{item["label"]}" / 내레이션="{item["narration"]}"' for item in items]
+    try:
+        raw = _call_llm(_SUGGEST_SYSTEM, _library_hint() + "\n\n" + "\n".join(lines), llm_call=llm_call)
+        cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        data = json.loads(match.group(0) if match else cleaned)
+    except Exception as exc:
+        logger.warning("빠진 아이콘 고르기 실패(글만 남긴다): %s", exc)
+        return {}
+    valid_ids = {item["id"] for item in items}
+    out: dict[int, str] = {}
+    for result in data.get("results") or []:
+        try:
+            ident = int(result["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        icon = _valid_icon(result.get("icon"))
+        if ident in valid_ids and icon:
+            out[ident] = icon
+    return out
+
+
+def fill_missing_icons_in_topics(topics: list, run: list[dict], *, llm_call=None) -> list:
+    """시퀀스 설계의 흐름 노드·비교 항목 중 아이콘이 빠진 곳에 라이브러리의 맞는 그림을 붙인다. 같은 주제 안에서 일부만 붙으면 구조가 깨지므로
+    모든 노드(항목)에 붙을 때만 적용한다."""
+    narrations = {s["index"]: s["narration"] for s in run}
+    groups: list[list[dict]] = []
+    for topic in topics or []:
+        if not isinstance(topic, dict):
+            continue
+        narration = narrations.get(topic.get("scene"), " ".join(narrations.values()))
+        if topic.get("template") == "flow":
+            boxes = [n for n in topic.get("nodes") or [] if isinstance(n, dict)]
+        elif topic.get("template") == "compare_pair":
+            boxes = [topic[side] for side in ("a", "b") if isinstance(topic.get(side), dict) and not topic[side].get("value")]
+        else:
+            continue
+        if len(boxes) >= 2 and any(not _valid_icon(b.get("icon")) for b in boxes):
+            groups.append([{"box": b, "narration": narration} for b in boxes])
+    items, targets = [], []
+    for group in groups:
+        for entry in group:
+            items.append({"id": len(items), "label": str(entry["box"].get("label") or ""), "narration": entry["narration"]})
+            targets.append(entry["box"])
+    chosen = suggest_icons(items, llm_call=llm_call)
+    cursor = 0
+    for group in groups:
+        ids = range(cursor, cursor + len(group))
+        cursor += len(group)
+        if all(i in chosen for i in ids):
+            for i in ids:
+                targets[i]["icon"] = chosen[i]
+    return topics
+
+
+def fill_missing_icons_in_plan(plan: dict, *, llm_call=None) -> dict:
+    """계획서 장면 후편집(흐름도)의 빠진 노드 아이콘을 시퀀스와 같은 방식으로 채운다(모든 노드에 붙을 때만)."""
+    groups: list[tuple[dict, list[dict]]] = []
+    for scene in plan.get("scenes", []):
+        overlay = scene.get("overlay") or {}
+        nodes = [n for n in overlay.get("nodes") or [] if isinstance(n, dict)]
+        if overlay.get("type") == "flow" and len(nodes) >= 2 and any(not _valid_icon(n.get("icon")) for n in nodes):
+            groups.append((scene, nodes))
+    items = []
+    for scene, nodes in groups:
+        for node in nodes:
+            items.append({"id": len(items), "label": str(node.get("label") or ""), "narration": scene["narration"]})
+    chosen = suggest_icons(items, llm_call=llm_call)
+    cursor, filled = 0, 0
+    for _scene, nodes in groups:
+        ids = range(cursor, cursor + len(nodes))
+        cursor += len(nodes)
+        if all(i in chosen for i in ids):
+            for node, i in zip(nodes, ids):
+                node["icon"] = chosen[i]
+            filled += 1
+    plan["icon_fill"] = {"flows": len(groups), "filled": filled}
+    return plan

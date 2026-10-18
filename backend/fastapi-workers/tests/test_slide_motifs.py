@@ -47,3 +47,16 @@ def test_motif_library_resolves_label_and_alias_and_renders_a_cropped_sprite(tmp
     assert image.getchannel("A").getbbox() is not None
     assert image.height <= 340 and image.width < 400    # 투명 여백을 잘라 냈다
     assert motif_sprite("없는 소재", tmp_path) is None
+
+
+def test_general_purpose_motifs_added_on_2026_10_18_resolve_and_draw():
+    """레퍼런스처럼 대상을 그림으로 보여 주려고 늘린 범용 소재(2026-10-18): 이름·별칭이 정확히 일치할 때만 쓰이고, 그려진다."""
+    from app.services.slide_motifs import motif_labels, motif_sprite, resolve_motif
+
+    assert len(motif_labels()) >= 49
+    for alias, label in (("배당", "배당 동전"), ("아파트", "아파트 단지"), ("서류", "서류 더미"),
+                         ("정부", "정부 청사"), ("금고", "금고"), ("분석 돋보기", "분석 돋보기")):
+        assert resolve_motif(alias) == label
+    sprite = motif_sprite("배당 동전", height=300)
+    assert sprite is not None and sprite.height <= 300 and sprite.getchannel("A").getbbox()
+    assert resolve_motif("없는소재") is None

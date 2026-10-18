@@ -463,5 +463,339 @@
    "created": "2026-10-18",
    "ledger_job": 9100
   }
+ },
+ {
+  "slug": "dividend_coins",
+  "label": "배당 동전",
+  "aliases": [
+   "배당",
+   "배당금",
+   "주주환원",
+   "환원"
+  ],
+  "file": "dividend_coins.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "apartment_complex",
+  "label": "아파트 단지",
+  "aliases": [
+   "아파트",
+   "주택",
+   "부동산",
+   "집값"
+  ],
+  "file": "apartment_complex.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "office_towers",
+  "label": "사무용 빌딩",
+  "aliases": [
+   "빌딩",
+   "본사",
+   "기업 건물"
+  ],
+  "file": "office_towers.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "factory_plant",
+  "label": "공장",
+  "aliases": [
+   "제조",
+   "생산",
+   "생산시설"
+  ],
+  "file": "factory_plant.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "document_stack",
+  "label": "서류 더미",
+  "aliases": [
+   "서류",
+   "문서",
+   "보고서",
+   "계약서",
+   "공시"
+  ],
+  "file": "document_stack.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "map_pin",
+  "label": "지도 핀",
+  "aliases": [
+   "지도",
+   "위치",
+   "지역"
+  ],
+  "file": "map_pin.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "magnifier_chart",
+  "label": "분석 돋보기",
+  "aliases": [
+   "분석",
+   "점검",
+   "검토",
+   "들여다보다"
+  ],
+  "file": "magnifier_chart.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "people_silhouettes",
+  "label": "사람들",
+  "aliases": [
+   "사람들",
+   "개인 투자자",
+   "개미",
+   "시장 참가자",
+   "대중"
+  ],
+  "file": "people_silhouettes.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "person_silhouette",
+  "label": "사람 한 명",
+  "aliases": [
+   "개인",
+   "한 사람",
+   "직장인"
+  ],
+  "file": "person_silhouette.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "handshake",
+  "label": "악수",
+  "aliases": [
+   "합의",
+   "협상",
+   "계약 체결",
+   "손잡다"
+  ],
+  "file": "handshake.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "gavel",
+  "label": "판사 망치",
+  "aliases": [
+   "규제",
+   "판결",
+   "제재",
+   "법원",
+   "재판"
+  ],
+  "file": "gavel.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "government_hall",
+  "label": "정부 청사",
+  "aliases": [
+   "정부",
+   "국회",
+   "당국",
+   "정책"
+  ],
+  "file": "government_hall.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "container_ship",
+  "label": "컨테이너선",
+  "aliases": [
+   "수출",
+   "수입",
+   "물류",
+   "무역",
+   "선박"
+  ],
+  "file": "container_ship.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "oil_barrel",
+  "label": "원유 배럴",
+  "aliases": [
+   "유가",
+   "원유",
+   "석유"
+  ],
+  "file": "oil_barrel.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "battery_cell",
+  "label": "배터리",
+  "aliases": [
+   "2차전지",
+   "전지",
+   "배터리 업종"
+  ],
+  "file": "battery_cell.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "data_center",
+  "label": "데이터센터",
+  "aliases": [
+   "서버",
+   "클라우드",
+   "서버실"
+  ],
+  "file": "data_center.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "neural_chip",
+  "label": "AI 칩",
+  "aliases": [
+   "AI",
+   "인공지능",
+   "AI 반도체"
+  ],
+  "file": "neural_chip.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "vault_safe",
+  "label": "금고",
+  "aliases": [
+   "현금 보유",
+   "유동성",
+   "보관"
+  ],
+  "file": "vault_safe.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "shopping_cart",
+  "label": "쇼핑 카트",
+  "aliases": [
+   "소비",
+   "소비자",
+   "쇼핑",
+   "내수"
+  ],
+  "file": "shopping_cart.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "empty_wallet",
+  "label": "빈 지갑",
+  "aliases": [
+   "자금 부족",
+   "현금 고갈",
+   "빈털터리"
+  ],
+  "file": "empty_wallet.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
  }
 ]
