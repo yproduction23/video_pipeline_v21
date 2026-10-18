@@ -283,5 +283,185 @@
    "created": "2026-10-18",
    "ledger_job": 9100
   }
+ },
+ {
+  "slug": "storm_cloud",
+  "label": "먹구름 번개",
+  "aliases": [
+   "먹구름",
+   "폭풍",
+   "공포",
+   "패닉",
+   "불안"
+  ],
+  "file": "storm_cloud.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "flame",
+  "label": "불꽃",
+  "aliases": [
+   "불",
+   "불이 붙다",
+   "과열"
+  ],
+  "file": "flame.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "nyc_skyline",
+  "label": "뉴욕 스카이라인",
+  "aliases": [
+   "뉴욕",
+   "월스트리트",
+   "미국 증시"
+  ],
+  "file": "nyc_skyline.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "seoul_skyline",
+  "label": "서울 스카이라인",
+  "aliases": [
+   "서울",
+   "한국 증시",
+   "국내 증시"
+  ],
+  "file": "seoul_skyline.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "start_flag",
+  "label": "출발선",
+  "aliases": [
+   "출발점",
+   "시작점",
+   "스타트"
+  ],
+  "file": "start_flag.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "us_bond",
+  "label": "미국 국채 증서",
+  "aliases": [
+   "미국 국채",
+   "국채",
+   "채권",
+   "미국 채권"
+  ],
+  "file": "us_bond.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "foreign_investor",
+  "label": "외국인 투자자",
+  "aliases": [
+   "외국인",
+   "외국인 매도",
+   "해외 투자자"
+  ],
+  "file": "foreign_investor.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "bomb_fuse",
+  "label": "폭탄",
+  "aliases": [
+   "뇌관",
+   "충격",
+   "도화선",
+   "시한폭탄"
+  ],
+  "file": "bomb_fuse.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "firework",
+  "label": "폭죽",
+  "aliases": [
+   "환호",
+   "기대감",
+   "축하"
+  ],
+  "file": "firework.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "panic_crowd",
+  "label": "놀라는 사람들",
+  "aliases": [
+   "군중",
+   "패닉 군중",
+   "당황"
+  ],
+  "file": "panic_crowd.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "safe_shield",
+  "label": "안전 방패",
+  "aliases": [
+   "안전자산",
+   "방어",
+   "보호"
+  ],
+  "file": "safe_shield.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
  }
 ]

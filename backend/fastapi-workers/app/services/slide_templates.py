@@ -121,7 +121,12 @@ def _compare_pair(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
         structure = "icon"
     elif raw_a.get("value") and raw_b.get("value"):
         structure = "value"
-    side_a, side_b = _side(raw_a, ctx, scene, structure), _side(raw_b, ctx, scene, structure)
+    elif op == "→" and ctx.icon(raw_a.get("icon")) and raw_b.get("value") and not raw_b.get("icon"):
+        structure = "journey"   # 출발(아이콘+글) → 도착(숫자+글): "출발점은 미국 채권 시장 → 24년 만에 5.3%"처럼 이어서 쌓는다
+    if structure == "journey":
+        side_a, side_b = _side(raw_a, ctx, scene, "icon"), _side(raw_b, ctx, scene, "value")
+    else:
+        side_a, side_b = _side(raw_a, ctx, scene, structure), _side(raw_b, ctx, scene, structure)
     if not side_a or not side_b:
         if structure != "label":  # 구조가 안 맞으면 글만으로 내려가 두 항목을 지킨다
             side_a, side_b = _side(raw_a, ctx, scene, "label"), _side(raw_b, ctx, scene, "label")
@@ -139,6 +144,15 @@ def _compare_pair(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
 
     def column(side: dict, x: int, at: float) -> list[dict]:
         parts: list[dict] = []
+        if structure == "journey":
+            if side.get("icon"):
+                parts.append(_element("icon", scene, anchor, at, {"name": side["icon"]}, (x, PAIR_ICON_Y), icon_size=PAIR_ICON_SIZE))
+            else:
+                parts.append(_element("number", scene, anchor, at, side["value"], (x, PAIR_VALUE_Y), anim="count",
+                                      max_width=640, size_cap=150))
+            parts.append(_element("text", scene, anchor, at + 0.15, {"text": side["label"], "color": "white"}, (x, PAIR_LABEL_Y),
+                                  size=78, max_width=640))
+            return parts
         if structure == "icon":
             parts.append(_element("icon", scene, anchor, at, {"name": side["icon"]}, (x, PAIR_ICON_Y),
                                   icon_size=PAIR_ICON_SIZE))
@@ -151,6 +165,7 @@ def _compare_pair(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
         return parts
 
     elements += column(side_a, PAIR_LEFT_X, start + (0.2 if title else 0.0))
+    # 출발 쪽이 먼저 놓이고, 도착(숫자)은 그 구절을 말하는 순간 같은 화면에 쌓인다(앞 요소를 지우지 않는다).
     elements.append(_element("symbol", scene, anchor, b_start - 0.1, {"text": op}, (PAIR_MID_X, 520 if structure != "label" else 540)))
     elements += column(side_b, PAIR_RIGHT_X, b_start)
     return elements

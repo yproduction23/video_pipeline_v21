@@ -43,7 +43,7 @@ def _design(topics, duration=6.0):
 
 PAIR = {
     "template": "compare_pair", "scene": 0, "anchor": "외국인 이탈", "op": "+",
-    "a": {"label": "외국인 이탈", "icon": "foreigner"},
+    "a": {"label": "외국인 이탈", "icon": "chip"},
     "b": {"label": "자사주 매입 종료", "icon": "building", "anchor": "자사주 매입 종료"},
 }
 
@@ -89,7 +89,7 @@ def test_pair_items_with_mismatched_structure_are_both_reduced_to_text_only():
 
 
 def test_a_label_that_is_not_in_the_narration_drops_the_whole_topic():
-    pair = {**PAIR, "a": {"label": "원문에 없는 표현", "icon": "foreigner"}}
+    pair = {**PAIR, "a": {"label": "원문에 없는 표현", "icon": "chip"}}
 
     seq = _design([pair])
 
@@ -229,3 +229,19 @@ def test_motif_names_and_aliases_are_accepted_as_icons_in_a_designed_topic():
 
     icons = _by_kind(seq, "icon")
     assert [e["content"]["name"] for e in icons] == ["motif:하락 막대차트"]
+
+
+def test_journey_pair_puts_the_start_first_and_the_number_later_on_the_same_screen():
+    """"출발점은 미국 채권 시장 → 24년 만에 5.3%": 출발이 먼저 놓이고 도착은 말하는 순간 같은 화면에 이어서 쌓인다(2026-10-18 피드백)."""
+    topic = {
+        "template": "compare_pair", "scene": 1, "anchor": "그래서 코스피는", "op": "→",
+        "a": {"label": "코스피는", "icon": "chip"},
+        "b": {"label": "폭락했고", "value": "7.57퍼센트", "anchor": "7.57퍼센트"},
+    }
+    seq = _design([topic])
+
+    icons, numbers = _by_kind(seq, "icon"), _by_kind(seq, "number")
+    assert len(icons) == 1 and len(numbers) == 1
+    assert icons[0]["pos"][0] < numbers[0]["pos"][0]                      # 출발은 왼쪽, 도착은 오른쪽
+    assert numbers[0]["at"] > icons[0]["at"] + 0.8                        # 도착은 나중에 이어서 나온다
+    assert icons[0]["until"] > numbers[0]["at"]                           # 출발은 도착이 나올 때까지 남아 있다

@@ -19,11 +19,14 @@ from app.services.slide_motifs import motif_sprite, resolve_motif
 
 logger = logging.getLogger(__name__)
 
-PARTS = ("move", "gauge", "balance", "spread", "support", "pile")
+PARTS = ("move", "gauge", "balance", "spread", "support", "pile", "chart", "target", "mood")
 MAX_LABEL_CHARS = 12
 GAUGE_LEVELS = ("high", "low", "rising", "falling")
 SUPPORT_STATES = ("holding", "weakening")
 PILE_TRENDS = ("grow", "shrink")
+CHART_DIRECTIONS = ("fall", "rise")
+TARGET_RESULTS = ("below", "above")
+MOVE_ARRIVALS = ("pulse", "burst")
 CANVAS_MAX = (1500, 700)
 
 _FONT_BOLD = "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"
@@ -67,6 +70,39 @@ def validate_part(part: str, params: object, narration: str, context: str = "") 
             text = label(key)
             if text:
                 out[key] = text
+        for key in ("source_motif", "target_motif"):  # 상자 대신 보낼·받을 쪽을 그림으로(예: 뉴욕 → 서울 스카이라인)
+            found = resolve_motif(params.get(key))
+            if found:
+                out[key] = found
+        arrival = str(params.get("arrival") or "")
+        if arrival in MOVE_ARRIVALS:
+            out["arrival"] = arrival
+        return out
+    if part == "chart":
+        direction = str(params.get("direction") or "")
+        if direction not in CHART_DIRECTIONS:
+            return None
+        out = {"direction": direction}
+        text = label("label")
+        if text:
+            out["label"] = text
+        value = str(params.get("value") or "").strip()
+        if value and re.search(r"\d", value) and _compact(value) in _compact(ground):
+            out["value"] = value
+        return out
+    if part == "target":
+        target, actual, result = label("target_label"), label("actual_label"), str(params.get("result") or "")
+        if not target or not actual or result not in TARGET_RESULTS:
+            return None
+        return {"target_label": target, "actual_label": actual, "result": result}
+    if part == "mood":
+        motif = resolve_motif(params.get("motif"))
+        if not motif:
+            return None
+        out = {"motif": motif}
+        text = label("label")
+        if text:
+            out["label"] = text
         return out
     if part == "gauge":
         text, level = label("label"), str(params.get("level") or "")
@@ -104,7 +140,7 @@ def validate_part(part: str, params: object, narration: str, context: str = "") 
 
 def part_phrase(part: str, params: dict) -> str:
     """등장 시각을 정할 대표 구절(그 부품이 처음 가리키는 말)."""
-    for key in ("source_label", "origin", "left", "top", "label", "target_label"):
+    for key in ("source_label", "origin", "left", "top", "label", "actual_label", "target_label"):
         if params.get(key):
             return str(params[key])
     return ""
@@ -186,9 +222,17 @@ def _move(params: dict, p: float) -> Image.Image:
     size = (1500, 560)
     fixed, fixed_draw = _layer(size)
     boxes = ((260, 300), (1240, 300))
-    for (cx, cy), key in zip(boxes, ("source_label", "target_label")):
-        fixed_draw.rounded_rectangle(_scaled((cx - 150, cy - 125, cx + 150, cy + 125)), radius=36 * SS, fill=PAPER, outline=NAVY, width=8 * SS)
-        fixed_draw.rectangle(_scaled((cx - 150, cy - 125, cx + 150, cy - 85)), fill=YELLOW)
+    arrived = _ramp(p, 0.8, 0.1)                       # 도착 직후 받는 쪽이 반응한다
+    for number, ((cx, cy), key, motif_key) in enumerate(zip(boxes, ("source_label", "target_label"), ("source_motif", "target_motif"))):
+        art = _motif(params[motif_key], 250) if params.get(motif_key) else None
+        scale = 1.0 + (0.1 * math.sin(math.pi * arrived) if number == 1 else 0.0)
+        if art is not None:
+            if scale != 1.0:
+                art = art.resize((int(art.width * scale), int(art.height * scale)), Image.LANCZOS)
+            _paste_center(fixed, art, cx, cy)
+        else:
+            fixed_draw.rounded_rectangle(_scaled((cx - 150, cy - 125, cx + 150, cy + 125)), radius=36 * SS, fill=PAPER, outline=NAVY, width=8 * SS)
+            fixed_draw.rectangle(_scaled((cx - 150, cy - 125, cx + 150, cy - 85)), fill=YELLOW)
         if params.get(key):
             _text(fixed_draw, (cx, cy + 185), params[key], 54, WHITE)
     arrow, arrow_draw = _layer(size)
@@ -204,7 +248,14 @@ def _move(params: dict, p: float) -> Image.Image:
         cx = boxes[0][0] + (boxes[1][0] - boxes[0][0]) * travel
         cy = boxes[0][1] - 10 - 70 * math.sin(math.pi * travel)
         _paste_center(item, art, cx, cy)
-    return _finish([_with_alpha(fixed, _ramp(p, 0.0, 0.15)), _with_alpha(arrow, 1.0), item], size)
+    burst, bd = _layer(size)
+    if params.get("arrival") == "burst" and arrived > 0:   # 도착한 곳에서 번쩍이는 반응
+        for k in range(8):
+            angle = k * math.pi / 4
+            r0, r1 = 170 + 30 * arrived, 215 + 70 * arrived
+            bd.line(_scaled((boxes[1][0] + r0 * math.cos(angle), boxes[1][1] + r0 * math.sin(angle),
+                             boxes[1][0] + r1 * math.cos(angle), boxes[1][1] + r1 * math.sin(angle))), fill=YELLOW, width=12 * SS)
+    return _finish([_with_alpha(fixed, _ramp(p, 0.0, 0.15)), _with_alpha(arrow, 1.0), item, _with_alpha(burst, 1.0 - 0.4 * arrived)], size)
 
 
 def _gauge(params: dict, p: float) -> Image.Image:
@@ -319,7 +370,87 @@ def _pile(params: dict, p: float) -> Image.Image:
     return _finish([layer, _with_alpha(labels, _ramp(p, 0.1, 0.2) if shown else 0.0)], size)
 
 
-_DRAW = {"move": _move, "gauge": _gauge, "balance": _balance, "spread": _spread, "support": _support, "pile": _pile}
+def _chart(params: dict, p: float) -> Image.Image:
+    """꺾은선이 그려지며 하락(빨강)·상승(초록)을 보여 준다. 값 눈금 없이 방향만 — 숫자는 대본 원문(value)이 있을 때만 쓴다."""
+    size = (1100, 700)
+    frame, d = _layer(size)
+    d.line(_scaled((130, 80, 130, 600)), fill=LIGHT, width=6 * SS)
+    d.line(_scaled((130, 600, 1030, 600)), fill=LIGHT, width=6 * SS)
+    for k in range(1, 5):
+        d.line(_scaled((130, 600 - k * 110, 1030, 600 - k * 110)), fill=(255, 255, 255, 40), width=3 * SS)
+    fall = params["direction"] == "fall"
+    base = [(150, 170), (270, 150), (390, 215), (500, 200), (630, 330), (740, 305), (880, 500), (1000, 545)]
+    points = base if fall else [(x, 700 - y) for x, y in base]
+    color = RED if fall else (46, 204, 113, 255)
+    line, ld = _layer(size)
+    reach = _ease(_ramp(p, 0.12, 0.7)) * (len(points) - 1)
+    drawn = [points[0]]
+    for k in range(1, len(points)):
+        if reach >= k:
+            drawn.append(points[k])
+        elif reach > k - 1:
+            f = reach - (k - 1)
+            drawn.append((points[k - 1][0] + (points[k][0] - points[k - 1][0]) * f, points[k - 1][1] + (points[k][1] - points[k - 1][1]) * f))
+            break
+    if len(drawn) > 1:
+        ld.line(_scaled(drawn), fill=color, width=14 * SS, joint="curve")
+        end = drawn[-1]
+        ld.ellipse(_scaled((end[0] - 20, end[1] - 20, end[0] + 20, end[1] + 20)), fill=color, outline=NAVY, width=5 * SS)
+    text, td = _layer(size)
+    if params.get("label"):
+        _text(td, (330, 60), params["label"], 58, WHITE)
+    if params.get("value"):
+        _text(td, (860, 640 if fall else 90), params["value"], 76, color)
+    return _finish([_with_alpha(frame, _ramp(p, 0.0, 0.12)), line, _with_alpha(text, _ramp(p, 0.55, 0.25))], size)
+
+
+def _target(params: dict, p: float) -> Image.Image:
+    """기대선(점선)에 막대가 못 미치거나(하회) 넘는다(상회) — '추정치 대비'를 한눈에 보여 준다."""
+    size = (1200, 700)
+    ground, target_y = 610, 290
+    frame, d = _layer(size)
+    d.line(_scaled((120, ground + 6, 1080, ground + 6)), fill=MID, width=8 * SS)
+    for x in range(140, 1060, 56):
+        d.line(_scaled((x, target_y, x + 32, target_y)), fill=YELLOW, width=8 * SS)
+    chip = _label_chip(params["target_label"], 44)
+    _paste_center(frame, chip, 960, target_y - 48)
+    top = target_y + 110 if params["result"] == "below" else target_y - 100
+    bar, bd = _layer(size)
+    grown = ground - (ground - top) * _ease(_ramp(p, 0.15, 0.6))
+    bd.rounded_rectangle(_scaled((400, grown, 600, ground)), radius=14 * SS, fill=YELLOW, outline=NAVY, width=7 * SS)
+    gap, gd = _layer(size)
+    if p > 0.78:
+        f = _ramp(p, 0.78, 0.2)
+        x = 700
+        y0, y1 = (target_y + 8, top) if params["result"] == "below" else (top, target_y - 8)
+        gd.line(_scaled((x, y0, x, y0 + (y1 - y0) * f)), fill=RED, width=10 * SS)
+        direction = 1 if y1 > y0 else -1
+        tip = y0 + (y1 - y0) * f
+        gd.polygon(_scaled([(x - 24, tip - direction * 30), (x + 24, tip - direction * 30), (x, tip + direction * 8)]), fill=RED)
+    label, ld = _layer(size)
+    _text(ld, (500, ground + 58), params["actual_label"], 50, WHITE)
+    return _finish([_with_alpha(frame, _ramp(p, 0.0, 0.15)), bar, _with_alpha(gap, 1.0), _with_alpha(label, _ramp(p, 0.1, 0.2))], size)
+
+
+def _mood(params: dict, p: float) -> Image.Image:
+    """분위기 소품(먹구름·경광등 등)이 커지며 떨린다 — 공포·긴장 같은 분위기를 글자 대신 그림으로."""
+    size = (1000, 700)
+    layer, d = _layer(size)
+    art = _motif(params["motif"], 430)
+    grow = _ease(_ramp(p, 0.0, 0.25))
+    if art is not None and grow > 0:
+        scale = 0.7 + 0.3 * grow
+        art = art.resize((max(int(art.width * scale), 1), max(int(art.height * scale), 1)), Image.LANCZOS)
+        shake = 6 * math.sin(p * 60) * _ramp(p, 0.25, 0.1) if p > 0.25 else 0.0
+        _paste_center(layer, art, 500 + shake, 330)
+    labels, ld = _layer(size)
+    if params.get("label"):
+        _text(ld, (500, 640), params["label"], 60, WHITE)
+    return _finish([_with_alpha(layer, grow), _with_alpha(labels, _ramp(p, 0.3, 0.2))], size)
+
+
+_DRAW = {"move": _move, "gauge": _gauge, "balance": _balance, "spread": _spread, "support": _support, "pile": _pile,
+         "chart": _chart, "target": _target, "mood": _mood}
 
 
 def part_sprite(part: str, params: dict, p: float) -> Image.Image:

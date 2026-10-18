@@ -1,1 +1,322 @@
-[{"name": "person", "hint": "사람 한 명"}, {"name": "people", "hint": "여러 사람, 투자자들, 개인 투자자"}, {"name": "foreigner", "hint": "외국인(해외 투자자): 사람 실루엣 + 작은 지구본 표시"}, {"name": "investor", "hint": "투자자: 사람 + 차트 보는 모습"}, {"name": "money_stack", "hint": "돈뭉치: 지폐 3장이 약간씩 어긋나게 겹쳐 쌓인 모양. 맨 위 지폐 가운데에 큰 원(앰버)과 양 끝에 작은 원, 지폐 아래쪽 옆면에 줄 무늬. 지폐 느낌이 확실해야 한다(가로로 긴 직사각형)"}, {"name": "coin", "hint": "동전: 앰버 동전 두 개가 비스듬히 겹쳐 있고 앞 동전 안쪽에 얇은 안쪽 원 테두리와 가운데 짧은 세로 막대. 옆면 두께가 보이게"}, {"name": "won", "hint": "원화 동전(₩ 기호)"}, {"name": "dollar", "hint": "달러 지폐/동전($ 기호)"}, {"name": "wallet", "hint": "지갑, 현금 보유"}, {"name": "bank", "hint": "은행, 금리, 금융기관"}, {"name": "chart_up", "hint": "상승 차트"}, {"name": "chart_down", "hint": "하락 차트"}, {"name": "bars", "hint": "막대 그래프"}, {"name": "candle", "hint": "캔들 차트(주가)"}, {"name": "pie", "hint": "원그래프, 비중"}, {"name": "percent", "hint": "퍼센트 기호"}, {"name": "arrow_up", "hint": "위 화살표(상승)"}, {"name": "arrow_down", "hint": "아래 화살표(하락)"}, {"name": "arrow_right", "hint": "오른쪽 화살표(이어짐)"}, {"name": "swap", "hint": "교환, 맞바꿈(양방향 화살표)"}, {"name": "building", "hint": "건물, 기업, 본사"}, {"name": "factory", "hint": "공장, 생산"}, {"name": "house", "hint": "집, 부동산"}, {"name": "chip", "hint": "반도체 칩"}, {"name": "battery", "hint": "배터리"}, {"name": "car", "hint": "자동차"}, {"name": "ship", "hint": "화물선, 수출"}, {"name": "oil", "hint": "원유 드럼통, 유가"}, {"name": "gold", "hint": "금괴: 윗면이 좁고 아랫면이 넓은 사다리꼴 금괴(앰버) 3개를 피라미드처럼 쌓은 모양. 윗면에 밝은 하이라이트 줄. 상자나 가방처럼 보이면 안 된다"}, {"name": "globe", "hint": "지구본, 글로벌, 세계"}, {"name": "warning", "hint": "경고, 위험"}, {"name": "clock", "hint": "시계, 시간, 기간"}, {"name": "calendar", "hint": "달력, 날짜, 일정"}, {"name": "document", "hint": "문서, 보고서, 공시"}, {"name": "magnifier", "hint": "돋보기, 분석, 점검"}, {"name": "scale", "hint": "저울: 가운데 기둥, 위쪽 가로대, 양쪽에 접시 두 개(둘 다 반원 접시와 줄이 보이게), 받침대. 좌우 대칭"}, {"name": "shield", "hint": "방패, 방어, 안전"}, {"name": "fire", "hint": "불꽃, 과열, 급등락"}, {"name": "rocket", "hint": "로켓, 급등"}, {"name": "gear", "hint": "톱니바퀴, 구조, 시스템"}, {"name": "bell", "hint": "종, 알림, 금리 인상 신호"}, {"name": "question", "hint": "물음표, 의문"}, {"name": "check", "hint": "체크, 확인, 해결"}, {"name": "ai", "hint": "인공지능, AI(칩 위 별)"}, {"name": "basket", "hint": "장바구니, 소비"}, {"name": "cart", "hint": "쇼핑 카트, 소비"}, {"name": "credit_card", "hint": "신용카드, 카드 대금"}, {"name": "contract", "hint": "계약서, 서명"}, {"name": "crash", "hint": "폭락(꺾여 내려가는 선)"}, {"name": "dividend", "hint": "배당, 쏟아지는 동전"}, {"name": "electricity", "hint": "전력, 에너지(번개)"}, {"name": "exchange", "hint": "증권거래소 건물"}, {"name": "fire_alert", "hint": "급락 경고(번개와 하락선)"}, {"name": "flag_cn", "hint": "중국(깃발)"}, {"name": "flag_us", "hint": "미국(깃발)"}, {"name": "government", "hint": "정부, 국회(돔 건물)"}, {"name": "hourglass", "hint": "기간, 기다림(모래시계)"}, {"name": "import", "hint": "수입(상자와 안쪽 화살표)"}, {"name": "japan", "hint": "일본(깃발)"}, {"name": "laptop", "hint": "노트북, 차트 화면"}, {"name": "lightbulb", "hint": "아이디어, 해법(전구)"}, {"name": "loan", "hint": "대출(서류와 돈)"}, {"name": "lock", "hint": "잠금, 제한(자물쇠)"}, {"name": "megaphone", "hint": "발표, 공지(확성기)"}, {"name": "newspaper", "hint": "뉴스, 기사(신문)"}, {"name": "people_down", "hint": "사람들이 빠져나감, 이탈"}, {"name": "people_up", "hint": "사람들이 몰림, 유입"}, {"name": "phone", "hint": "스마트폰"}, {"name": "robot", "hint": "로봇, 자동화"}, {"name": "scissors", "hint": "감축, 줄임(가위)"}, {"name": "sell", "hint": "매도(아래 화살표와 동전)"}, {"name": "buy", "hint": "매수(위 화살표와 동전)"}, {"name": "server", "hint": "서버, 데이터센터"}, {"name": "sun_solar", "hint": "태양광, 재생에너지"}, {"name": "target", "hint": "목표(과녁)"}, {"name": "target_price", "hint": "목표 주가(깃발 꽂힌 상승선)"}, {"name": "umbrella", "hint": "보험, 방어(우산)"}, {"name": "export", "hint": "수출(컨테이너 화물선)"}, {"name": "fx", "hint": "환율(원과 달러 맞교환)"}, {"name": "inflation", "hint": "물가 상승(장바구니와 위 화살표)"}, {"name": "tax", "hint": "세금(서류와 % 원)"}]
+[
+ {
+  "name": "person",
+  "hint": "사람 한 명"
+ },
+ {
+  "name": "people",
+  "hint": "여러 사람, 투자자들, 개인 투자자"
+ },
+ {
+  "name": "investor",
+  "hint": "투자자: 사람 + 차트 보는 모습"
+ },
+ {
+  "name": "money_stack",
+  "hint": "돈뭉치: 지폐 3장이 약간씩 어긋나게 겹쳐 쌓인 모양. 맨 위 지폐 가운데에 큰 원(앰버)과 양 끝에 작은 원, 지폐 아래쪽 옆면에 줄 무늬. 지폐 느낌이 확실해야 한다(가로로 긴 직사각형)"
+ },
+ {
+  "name": "coin",
+  "hint": "동전: 앰버 동전 두 개가 비스듬히 겹쳐 있고 앞 동전 안쪽에 얇은 안쪽 원 테두리와 가운데 짧은 세로 막대. 옆면 두께가 보이게"
+ },
+ {
+  "name": "won",
+  "hint": "원화 동전(₩ 기호)"
+ },
+ {
+  "name": "dollar",
+  "hint": "달러 지폐/동전($ 기호)"
+ },
+ {
+  "name": "wallet",
+  "hint": "지갑, 현금 보유"
+ },
+ {
+  "name": "bank",
+  "hint": "은행, 금리, 금융기관"
+ },
+ {
+  "name": "chart_up",
+  "hint": "상승 차트"
+ },
+ {
+  "name": "chart_down",
+  "hint": "하락 차트"
+ },
+ {
+  "name": "bars",
+  "hint": "막대 그래프"
+ },
+ {
+  "name": "candle",
+  "hint": "캔들 차트(주가)"
+ },
+ {
+  "name": "pie",
+  "hint": "원그래프, 비중"
+ },
+ {
+  "name": "percent",
+  "hint": "퍼센트 기호"
+ },
+ {
+  "name": "arrow_up",
+  "hint": "위 화살표(상승)"
+ },
+ {
+  "name": "arrow_down",
+  "hint": "아래 화살표(하락)"
+ },
+ {
+  "name": "arrow_right",
+  "hint": "오른쪽 화살표(이어짐)"
+ },
+ {
+  "name": "swap",
+  "hint": "교환, 맞바꿈(양방향 화살표)"
+ },
+ {
+  "name": "building",
+  "hint": "건물, 기업, 본사"
+ },
+ {
+  "name": "factory",
+  "hint": "공장, 생산"
+ },
+ {
+  "name": "house",
+  "hint": "집, 부동산"
+ },
+ {
+  "name": "chip",
+  "hint": "반도체 칩"
+ },
+ {
+  "name": "battery",
+  "hint": "배터리"
+ },
+ {
+  "name": "car",
+  "hint": "자동차"
+ },
+ {
+  "name": "ship",
+  "hint": "화물선, 수출"
+ },
+ {
+  "name": "oil",
+  "hint": "원유 드럼통, 유가"
+ },
+ {
+  "name": "gold",
+  "hint": "금괴: 윗면이 좁고 아랫면이 넓은 사다리꼴 금괴(앰버) 3개를 피라미드처럼 쌓은 모양. 윗면에 밝은 하이라이트 줄. 상자나 가방처럼 보이면 안 된다"
+ },
+ {
+  "name": "globe",
+  "hint": "지구본, 글로벌, 세계"
+ },
+ {
+  "name": "warning",
+  "hint": "경고, 위험"
+ },
+ {
+  "name": "clock",
+  "hint": "시계, 시간, 기간"
+ },
+ {
+  "name": "calendar",
+  "hint": "달력, 날짜, 일정"
+ },
+ {
+  "name": "document",
+  "hint": "문서, 보고서, 공시"
+ },
+ {
+  "name": "magnifier",
+  "hint": "돋보기, 분석, 점검"
+ },
+ {
+  "name": "scale",
+  "hint": "저울: 가운데 기둥, 위쪽 가로대, 양쪽에 접시 두 개(둘 다 반원 접시와 줄이 보이게), 받침대. 좌우 대칭"
+ },
+ {
+  "name": "shield",
+  "hint": "방패, 방어, 안전"
+ },
+ {
+  "name": "fire",
+  "hint": "불꽃, 과열, 급등락"
+ },
+ {
+  "name": "rocket",
+  "hint": "로켓, 급등"
+ },
+ {
+  "name": "gear",
+  "hint": "톱니바퀴, 구조, 시스템"
+ },
+ {
+  "name": "bell",
+  "hint": "종, 알림, 금리 인상 신호"
+ },
+ {
+  "name": "question",
+  "hint": "물음표, 의문"
+ },
+ {
+  "name": "check",
+  "hint": "체크, 확인, 해결"
+ },
+ {
+  "name": "ai",
+  "hint": "인공지능, AI(칩 위 별)"
+ },
+ {
+  "name": "basket",
+  "hint": "장바구니, 소비"
+ },
+ {
+  "name": "cart",
+  "hint": "쇼핑 카트, 소비"
+ },
+ {
+  "name": "credit_card",
+  "hint": "신용카드, 카드 대금"
+ },
+ {
+  "name": "contract",
+  "hint": "계약서, 서명"
+ },
+ {
+  "name": "crash",
+  "hint": "폭락(꺾여 내려가는 선)"
+ },
+ {
+  "name": "dividend",
+  "hint": "배당, 쏟아지는 동전"
+ },
+ {
+  "name": "electricity",
+  "hint": "전력, 에너지(번개)"
+ },
+ {
+  "name": "exchange",
+  "hint": "증권거래소 건물"
+ },
+ {
+  "name": "fire_alert",
+  "hint": "급락 경고(번개와 하락선)"
+ },
+ {
+  "name": "flag_cn",
+  "hint": "중국(깃발)"
+ },
+ {
+  "name": "flag_us",
+  "hint": "미국(깃발)"
+ },
+ {
+  "name": "government",
+  "hint": "정부, 국회(돔 건물)"
+ },
+ {
+  "name": "hourglass",
+  "hint": "기간, 기다림(모래시계)"
+ },
+ {
+  "name": "import",
+  "hint": "수입(상자와 안쪽 화살표)"
+ },
+ {
+  "name": "japan",
+  "hint": "일본(깃발)"
+ },
+ {
+  "name": "laptop",
+  "hint": "노트북, 차트 화면"
+ },
+ {
+  "name": "lightbulb",
+  "hint": "아이디어, 해법(전구)"
+ },
+ {
+  "name": "loan",
+  "hint": "대출(서류와 돈)"
+ },
+ {
+  "name": "lock",
+  "hint": "잠금, 제한(자물쇠)"
+ },
+ {
+  "name": "megaphone",
+  "hint": "발표, 공지(확성기)"
+ },
+ {
+  "name": "newspaper",
+  "hint": "뉴스, 기사(신문)"
+ },
+ {
+  "name": "people_down",
+  "hint": "사람들이 빠져나감, 이탈"
+ },
+ {
+  "name": "people_up",
+  "hint": "사람들이 몰림, 유입"
+ },
+ {
+  "name": "phone",
+  "hint": "스마트폰"
+ },
+ {
+  "name": "robot",
+  "hint": "로봇, 자동화"
+ },
+ {
+  "name": "scissors",
+  "hint": "감축, 줄임(가위)"
+ },
+ {
+  "name": "sell",
+  "hint": "매도(아래 화살표와 동전)"
+ },
+ {
+  "name": "buy",
+  "hint": "매수(위 화살표와 동전)"
+ },
+ {
+  "name": "server",
+  "hint": "서버, 데이터센터"
+ },
+ {
+  "name": "sun_solar",
+  "hint": "태양광, 재생에너지"
+ },
+ {
+  "name": "target",
+  "hint": "목표(과녁)"
+ },
+ {
+  "name": "target_price",
+  "hint": "목표 주가(깃발 꽂힌 상승선)"
+ },
+ {
+  "name": "umbrella",
+  "hint": "보험, 방어(우산)"
+ },
+ {
+  "name": "export",
+  "hint": "수출(컨테이너 화물선)"
+ },
+ {
+  "name": "fx",
+  "hint": "환율(원과 달러 맞교환)"
+ },
+ {
+  "name": "inflation",
+  "hint": "물가 상승(장바구니와 위 화살표)"
+ },
+ {
+  "name": "tax",
+  "hint": "세금(서류와 % 원)"
+ }
+]

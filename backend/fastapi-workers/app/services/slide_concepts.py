@@ -37,6 +37,9 @@ TOOLS: dict[str, dict] = {
     "motif_balance": {"ready": True, "hint": "저울·시소처럼 두 힘의 균형이나 기울어짐"},
     "motif_spread": {"ready": True, "hint": "도미노·번짐처럼 충격이 퍼져 나감"},
     "motif_support": {"ready": True, "hint": "아래에서 받침(하방 지지, 안전판)"},
+    "motif_chart": {"ready": True, "hint": "꺾은선이 그려지며 하락(빨강)·상승(초록) — 폭락·급등·하락 폭(온도계 대신)"},
+    "motif_target": {"ready": True, "hint": "기대선(추정치)에 막대가 못 미치거나(하회) 넘는다(상회)"},
+    "motif_mood": {"ready": True, "hint": "분위기 소품이 커지며 떨림 — 공포·패닉·긴장·환호(먹구름, 경광등, 폭죽, 폭탄 등)"},
     "motif_pile": {"ready": True, "hint": "소재가 쌓이거나 줄어듦(누적, 감소)"},
 }
 
@@ -60,7 +63,18 @@ _SYSTEM = (
     '- motif_balance: {"left": 구절, "right": 구절, "heavier": "left"|"right"}\n'
     '- motif_spread: {"origin": 시작 구절, "effect": 결과 구절}\n'
     '- motif_support: {"top": 받쳐지는 대상 구절, "pillar": 받치는 것 구절, "state": "holding"|"weakening"}\n'
-    '- motif_pile: {"item": 현재 소재 이름, "trend": "grow"|"shrink", "label": 구절(선택)}\n\n'
+    '- motif_pile: {"item": 현재 소재 이름, "trend": "grow"|"shrink", "label": 구절(선택)}\n'
+    '- motif_chart: {"direction": "fall"|"rise", "label": 구절(선택), "value": 대본에 있는 숫자 구절(선택)}\n'
+    '- motif_target: {"target_label": 기대선 구절(예: 추정치), "actual_label": 실제 쪽 구절, "result": "below"|"above"}\n'
+    '- motif_mood: {"motif": 현재 소재 이름(분위기 소품), "label": 구절(선택)}\n'
+    '- motif_move 추가(선택): "source_motif"/"target_motif": 상자 대신 보낼·받을 쪽 소재 이름, "arrival": "pulse"|"burst"(도착 반응)\n\n'
+    "도구 선택 기준(뜻이 정확히 맞을 때만, 애매하면 none):\n"
+    "- 폭락·급락·급등·하락 폭 → motif_chart(fall/rise). 온도계(motif_gauge)는 '금리가 높은 수준' 같은 정도·수준을 말할 때만 쓴다.\n"
+    "- '불이 붙다/번지다/옮겨붙다' → motif_move(item=불꽃 소재, source_motif=보내는 쪽 도시·소재, target_motif=받는 쪽, arrival=burst). "
+    "도미노(motif_spread)는 '연쇄적으로 쓰러진다/차례로 무너진다'를 말할 때만 쓴다.\n"
+    "- '실적이 추정치를 밑돌았다/웃돌았다(하회·상회), 기대에 못 미쳤다' → motif_target(저울은 쓰지 않는다 — 어느 쪽이 무거운지로 읽혀 뜻이 뒤집힌다).\n"
+    "- 저울(motif_balance)은 '두 힘 중 어느 쪽이 더 크고 결정적이다'를 말할 때만, heavier는 대본이 더 크다·중요하다고 말한 쪽이다.\n"
+    "- '공포·패닉·불안 분위기', '환호·기대감' → motif_mood(해당 분위기 소재). 이런 장면에 글자만 띄우지 않는다.\n\n"
     "span_to: 이 그림이 뜻을 계속 갖는 마지막 장면 번호(같은 문장·같은 이야기가 이어지는 동안만. 대본이 다음 이야기로 넘어가면 그 앞 장면까지. 생략하면 그 장면 하나에서 끝난다).\n"
     "반복 금지: 앞 60초 안에 같은 관계·같은 설명을 이미 그림(흐름·이동 등)으로 보여 줬다면 다시 그리지 않는다.\n"
     "importance: 이 그림이 대본 이해에 얼마나 중요한가 1~3(3=이 대본에서 손꼽히게 중요하고 그림이 없으면 이해가 어려운 장면). "
@@ -200,6 +214,7 @@ def _fix_invalid_params(concepts: list[dict], briefs: dict[int, dict], llm_call=
 
 
 _PART_OF_TOOL = {
+    "motif_chart": "chart", "motif_target": "target", "motif_mood": "mood",
     "motif_move": "move", "motif_gauge": "gauge", "motif_balance": "balance",
     "motif_spread": "spread", "motif_support": "support", "motif_pile": "pile",
 }

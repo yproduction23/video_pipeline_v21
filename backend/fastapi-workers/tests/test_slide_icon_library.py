@@ -43,12 +43,12 @@ def test_svgs_follow_the_style_contract():
 
 
 def test_icon_image_rasterizes_with_transparency_and_is_cached():
-    image = icon_image("foreigner", 160)
+    image = icon_image("chip", 160)
 
     assert image is not None and image.size == (160, 160)
     alpha = image.getchannel("A")
     assert alpha.getextrema()[0] == 0 and alpha.getextrema()[1] == 255  # 투명 배경 + 불투명 도형
-    assert (slide_icons._CACHE_DIR / "foreigner_160.png").is_file()
+    assert (slide_icons._CACHE_DIR / "chip_160.png").is_file()
     assert icon_image("no_such_icon", 160) is None
 
 
@@ -56,6 +56,6 @@ def test_draw_icon_prefers_the_library_and_falls_back_to_the_legacy_shapes():
     canvas = Image.new("RGBA", (400, 400), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
-    assert draw_icon(draw, "foreigner", 200, 200, 200) is True
+    assert draw_icon(draw, "chip", 200, 200, 200) is True
     assert canvas.getchannel("A").getbbox() is not None
     assert draw_icon(draw, "unicorn", 200, 200, 200) is False

@@ -19,6 +19,9 @@ def test_every_part_draws_something_that_grows_with_progress_and_fits_above_the_
         "spread": {"origin": "자금이 빠져나가", "effect": "금리는 높은 수준"},
         "support": {"top": "삼성전자", "pillar": "자사주 매입", "state": "holding"},
         "pile": {"item": "달러 지폐 더미", "trend": "grow", "label": "자금"},
+        "chart": {"direction": "fall", "label": "코스피"},
+        "target": {"target_label": "추정치", "actual_label": "이 실적", "result": "below"},
+        "mood": {"motif": "경광등", "label": "자금"},
     }
     assert set(params) == set(PARTS)
     for part, values in params.items():
@@ -134,3 +137,40 @@ def test_part_is_drawn_on_a_soft_dark_panel_so_labels_stay_readable_on_bright_fo
     # 밝은 배경(235) 위에 어두운 패널이 깔려 중앙부에 어두운 픽셀이 넓게 있다
     dark = sum(1 for v in raw if v < 120)
     assert dark > 192 * 108 * 0.12
+
+
+def test_chart_draws_a_falling_red_line_and_a_rising_green_one():
+    def hues(direction):
+        sprite = part_sprite("chart", {"direction": direction}, 1.0)
+        pixels = [px for px in sprite.getdata() if px[3] > 200]
+        red = sum(1 for r, g, b, a in pixels if r > 200 and g < 90 and b < 90)
+        green = sum(1 for r, g, b, a in pixels if g > 170 and r < 90 and b < 140)
+        return red, green
+
+    fall_red, fall_green = hues("fall")
+    rise_red, rise_green = hues("rise")
+    assert fall_red > 1500 and fall_green < 200
+    assert rise_green > 1500 and rise_red < 200
+
+
+def test_target_bar_stops_below_the_expectation_line_and_passes_it_above():
+    def bar_top(result):
+        sprite = part_sprite("target", {"target_label": "추정치", "actual_label": "이 실적", "result": result}, 1.0)
+        # 점선 사이 틈(x=520)에서 막대 윗면을 찾는다
+        ys = [y for y in range(sprite.height) if sprite.getpixel((520, y))[3] > 200]
+        return min(ys)
+
+    assert bar_top("below") > bar_top("above")            # 하회: 막대가 더 낮다
+    assert bar_top("below") > 290 and bar_top("above") < 290      # 기대선(y=290)을 기준으로 아래/위
+
+
+def test_new_part_params_are_validated_against_the_narration_and_the_motif_library():
+    narration = "실적이 추정치를 소폭 밑돌았습니다. 시장은 공포 분위기였습니다."
+    assert validate_part("target", {"target_label": "추정치", "actual_label": "실적이", "result": "below"}, narration) == {
+        "target_label": "추정치", "actual_label": "실적이", "result": "below"}
+    assert validate_part("target", {"target_label": "추정치", "actual_label": "실적이", "result": "엄청"}, narration) is None
+    assert validate_part("chart", {"direction": "fall", "label": "없는 말"}, narration) == {"direction": "fall"}   # 라벨은 원문에 없으면 뺀다
+    assert validate_part("chart", {"direction": "sideways"}, narration) is None
+    assert validate_part("mood", {"motif": "경광등", "label": "공포 분위기"}, narration) == {"motif": "경광등", "label": "공포 분위기"}
+    assert validate_part("mood", {"motif": "없는 소재"}, narration) is None
+    assert validate_part("move", {"item": "달러 지폐 더미", "source_motif": "은행 건물", "arrival": "burst"}, narration)["arrival"] == "burst"
