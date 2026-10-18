@@ -556,4 +556,53 @@ class ImagesServiceAutoGateTest {
         verify(assetRepository, never()).delete(good);
         verify(assetRepository, never()).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE));
     }
+
+    /**
+     * 2026-10-18 20번 Job: 후편집·시퀀스가 없는 칠판 장면은 공용 칠판 배경 파일을 경로로 쓴다.
+     * 다른 장면이 같은 파일로 이미 등록돼 있어도 이 장면은 건너뛰어지면 안 된다(장면이 사라져 조립이 대본 계약 검증에서 실패했다).
+     */
+    @Test
+    void persistGenerateResult_sceneSharingTheBoardBackgroundPathWithAnotherSceneIsStillRegistered() {
+        VideoJob job = new VideoJob();
+        job.setId(20L);
+        String board = "/app/data/jobs/20/slides/board_background_v4.png";
+        Asset first = Asset.builder().jobId(20L).assetType(AssetType.SCENE_IMAGE).localPath(board)
+                .metaJson("{\"index\":12}").build();
+        SceneImageDto second = new SceneImageDto();
+        second.setIndex(63);
+        second.setImagePath(board);
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(second));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.SCENE_IMAGE)).thenReturn(List.of(first));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                imagesService, "persistGenerateResult", 20L, job, result);
+
+        verify(assetRepository).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE
+                && board.equals(a.getLocalPath()) && a.getMetaJson().contains("\"index\":63")));
+    }
+
+    @Test
+    void persistGenerateResult_sameSceneAndSamePathPostedAgainIsNotRegisteredTwice() {
+        VideoJob job = new VideoJob();
+        job.setId(20L);
+        String board = "/app/data/jobs/20/slides/board_background_v4.png";
+        Asset existing = Asset.builder().jobId(20L).assetType(AssetType.SCENE_IMAGE).localPath(board)
+                .metaJson("{\"index\":63}").build();
+        SceneImageDto again = new SceneImageDto();
+        again.setIndex(63);
+        again.setImagePath(board);
+        ImagesGenerateResponse result = new ImagesGenerateResponse();
+        result.setScenes(List.of(again));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.SCENE_IMAGE)).thenReturn(List.of(existing));
+        when(assetRepository.findByJobIdAndAssetType(20L, AssetType.IMAGE_QC_REPORT)).thenReturn(List.of());
+        when(autonomyService.isAuto(job)).thenReturn(false);
+
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                imagesService, "persistGenerateResult", 20L, job, result);
+
+        verify(assetRepository, never()).save(argThat(a -> a.getAssetType() == AssetType.SCENE_IMAGE));
+    }
 }

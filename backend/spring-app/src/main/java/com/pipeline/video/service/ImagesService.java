@@ -271,8 +271,12 @@ public class ImagesService {
                 // 저장되지 못한다.
                 String scenePath = scene.getImagePath();
                 List<Asset> existingScenes = assetRepository.findByJobIdAndAssetType(jobId, AssetType.SCENE_IMAGE);
+                // 2026-10-18 20번 Job 재현: 후편집·시퀀스가 없는 칠판 장면은 공용 칠판 배경 파일을 경로로 쓴다.
+                // 경로만 비교하면 다른 장면이 이미 같은 파일로 등록돼 있을 때 이 장면이 "이미 등록됨"으로 건너뛰어져
+                // 장면 하나가 사라지고 조립이 대본 계약 검증에서 실패했다. 같은 장면 번호의 같은 경로일 때만 중복으로 본다.
                 boolean alreadyRegistered = scenePath != null
-                        && existingScenes.stream().anyMatch(existing -> scenePath.equals(existing.getLocalPath()));
+                        && existingScenes.stream().anyMatch(existing -> scenePath.equals(existing.getLocalPath())
+                                && java.util.Objects.equals(scene.getIndex(), sceneIndexOf(existing)));
                 // 2026-10-16 20번 Job 재현: 실패했던 장면(경로 없음)을 다시 생성하면 새 자산이 추가만
                 // 되어 같은 장면 번호가 두 개로 남았다. 같은 장면 번호의 이전 자산은 새 결과로 교체한다.
                 // 새 결과가 또 실패(경로 없음)면 좋은 이전 이미지를 지키고, 실패 자리표시자는 하나만 둔다.
