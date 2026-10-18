@@ -61,9 +61,11 @@ _SYSTEM = (
     '- motif_spread: {"origin": 시작 구절, "effect": 결과 구절}\n'
     '- motif_support: {"top": 받쳐지는 대상 구절, "pillar": 받치는 것 구절, "state": "holding"|"weakening"}\n'
     '- motif_pile: {"item": 현재 소재 이름, "trend": "grow"|"shrink", "label": 구절(선택)}\n\n'
+    "span_to: 이 그림이 뜻을 계속 갖는 마지막 장면 번호(같은 문장·같은 이야기가 이어지는 동안만. 대본이 다음 이야기로 넘어가면 그 앞 장면까지. 생략하면 그 장면 하나에서 끝난다).\n"
+    "반복 금지: 앞 60초 안에 같은 관계·같은 설명을 이미 그림(흐름·이동 등)으로 보여 줬다면 다시 그리지 않는다.\n"
     "importance: 이 그림이 대본 이해에 얼마나 중요한가 1~3(3=이 대본에서 손꼽히게 중요하고 그림이 없으면 이해가 어려운 장면). "
     "그림은 자주 쓰면 정신이 없으므로 중요도가 낮은 장면은 tool을 none으로 두는 편이 낫다.\n\n"
-    '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","importance":1~3,"motifs":["현재 소재 이름"],'
+    '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","importance":1~3,"span_to":번호,"motifs":["현재 소재 이름"],'
     '"params":{...부품일 때만},"missing":[{"type":"...","name":"...","description":"..."}]}]}'
 )
 
@@ -140,6 +142,7 @@ def design_concepts(briefs: dict[int, dict], *, llm_call=None) -> dict | None:
             "tool_ready": bool(TOOLS[tool]["ready"]), "motifs": list(dict.fromkeys(motifs)),
             "params": item.get("params") if isinstance(item.get("params"), dict) else {},
             "importance": int(item["importance"]) if str(item.get("importance") or "").isdigit() and 1 <= int(item["importance"]) <= 3 else 1,
+            "span_to": int(item["span_to"]) if str(item.get("span_to") or "").isdigit() else index,
         })
     _fix_invalid_params(concepts, briefs, llm_call)
     ordered = sorted(missing.values(), key=lambda m: (-m["count"], m["name"]))
@@ -266,11 +269,14 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
         item = str(params.get("item") or "")
         if item and item_uses.get(item, 0) >= MAX_ITEM_REPEATS:
             continue
-        # 뒤따르는 후편집 없는 장면까지 이어서 천천히 진행한다.
+        # 연출 단계가 "아직 같은 이야기"라고 한 장면(span_to)까지만 이어서 천천히 진행한다(2026-10-18: 이야기가 바뀐 뒤에도 그림이 남았다).
         span = [index]
         total = by_index[index]["duration"]
         position = order.index(index)
+        span_to = int(concept.get("span_to") or index)
         for follower in order[position + 1:position + MAX_SPAN_SCENES]:
+            if follower > span_to:
+                break
             scene = by_index[follower]
             if (
                 scene.get("revised") or follower in occupied or total + scene["duration"] > MAX_SPAN_SECONDS

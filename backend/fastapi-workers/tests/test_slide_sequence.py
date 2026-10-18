@@ -371,13 +371,14 @@ def test_a_topic_change_overlaps_briefly_so_the_screen_never_flashes_empty():
     assert [e["until"] for e in kept if e["topic"] == 2] == [15.0, 15.0]
 
 
-def test_the_opening_element_appears_almost_immediately():
+def test_the_opening_element_appears_no_later_than_the_opening_limit():
     plan = _plan(duration=6.0)
     run = board_runs(plan)[0]
 
     seq = design_sequence(run, plan, llm_call=_llm(DESIGN))
 
-    assert min(e["at"] for e in seq["elements"]) <= 0.1 + 1e-6
+    # 말하는 구절에 맞추되 칠판이 오래 비지 않게 늦어도 OPENING_LATEST_SECONDS(1.8초)에는 나온다.
+    assert min(e["at"] for e in seq["elements"]) <= 1.8 + 1e-6
 
 
 def test_list_is_laid_out_like_the_reference_with_left_aligned_numbered_rows_under_a_rule():

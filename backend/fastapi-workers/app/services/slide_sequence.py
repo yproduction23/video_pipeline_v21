@@ -61,7 +61,7 @@ SUBTITLE_SAFE_BOTTOM = 890
 SIDE_SLOT_MAX_WIDTH = 820
 WIDE_SLOT_MAX_WIDTH = 1500
 _SIDE_SLOTS = {"left", "right", "upper_left", "upper_right", "lower_left", "lower_right"}
-OPENING_LATEST_SECONDS = 0.1
+OPENING_LATEST_SECONDS = 1.8   # 구간 첫 요소의 최대 지연(그보다 늦게 말하는 구절이면 이 시각에 나온다)
 # 2026-10-16 운영자 요청: 구조와 애니메이션 순서는 복잡하지 않고 단순하며 보기 편해야 한다.
 # 20번 Job 1:17~1:33 재현(2초마다 같은 자리에서 서로 다른 아이콘 교체, 빈 화면) 뒤 레퍼런스 10~33초를 다시 분석해
 # 개수 제한이 아니라 "주제 단위로 쌓고, 주제가 바뀔 때만 비운다"로 바꿨다(레퍼런스는 5~6개가 동시에 있어도 짝지어져 읽힌다).
@@ -661,6 +661,81 @@ def _fill_gaps(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
     return elements + added
 
 
+MAX_BLANK_SECONDS = 0.6
+
+
+def _cover_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float) -> list[dict]:
+    """회색 칠판이 비어 보이는 구간을 없앤다(2026-10-18 피드백: 2분 42초에 아무것도 없었다).
+
+    - 중간에 빈 구간이 생기면 바로 앞 주제의 요소를 그 구간 끝까지 이어 둔다.
+    - 구간 시작이 OPENING_LATEST_SECONDS보다 오래 비면, 그때 말하는 자막 줄의 핵심어(원문 그대로)를 보충한다."""
+    from app.services.slide_edit_plan import fallback_key_phrase
+
+    def short_phrase(text: str, chunks: list | None = None) -> str:
+        """원문에서 그대로 떼어 낸 16자 이내 핵심 구절(앞쪽 단어부터)."""
+        phrase = fallback_key_phrase(text, chunks)
+        if len(phrase) <= MAX_TEXT_CHARS:
+            return phrase
+        words, picked = phrase.split(" "), []
+        for word in words:
+            if len(" ".join([*picked, word])) > MAX_TEXT_CHARS:
+                break
+            picked.append(word)
+        return " ".join(picked)
+
+    def intervals() -> list[tuple[float, float]]:
+        return sorted((e["at"], e["until"]) for e in elements)
+
+    # 시작이 오래 비면 그때 말하는 줄의 핵심어를 먼저 띄운다.
+    first_at = min(e["at"] for e in elements)
+    if first_at > OPENING_LATEST_SECONDS + 0.2:
+        starts = _scene_starts(plan)
+        seq_start = starts[run[0]["index"]]
+        for scene in run:
+            for chunk in scene.get("chunks") or []:
+                moment = starts[scene["index"]] - seq_start + float(chunk["start"])
+                if OPENING_LATEST_SECONDS - 0.2 <= moment < first_at - 0.6:
+                    phrase = short_phrase(str(chunk["text"]), scene.get("chunks"))
+                    if 4 <= len(phrase) <= MAX_TEXT_CHARS:
+                        elements.append({
+                            "id": f"b{len(elements) + 1}", "kind": "text", "scene": scene["index"], "topic": 0, "anchor": "",
+                            "slot": "center", "replaces": None, "anim": "rise", "at": round(max(moment - 0.1, 0.0), 2),
+                            "until": round(first_at + TOPIC_OVERLAP_SECONDS, 2),
+                            "content": {"text": phrase, "color": "red"}, "size": 120,
+                        })
+                        break
+            else:
+                continue
+            break
+        else:
+            phrase = short_phrase(str(run[0]["narration"]))
+            if 4 <= len(phrase) <= MAX_TEXT_CHARS:
+                elements.append({
+                    "id": f"b{len(elements) + 1}", "kind": "text", "scene": run[0]["index"], "topic": 0, "anchor": "",
+                    "slot": "center", "replaces": None, "anim": "rise", "at": OPENING_LATEST_SECONDS,
+                    "until": round(first_at + TOPIC_OVERLAP_SECONDS, 2),
+                    "content": {"text": phrase, "color": "red"}, "size": 120,
+                })
+    # 중간 빈 구간: 앞 요소를 이어 둔다.
+    for _ in range(len(elements) + 1):
+        cursor, changed = 0.0, False
+        for start, end in intervals():
+            if start - cursor > MAX_BLANK_SECONDS and cursor > 0:
+                for element in elements:
+                    if abs(element["until"] - cursor) < 1e-6:
+                        element["until"] = round(start + TOPIC_OVERLAP_SECONDS, 2)
+                        changed = True
+            cursor = max(cursor, end)
+        if cursor < duration - MAX_BLANK_SECONDS:
+            for element in elements:
+                if abs(element["until"] - cursor) < 1e-6:
+                    element["until"] = round(duration, 2)
+                    changed = True
+        if not changed:
+            break
+    return sorted(elements, key=lambda e: e["at"])
+
+
 def sequence_signature(run: list[dict]) -> str:
     payload = json.dumps(
         [SEQUENCE_VERSION, [[s["index"], s["narration"], round(s["duration"], 2),
@@ -728,6 +803,7 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
         designed = resolve_lifetimes(_fallback_elements(run, plan), duration, merge_short=False)
     if not designed:
         return None
+    designed = _cover_blanks(designed, run, plan, duration)
     return {
         "id": 0, "version": SEQUENCE_VERSION, "scenes": [s["index"] for s in run], "start": round(seq_start, 2),
         # 장면별 시퀀스 시간축 시작점: 장면 클립은 이 구간만 잘라 낸다
@@ -921,16 +997,40 @@ def _row_sprite(label: str, value: str, color: tuple) -> Image.Image:
     return sprite
 
 
-def _node_sprite(label: str, icon: str | None) -> Image.Image:
+FLOW_ARROW_SIZE = 160
+FLOW_ARROW_GAP = 220       # 상자와 상자 사이 화살표가 들어갈 틈(px, 화살표 폭 약 150 + 양쪽 여백)
+FLOW_MAX_WIDTH = 1760      # 흐름도 전체 최대 폭(좌우 여백 포함 화면 안)
+
+
+def _flow_layout(nodes: list[dict], cx: int) -> tuple[list[int], list[int], int]:
+    """상자 너비를 실제 글자로 재서 위치를 정한다. 전체가 화면 폭을 넘으면 글자 크기를 줄인다(화살표·상자 겹침 방지, 2026-10-18 피드백)."""
+    count = len(nodes)
+    for font in (80, 72, 64, 56, 48):
+        widths = [_node_sprite(str(n["label"]), n.get("icon"), font).width for n in nodes]
+        if sum(widths) + FLOW_ARROW_GAP * (count - 1) <= FLOW_MAX_WIDTH:
+            break
+    total = sum(widths) + FLOW_ARROW_GAP * (count - 1)
+    cursor = cx - total / 2
+    xs, arrows = [], []
+    for k, width in enumerate(widths):
+        xs.append(int(cursor + width / 2))
+        cursor += width
+        if k < count - 1:
+            arrows.append(int(cursor + FLOW_ARROW_GAP / 2))   # 상자 사이 틈의 한가운데
+            cursor += FLOW_ARROW_GAP
+    return xs, arrows, font
+
+
+def _node_sprite(label: str, icon: str | None, font: int = 80) -> Image.Image:
     """흐름도의 한 단계. 아이콘이 있으면 아이콘+글, 없으면 윤곽선 카드 안의 글(같은 흐름에서는 구조가 같다)."""
     if icon:
-        text = _text_sprite(label, 72, WHITE, max_width=520)
+        text = _text_sprite(label, min(72, font), WHITE, max_width=520)
         size = 280
         sprite = Image.new("RGBA", (max(size + 40, text.width), size + 40 + text.height), (0, 0, 0, 0))
         sprite.alpha_composite(_icon_sprite(icon, size), ((sprite.width - size - 40) // 2, 0))
         sprite.alpha_composite(text, ((sprite.width - text.width) // 2, size + 30))
         return sprite
-    text = _text_sprite(label, 80, WHITE, max_width=520)
+    text = _text_sprite(label, font, WHITE, max_width=520)
     pad_x, pad_y = 36, 24
     sprite = Image.new("RGBA", (text.width + pad_x * 2, text.height + pad_y * 2), (0, 0, 0, 0))
     ImageDraw.Draw(sprite).rounded_rectangle(
@@ -976,14 +1076,20 @@ def expand_primitives(sequence: dict) -> list[dict]:
             prims.append({**base, "kind": "bars", "at": at, "pos": (cx, cy), "title": content.get("title", ""),
                           "items": content["items"]})
         elif kind == "list":
-            # 레퍼런스 목록 카드: 왼쪽 정렬 — 작은 노란 태그, 굵은 흰 제목, 구분선, 노란 번호가 붙은 항목
-            left = 330
+            # 레퍼런스 목록 카드: 왼쪽 정렬 — 작은 노란 태그, 굵은 흰 제목, 구분선, 노란 번호가 붙은 항목.
+            # 카드 블록 전체를 화면 가운데에 둔다(2026-10-18 피드백: 왼쪽으로 치우쳤다).
+            probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+            title_w = probe.textlength(str(content["title"]), font=_font(_FONT_BOLD, 88))
+            items_w = max(probe.textlength(str(item), font=_font(_FONT_BOLD, 80)) for item in content["items"]) + 120
+            block_w = int(min(max(title_w, items_w, 700), 1500))
+            left = max(int(cx - block_w / 2), 120)
             top = cy - 40 - len(content["items"]) * 62
             prims.append({**base, "kind": "text", "at": at, "pos": (left, top), "align": "left", "text": "■ 정리", "size": 44,
                           "color": ACCENT[:3], "max_width": 600})
             prims.append({**base, "kind": "text", "at": round(at + 0.1, 2), "pos": (left, top + 80), "align": "left",
                           "text": content["title"], "size": 88, "color": WHITE, "max_width": 1300})
-            prims.append({**base, "kind": "rule", "at": round(at + 0.2, 2), "pos": (left, top + 150), "width": 1260})
+            prims.append({**base, "kind": "rule", "at": round(at + 0.2, 2), "pos": (left, top + 150), "width": block_w,
+                          "align": "left"})
             for k, item in enumerate(content["items"]):
                 y = top + 240 + k * 125
                 t = round(at + 0.6 + k * 0.8, 2)
@@ -1002,16 +1108,15 @@ def expand_primitives(sequence: dict) -> list[dict]:
                               "label": row["label"], "value": row["value"], "color": palette[k % 3]})
         elif kind == "flow":
             nodes = content["nodes"]
-            span = 700 if len(nodes) == 2 else 1250  # 단계가 적으면 가깝게 붙여 한눈에 읽히게 한다
-            xs = [int(cx - span / 2 + span * k / max(len(nodes) - 1, 1)) for k in range(len(nodes))] if len(nodes) > 1 else [cx]
+            xs, arrow_xs, font = _flow_layout(nodes, cx)
             stagger = min(0.9, max(0.35, (until - at - 0.8) / max(len(nodes), 1)))  # 짧은 주제는 간격을 줄인다
             for k, node in enumerate(nodes):
                 t = round(at + k * stagger, 2)
                 prims.append({**base, "kind": "node", "at": t, "pos": (xs[k], cy), "label": node["label"],
-                              "icon": node.get("icon")})
+                              "icon": node.get("icon"), "font": font})
                 if k < len(nodes) - 1:
                     prims.append({**base, "kind": "arrow", "at": round(t + 0.5, 2),
-                                  "pos": ((xs[k] + xs[k + 1]) // 2, cy - 30), "direction": "right", "size": 200})
+                                  "pos": (arrow_xs[k], cy - 30), "direction": "right", "size": FLOW_ARROW_SIZE})
     return prims
 
 
@@ -1038,7 +1143,7 @@ def _sprite_for(prim: dict, p: float) -> Image.Image:
         sprite = Image.new("RGBA", (prim["width"], 8), (0, 0, 0, 0))
         ImageDraw.Draw(sprite).rectangle((0, 2, prim["width"], 5), fill=(235, 236, 240, 230))
         return sprite
-    return _node_sprite(prim["label"], prim.get("icon"))
+    return _node_sprite(prim["label"], prim.get("icon"), prim.get("font", 80))
 
 
 def _animated(prim: dict) -> bool:

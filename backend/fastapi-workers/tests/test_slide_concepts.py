@@ -96,9 +96,8 @@ def test_validated_part_params_replace_a_key_text_overlay_with_a_motion_part():
     first, second = updated["scenes"]
     assert first["overlay"]["type"] == "motion_part" and first["overlay"]["part"] == "support"
     assert first["overlay"]["params"]["state"] == "holding" and first["overlay"]["source"] == "concept"
-    assert second["overlay"]["type"] == "motion_part" and second["overlay"]["span"]["head"] == 0   # 검증 실패한 자기 그림은 없고, 앞 그림이 이어진다
-    assert second["overlay"]["params"]["state"] == "holding"
-    assert updated["concept_applied"] == {"motion_parts": 1, "scenes": 2, "rejected": 1}
+    assert second["overlay"]["type"] == "key_text"                      # 검증 실패 → 기존 후편집 유지(이어짐은 연출 단계가 요청할 때만)
+    assert updated["concept_applied"] == {"motion_parts": 1, "scenes": 1, "rejected": 1}
 
 
 def test_concept_does_not_override_data_overlays_or_operator_edits():
@@ -157,7 +156,8 @@ def test_a_part_continues_over_the_following_bare_scenes_so_it_moves_slowly():
     from app.services.slide_concepts import apply_concepts
 
     plan = _scenes_plan(5, 4.0)
-    updated = apply_concepts(plan, {"concepts": [_move_concept(1, importance=3)], "missing": []})
+    concept = {**_move_concept(1, importance=3), "span_to": 3}
+    updated = apply_concepts(plan, {"concepts": [concept], "missing": []})
 
     head, follower, last = updated["scenes"][1], updated["scenes"][2], updated["scenes"][3]
     assert head["overlay"]["span"]["head"] == 1 and head["overlay"]["span"]["total_scenes"] == 3
@@ -166,3 +166,14 @@ def test_a_part_continues_over_the_following_bare_scenes_so_it_moves_slowly():
     assert last["overlay"]["span"]["last"] is True and follower["overlay"]["span"]["last"] is False
     assert updated["scenes"][4].get("overlay") is None                       # 최대 3장면까지만 이어진다
     assert head["overlay"]["span"]["anim"] >= 5.0                            # 한 장면 안에 몰아 그리지 않고 천천히
+
+
+def test_without_span_to_the_part_ends_with_its_own_scene():
+    """2026-10-18 피드백: 이야기가 바뀐 뒤에도 그림이 남았다 — 연출 단계가 같은 이야기라고 한 장면까지만 이어진다."""
+    from app.services.slide_concepts import apply_concepts
+
+    plan = _scenes_plan(5, 4.0)
+    updated = apply_concepts(plan, {"concepts": [_move_concept(1, importance=3)], "missing": []})
+
+    assert updated["scenes"][1]["overlay"]["span"]["total_scenes"] == 1
+    assert updated["scenes"][2].get("overlay") is None
