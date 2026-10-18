@@ -214,6 +214,8 @@ SLIDE_KLING_ENABLED = os.getenv("SLIDE_KLING_ENABLED", "False").lower() == "true
 # 슬라이드형: 계획된 스톡이 내용과 안 맞아 찾지 못한 장면을 Gemini 이미지로 대체하는 영상당 최대 장면 수(0이면 회색 배경으로 대체).
 # 2026-10-16 운영자 결정: 먼저 Gemini로만 가 보고 품질이 안 나오면 다시 정한다(장면당 약 ₩339).
 SLIDE_STOCK_MISS_AI_MAX = int(os.getenv("SLIDE_STOCK_MISS_AI_MAX", "20"))
+# 소재 즉석 생성 예산(작업당 원, 운영자 결정 2026-10-19: 5천원~1만원): 기본 5,000원, 10,000원을 넘지 않는다.
+SLIDE_MOTIF_BUDGET_KRW = min(10_000, int(os.getenv("SLIDE_MOTIF_BUDGET_KRW", "5000")))
 # 슬라이드형: 고지 카드가 나오는 동안 내레이션도 멈추는 시간(초). 0이면 내레이션이 흐르는 채로 카드를 얹는다.
 SLIDE_DISCLAIMER_PAUSE_SECONDS = float(os.getenv("SLIDE_DISCLAIMER_PAUSE_SECONDS", "1.0"))
 INTRO_MOTION_TEST_MODE = os.getenv("INTRO_MOTION_TEST_MODE", "False").lower() == "true"

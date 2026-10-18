@@ -11,8 +11,10 @@ import logging
 import re
 import time
 
+from app import runtime_config
 from app.services.slide_concepts import apply_concepts, design_concepts
 from app.services.slide_icon_judge import fill_missing_icons_in_plan, strip_unjudged_icons_from_plan
+from app.services.slide_motif_factory import make_missing_motifs
 from app.services.slide_text_judge import drop_fake_lists_in_plan, fix_key_texts_in_plan
 from app.services.slide_title_judge import fix_titles_in_plan
 from app.services.slide_edit_plan import (
@@ -154,8 +156,8 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
         board = background == "board"
         overlay = validated.get(index)
         if board and not overlay:
-            overlay = {"type": "key_text", "text": fallback_key_phrase(scene["narration"], scene.get("chunks")), "icon": None,
-                       "source": "fallback_phrase"}
+            phrase = fallback_key_phrase(scene["narration"], scene.get("chunks"))
+            overlay = {"type": "key_text", "text": phrase, "icon": None, "source": "fallback_phrase"} if phrase else None
         if overlay:
             overlay = dict(overlay)
             overlay["explain"] = board
@@ -194,8 +196,8 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
             if scene.get("overlay"):
                 scene["overlay"]["explain"] = True
             else:
-                scene["overlay"] = {"type": "key_text", "text": fallback_key_phrase(scene["narration"], scene.get("chunks")),
-                                    "icon": None, "explain": True, "source": "fallback_phrase"}
+                phrase = fallback_key_phrase(scene["narration"], scene.get("chunks"))
+                scene["overlay"] = {"type": "key_text", "text": phrase, "icon": None, "explain": True, "source": "fallback_phrase"} if phrase else None
             demoted.append(scene["index"])
 
     if source == "operator":
@@ -356,6 +358,12 @@ def build_edit_plan_with_repair(
     plan["auto_repair_rounds"] = rounds
     # 연출 단계(2026-10-17): 대본 행간을 읽어 떠올릴 그림을 정하고, 검증을 통과한 움직임 부품을 후편집으로 바꾼다.
     concepts = design_concepts(briefs, llm_call=llm_call)
+    if concepts and concepts.get("missing") and not callable(llm_call):
+        # 소재 즉석 생성(2026-10-19 운영자 결정): 필요한데 없는 소재를 작업당 예산 안에서 만들어 저장하고, 새 소재로 연출 단계를 한 번 더 돌린다.
+        made = make_missing_motifs(concepts["missing"], job_id=job_id, budget=runtime_config.value("slide_motif_budget_krw"))
+        plan["new_motifs"] = made
+        if made["created"]:
+            concepts = design_concepts(briefs, llm_call=llm_call) or concepts
     if concepts:
         plan["visual_concepts"] = concepts
         plan = apply_concepts(plan, concepts)

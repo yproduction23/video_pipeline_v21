@@ -187,3 +187,26 @@ def test_counter_counts_up_from_zero_and_ends_on_the_original_value():
     assert start.size == middle.size == end.size            # 숫자가 변해도 그림 크기가 흔들리지 않는다
     assert _opaque_pixels(start) < _opaque_pixels(end)      # 0에서 시작해 점점 또렷해진다
     assert middle.tobytes() != end.tobytes()
+
+
+def test_long_labels_never_touch_the_edge_of_any_part():
+    """2026-10-19 운영자 지적(2:50): 도미노의 "코스피 전체가 흔들리는" 라벨이 오른쪽 가장자리에서 잘렸다 — 긴 라벨(12자)로 모든 부품의 가장자리를 확인한다."""
+    label = "코스피 전체가 흔들리는"
+    params = {
+        "move": {"item": "달러 지폐 더미", "source_label": label, "target_label": label},
+        "gauge": {"label": label, "level": "high"},
+        "balance": {"left": label, "right": label, "heavier": "right"},
+        "spread": {"origin": label, "effect": label},
+        "support": {"top": label, "pillar": label, "state": "holding"},
+        "pile": {"item": "달러 지폐 더미", "trend": "grow", "label": label},
+        "chart": {"direction": "fall", "label": label},
+        "target": {"target_label": label, "actual_label": label, "result": "below"},
+        "mood": {"motif": "경광등", "label": label},
+    }
+    margin = 6
+    for part, values in params.items():
+        sprite = part_sprite(part, values, 1.0)
+        alpha = sprite.getchannel("A")
+        w, h = sprite.size
+        for box in ((0, 0, margin, h), (w - margin, 0, w, h), (0, 0, w, margin), (0, h - margin, w, h)):
+            assert alpha.crop(box).getbbox() is None, f"{part}: 그림이 가장자리({box})에 닿아 잘린다"

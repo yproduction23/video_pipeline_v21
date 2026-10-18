@@ -17,6 +17,17 @@ NARRATIONS = [
 
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def allow_one_red_topic(monkeypatch):
+    """이 모듈은 템플릿·수명·대체 경로의 메커니즘을 확인하므로 빨간 글 주제 1개를 허용한다(운영 기본값 0은 test_slide_summary_policy에서 확인)."""
+    from app.services import slide_sequence
+
+    monkeypatch.setattr(slide_sequence, "RED_TOPICS_PER_SEQUENCE", 1)
+
+
 def _approving(payload):
     """설계 응답은 payload로, 아이콘 적합성 판정 요청에는 모든 항목을 통과시키는 가짜 LLM."""
     def call(system, messages, max_tokens):

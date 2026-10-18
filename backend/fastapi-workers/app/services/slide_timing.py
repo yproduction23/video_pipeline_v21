@@ -125,3 +125,39 @@ def sentence_end_offset(narration: str, chunks: list[dict], duration: float, anc
                     return round(min(chunk_end, float(duration)), 2)
     ratio = end / max(len(text), 1)
     return round(min(ratio * float(duration), float(duration)), 2)
+
+
+def tts_windows(scenes: list[dict]) -> list[tuple[float, float]] | None:
+    """장면별 TTS 실제 구간(시작, 끝). 조립(롱폼)이 쓰는 구간과 같다: 첫 장면은 0초에서, 그다음 장면은 앞 장면이 끝난 시각에서 시작하고
+    각 장면은 자기 마지막 자막 줄이 끝나는 시각에 끝난다(대본 계약 caption_chunk_contract의 end). 계약 시각이 하나라도 없으면 None.
+
+    2026-10-19 운영자 피드백(20번 Job): 이미지 단계는 추정 길이(합계 300초)로, 조립은 TTS 실제 구간(289.9초)으로 일해 후반 장면 71개 중 58개의
+    자막 줄 시각이 0초로 깨졌고 그래픽이 말하기보다 최대 4초 일찍 떴다. 두 단계가 같은 시간축을 쓰게 한다."""
+    windows: list[tuple[float, float]] = []
+    previous = 0.0
+    for scene in scenes:
+        contract = scene.get("caption_chunk_contract")
+        if not isinstance(contract, dict) or contract.get("end") is None:
+            return None
+        try:
+            end = float(contract["end"])
+        except (TypeError, ValueError):
+            return None
+        if end <= previous:
+            return None
+        windows.append((previous, end))
+        previous = end
+    return windows
+
+
+def apply_tts_windows(scenes: list[dict]) -> bool:
+    """장면의 시작·끝·길이를 TTS 실제 구간으로 덮어쓴다(추정값은 estimated_seconds_before_tts에 남긴다). 적용했으면 True."""
+    windows = tts_windows(scenes)
+    if not windows:
+        return False
+    for scene, (start, end) in zip(scenes, windows):
+        scene.setdefault("estimated_seconds_before_tts", scene.get("duration") or scene.get("estimated_seconds"))
+        scene["start_seconds"] = round(start, 3)
+        scene["end_seconds"] = round(end, 3)
+        scene["duration"] = round(end - start, 3)
+    return True

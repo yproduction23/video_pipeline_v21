@@ -14,6 +14,17 @@ NARRATIONS = [
 ]
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def allow_one_red_topic(monkeypatch):
+    """이 모듈은 템플릿·수명·대체 경로의 메커니즘을 확인하므로 빨간 글 주제 1개를 허용한다(운영 기본값 0은 test_slide_summary_policy에서 확인)."""
+    from app.services import slide_sequence
+
+    monkeypatch.setattr(slide_sequence, "RED_TOPICS_PER_SEQUENCE", 1)
+
+
 def _plan(duration=6.0, overlays=None):
     briefs = {i: {"narration": t, "context": "", "duration": duration} for i, t in enumerate(NARRATIONS)}
     entries = [{"index": i, "background": "board", "overlay": (overlays or {}).get(i, {"type": "key_text", "text": t[:8]})}
@@ -85,14 +96,14 @@ def test_a_gray_board_run_never_goes_blank_in_the_middle():
     assert seq["duration"] - cursor <= 0.6
 
 
-def test_first_element_waits_for_the_spoken_phrase_up_to_the_opening_limit():
+def test_first_element_of_the_video_opens_early_and_lands_on_the_spoken_phrase():
+    """첫 장면(후킹)의 첫 그래픽은 0.2초부터 천천히 움직이고 말하는 순간(약 2.3~2.9초)에 완성된다 — 말하기 전에 화면이 비지 않는다."""
     topic = {"template": "headline_sub", "scene": 0, "anchor": "미국 금리가 올라가면", "headline": "미국 금리가 올라가면"}
     seq = _seq([topic])
 
-    first = min(e["at"] for e in seq["elements"] if e["topic"] == 1)
-    assert 2.0 <= first <= 3.0                                                           # 말하기 전에 먼저 뜨지 않는다(첫 요소도 싱크)
-    filler = [e for e in seq["elements"] if e["topic"] == 0 and e["at"] < first]
-    assert all(e["until"] <= first + 0.2 for e in filler)                                # 그 사이 빈 칠판은 말하는 구절로 채운다
+    lead = min((e for e in seq["elements"] if e["topic"] == 1), key=lambda e: e["at"])
+    assert lead["at"] == 0.2 and lead.get("opening") is True
+    assert 0.2 + lead["enter"] >= 2.3                                                    # 말하는 순간(2.3초 이후)에 완성된다
 
 
 def test_a_gray_board_run_without_any_overlay_never_invents_narration_fragments():
@@ -261,3 +272,20 @@ def test_red_text_spacing_counts_fillers_too():
                         {"kind": "text", "topic": 1, "content": {"text": "y", "color": "gray"}}]}
 
     assert len(_red_elements(seq)) == 1
+
+
+def test_the_opening_graphic_starts_moving_before_the_first_phrase_and_lands_when_it_is_spoken():
+    """2026-10-19 운영자 결정(후킹): 첫 장면은 말하기 전부터 천천히 움직이기 시작해 말하는 순간에 완성된다. 다른 구간은 말하는 순간 맞춤을 그대로 지킨다."""
+    from app.services.slide_sequence import OPENING_START_SECONDS, _open_with_motion
+
+    elements = [{"id": "e1", "kind": "number", "topic": 1, "at": 1.7, "until": 4.0, "content": {"value": "100조 원", "label": ""}},
+                {"id": "e2", "kind": "text", "topic": 1, "at": 2.4, "until": 4.0, "content": {"text": "역사상 처음", "color": "gray"}}]
+
+    opened = _open_with_motion([dict(e) for e in elements], [{"index": 0}])
+
+    first = opened[0]
+    assert first["at"] == OPENING_START_SECONDS and first["opening"] is True
+    assert 1.4 <= first["enter"] <= 2.0                      # 1.7 + 0.4 = 2.1초에 완성 → 0.2초부터 약 1.9초 동안 천천히
+    assert opened[1]["at"] == 2.4                            # 뒤따르는 요소는 그대로
+    untouched = _open_with_motion([dict(e) for e in elements], [{"index": 5}])
+    assert untouched[0]["at"] == 1.7 and "enter" not in untouched[0]

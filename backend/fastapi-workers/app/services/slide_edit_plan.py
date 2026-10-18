@@ -128,11 +128,8 @@ def fallback_key_phrase(narration: str, chunks: list[dict] | None = None) -> str
         head = text[:28].rsplit(" ", 1)[0] if len(text) > 28 else text
         phrase = head.strip(" ,.!?") or text[:28]
     if chunks and duplicates_subtitle(phrase, chunks):
-        words = phrase.split(" ")
-        for count in (3, 2):
-            shorter = " ".join(words[:count])
-            if len(words) > count and len(shorter) >= 4 and not duplicates_subtitle(shorter, chunks):
-                return shorter
+        # 2026-10-19 운영자 지적: 자막을 그대로 되풀이하는 빨간 글도, 억지로 잘라 낸 조각("그런데 이")도 쓰지 않는다 — 대체 구절이 없으면 비운다.
+        return ""
     return phrase
 
 
@@ -242,7 +239,7 @@ def assemble_plan(
         board = scene["background"] == "board"
         if board and not overlay:
             phrase = fallback_key_phrase(brief.get("narration", ""), brief.get("chunks"))
-            overlay = {"type": "key_text", "text": phrase, "icon": None, "explain": True, "source": "fallback_phrase"}
+            overlay = {"type": "key_text", "text": phrase, "icon": None, "explain": True, "source": "fallback_phrase"} if phrase else None
         if overlay:
             overlay = dict(overlay)
             overlay["explain"] = board

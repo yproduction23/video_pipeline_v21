@@ -42,7 +42,7 @@ from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import ensure_photo_background, generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
 from app.services.slide_motion_parts import compose_motion_part, is_countable, part_phrase
-from app.services.slide_timing import phrase_offset, scene_chunks
+from app.services.slide_timing import apply_tts_windows, phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
 from app.services.slide_sequence import render_sequence_clip
@@ -354,6 +354,8 @@ class SlidesWorker:
             tts_chunks = list((tts_data or {}).get("chunks") or [])
         except (TypeError, ValueError):
             tts_chunks = []
+        # 장면 길이와 자막 줄 시각을 조립과 같은 TTS 실제 구간으로 맞춘다(추정 길이로 만들면 후반 그래픽이 말하기보다 일찍 뜬다).
+        timeline_source = "tts_windows" if apply_tts_windows(scenes_meta) else "estimate"
         for scene in scenes_meta:
             scene["caption_chunks_rel"] = scene_chunks(
                 tts_chunks, scene.get("caption_chunk_contract"), float(scene.get("start_seconds") or 0.0),
@@ -391,6 +393,7 @@ class SlidesWorker:
                 highlight_end_index=(highlight_end - 1) if highlight_end else None,
             )
             if edit_plan:
+                edit_plan["timeline"] = {"source": timeline_source, "total_seconds": round(sum(b["duration"] for b in briefs.values()), 2)}
                 save_plan(edit_plan, DATA_DIR)
         if plan_only:
             # 2026-10-16 운영자 요청: 계획서만 만들고 멈춘다 — 이미지·영상은 한 장도 만들지 않는다(비용 0).
@@ -633,11 +636,12 @@ class SlidesWorker:
                         *out.get("quality_flags", []), f"stock_miss:{out.get('stock_miss_reason', 'unknown')}",
                     ]))
                     if not overlay_plan:
-                        overlay_plan = {
-                            "type": "key_text", "text": base_plan.get("fallback_key_text")
-                            or fallback_key_phrase(narration, scene.get("caption_chunks_rel")),
-                            "icon": None, "explain": True, "source": "fallback_phrase",
-                        }
+                        # 판정 없는 조각 문구("그런데 이")나 자막 복사 문구는 쓰지 않는다 — 대체 구절이 없으면 글 없이 칠판만 두고 표시를 남긴다.
+                        phrase = base_plan.get("fallback_key_text") or fallback_key_phrase(narration, scene.get("caption_chunks_rel"))
+                        if phrase:
+                            overlay_plan = {"type": "key_text", "text": phrase, "icon": None, "explain": True, "source": "fallback_phrase"}
+                        else:
+                            out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "board_without_graphic"]))
                     rendered = True
             if not rendered:
                 if kling_state is not None and kling_state["streak"] < MAX_CONSECUTIVE_KLING:
@@ -785,11 +789,11 @@ class SlidesWorker:
             # 승인한 계획서에는 기사 카드가 있지만 실행 시점에 기사 캡처가 없을 수 있다(수집은 실행마다 달라진다).
             # 계획서를 바꾸지 않고 원문 구절 강조로 대체하고, 검수 표시를 남겨 조용히 사라지지 않게 한다.
             narration = str(scene.get("subtitle_text") or scene.get("content") or scene.get("text") or "")
-            overlay_plan = {
-                "type": "key_text", "text": fallback_key_phrase(narration), "icon": None, "explain": False,
-                "source": "article_card_without_capture",
-            }
             out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "article_card_without_capture"]))
+            phrase = fallback_key_phrase(narration, scene.get("caption_chunks_rel"))
+            if not phrase:
+                return                       # 자막을 되풀이하는 문구로 대체하지 않는다(배경만 둔다)
+            overlay_plan = {"type": "key_text", "text": phrase, "icon": None, "explain": False, "source": "article_card_without_capture"}
         kind = overlay_plan["type"]
         overlay_png = job_dir / f"scene_{index:03d}_overlay.png"
         spec: dict = {"type": kind, "source": "claude_overlay_plan"}
@@ -982,6 +986,11 @@ class SlidesWorker:
         params = {"value": overlay_plan["value"], "label": overlay_plan.get("label", ""), "icon": overlay_plan.get("icon")}
         clip_path = job_dir / f"scene_{index:03d}_counter.mp4"
         anim = max(min(duration - base_offset - 0.6, 2.4), 0.8)
+        if index == 0:
+            # 영상 첫 장면(후킹): 말하기 전에 천천히 올라가기 시작해 그 구절을 말하는 순간에 값에 도착한다.
+            landing = base_offset + 0.4
+            base_offset = 0.2
+            anim = min(max(landing - base_offset, 1.0), 3.4)
         if not compose_motion_part(
             base_path=str(base), base_is_video=bool(base_video), output_path=str(clip_path), duration=duration,
             part="counter", params=params, dim_base=dim_base, start_offset=base_offset, anim_total=anim, fade_out=False,

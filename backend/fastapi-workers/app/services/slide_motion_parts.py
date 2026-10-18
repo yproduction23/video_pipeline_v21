@@ -179,6 +179,14 @@ def _scaled(box):
     return tuple(int(v * SS) for v in box)
 
 
+def _fit_font_size(text: str, size: int, max_width: int, floor: int = 30) -> int:
+    """글자 폭이 max_width(px)를 넘으면 floor까지 줄인다(부품 안의 라벨이 가장자리에서 잘리지 않게)."""
+    probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    while size > floor and probe.textlength(str(text), font=_font(size)) > max_width:
+        size -= 4
+    return size
+
+
 def _text(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, size: int, fill, anchor: str = "mm") -> None:
     draw.text((xy[0] * SS, xy[1] * SS), text, font=_font(size), fill=fill, anchor=anchor)
 
@@ -237,7 +245,9 @@ def _move(params: dict, p: float) -> Image.Image:
             fixed_draw.rounded_rectangle(_scaled((cx - 150, cy - 125, cx + 150, cy + 125)), radius=36 * SS, fill=PAPER, outline=NAVY, width=8 * SS)
             fixed_draw.rectangle(_scaled((cx - 150, cy - 125, cx + 150, cy - 85)), fill=YELLOW)
         if params.get(key):
-            _text(fixed_draw, (cx, cy + 185), params[key], 54, WHITE)
+            # 라벨이 그림 가장자리 밖으로 잘리지 않게 중심에서 가장자리까지 폭에 맞춰 줄인다.
+            room = int(2 * (min(cx, size[0] - cx) - 24))
+            _text(fixed_draw, (cx, cy + 185), params[key], _fit_font_size(params[key], 54, room), WHITE)
     arrow, arrow_draw = _layer(size)
     reach = _ease(_ramp(p, 0.15, 0.7))
     x0, x1 = 430, 430 + (1070 - 430) * reach
@@ -279,9 +289,10 @@ def _gauge(params: dict, p: float) -> Image.Image:
     if level > 0.78:
         ld.rounded_rectangle(_scaled((248, top, 342, top + 46)), radius=30 * SS, fill=RED)
     text, td = _layer(size)
-    _text(td, (700, 250), params["label"], 96, WHITE)
+    # 온도계 오른쪽 칸(x 470~1070)에 맞춰 폭을 재고 줄인다(긴 라벨이 가장자리에서 잘리지 않게).
+    _text(td, (480, 250), params["label"], _fit_font_size(params["label"], 96, 590), WHITE, anchor="lm")
     if params.get("value"):
-        _text(td, (700, 370), params["value"], 110, YELLOW)
+        _text(td, (480, 370), params["value"], _fit_font_size(params["value"], 110, 590), YELLOW, anchor="lm")
     return _finish([_with_alpha(shell, _ramp(p, 0.0, 0.15)), _with_alpha(liquid, _ramp(p, 0.05, 0.15)), _with_alpha(text, _ramp(p, 0.1, 0.2))], size)
 
 
@@ -304,7 +315,11 @@ def _balance(params: dict, p: float) -> Image.Image:
         pd.line(_scaled((ex, ey, ex - 130, pan_y)), fill=NAVY, width=7 * SS)
         pd.line(_scaled((ex, ey, ex + 130, pan_y)), fill=NAVY, width=7 * SS)
         pd.rounded_rectangle(_scaled((ex - 190, pan_y, ex + 190, pan_y + 36)), radius=18 * SS, fill=YELLOW, outline=NAVY, width=6 * SS)
-        chip = _label_chip(params[key], 44)
+        room = int(2 * (min(ex, size[0] - ex) - 12))
+        chip, chip_size = _label_chip(params[key], 44), 44
+        while chip.width > room and chip_size > 26:       # 라벨 칩이 가장자리 밖으로 잘리지 않게 줄인다
+            chip_size -= 4
+            chip = _label_chip(params[key], chip_size)
         _paste_center(pans, chip, ex, pan_y - 52)
     return _finish([_with_alpha(frame, _ramp(p, 0.0, 0.15)), _with_alpha(arms, _ramp(p, 0.0, 0.15)), _with_alpha(pans, _ramp(p, 0.05, 0.2))], size)
 
@@ -323,16 +338,18 @@ def _spread(params: dict, p: float) -> Image.Image:
     ground, gd = _layer(size)
     gd.line(_scaled((90, base_y + 8, 1410, base_y + 8)), fill=MID, width=8 * SS)
     labels, ld = _layer(size)
-    _text(ld, (240, 90), params["origin"], 54, WHITE)
+    # 라벨은 글자 폭을 재어 왼쪽(시작)·오른쪽(결과) 끝에 붙이고, 길면 줄여 그림 밖으로 잘리지 않게 한다
+    # (2026-10-19 운영자 지적 2:50: "코스피 전체가 흔들리는"이 오른쪽 가장자리에서 잘려 보이지 않았다).
+    _text(ld, (110, 90), params["origin"], _fit_font_size(params["origin"], 54, 640), WHITE, anchor="lm")
     effect = Image.new("RGBA", labels.size, (0, 0, 0, 0))
-    _text(ImageDraw.Draw(effect), (1260, 90), params["effect"], 54, WHITE)
+    _text(ImageDraw.Draw(effect), (1390, 90), params["effect"], _fit_font_size(params["effect"], 54, 640), WHITE, anchor="rm")
     return _finish([_with_alpha(ground, _ramp(p, 0.0, 0.1)), _with_alpha(tiles, _ramp(p, 0.0, 0.1)),
                     _with_alpha(labels, _ramp(p, 0.05, 0.15)), _with_alpha(effect, _ramp(p, 0.85, 0.15))], size)
 
 
 def _support(params: dict, p: float) -> Image.Image:
     size = (1200, 700)
-    ground_y = 620
+    ground_y = 590                                   # 아래 라벨이 그림 바닥에서 잘리지 않게 땅선을 조금 올려 둔다
     weak = params["state"] == "weakening"
     grow = _ease(_ramp(p, 0.1, 0.7))
     height = 280 * (1 - 0.68 * grow) if weak else 280 * grow
@@ -345,8 +362,8 @@ def _support(params: dict, p: float) -> Image.Image:
         d.rectangle(_scaled((530, ground_y - 22, 670, ground_y)), fill=PAPER, outline=NAVY, width=6 * SS)
     block_top = block_bottom - 170
     d.rounded_rectangle(_scaled((250, block_top, 950, block_bottom)), radius=26 * SS, fill=YELLOW, outline=NAVY, width=8 * SS)
-    _text(d, (600, (block_top + block_bottom) / 2), params["top"], 66, NAVY)
-    _text(d, (600, ground_y + 56), params["pillar"], 50, WHITE)
+    _text(d, (600, (block_top + block_bottom) / 2), params["top"], _fit_font_size(params["top"], 66, 640), NAVY)
+    _text(d, (600, ground_y + 52), params["pillar"], _fit_font_size(params["pillar"], 50, 960), WHITE)
     arrow, ad = _layer(size)
     if weak:
         reach = _ease(_ramp(p, 0.3, 0.5))
@@ -410,12 +427,16 @@ def _chart(params: dict, p: float) -> Image.Image:
 def _target(params: dict, p: float) -> Image.Image:
     """기대선(점선)에 막대가 못 미치거나(하회) 넘는다(상회) — '추정치 대비'를 한눈에 보여 준다."""
     size = (1200, 700)
-    ground, target_y = 610, 290
+    ground, target_y = 585, 270                       # 아래 라벨이 그림 바닥에서 잘리지 않게 위로 올려 둔다
     frame, d = _layer(size)
     d.line(_scaled((120, ground + 6, 1080, ground + 6)), fill=MID, width=8 * SS)
     for x in range(140, 1060, 56):
         d.line(_scaled((x, target_y, x + 32, target_y)), fill=YELLOW, width=8 * SS)
-    chip = _label_chip(params["target_label"], 44)
+    room = int(2 * (min(960, size[0] - 960) - 12))
+    chip, chip_size = _label_chip(params["target_label"], 44), 44
+    while chip.width > room and chip_size > 26:           # 기대선 라벨 칩이 오른쪽 가장자리에서 잘리지 않게 줄인다
+        chip_size -= 4
+        chip = _label_chip(params["target_label"], chip_size)
     _paste_center(frame, chip, 960, target_y - 48)
     top = target_y + 110 if params["result"] == "below" else target_y - 100
     bar, bd = _layer(size)
@@ -431,7 +452,7 @@ def _target(params: dict, p: float) -> Image.Image:
         tip = y0 + (y1 - y0) * f
         gd.polygon(_scaled([(x - 24, tip - direction * 30), (x + 24, tip - direction * 30), (x, tip + direction * 8)]), fill=RED)
     label, ld = _layer(size)
-    _text(ld, (500, ground + 58), params["actual_label"], 50, WHITE)
+    _text(ld, (500, ground + 52), params["actual_label"], _fit_font_size(params["actual_label"], 50, 760), WHITE)
     return _finish([_with_alpha(frame, _ramp(p, 0.0, 0.15)), bar, _with_alpha(gap, 1.0), _with_alpha(label, _ramp(p, 0.1, 0.2))], size)
 
 

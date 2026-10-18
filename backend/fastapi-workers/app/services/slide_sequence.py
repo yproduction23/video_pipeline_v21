@@ -73,7 +73,10 @@ MAX_TOPIC_SECONDS = 11.0             # 한 주제가 이보다 길게 정지해 
 FIXED_TOPIC_MIN_SECONDS = 2.5        # 템플릿 주제는 합치지 않으므로 이보다 짧으면 버린다
 MAX_ELEMENTS_PER_TEMPLATE = 8
 MIN_ELEMENT_SECONDS = 1.5            # 주제가 끝나기 전 이만큼도 안 남으면 새 요소를 만들지 않는다
-RED_TOPICS_PER_SEQUENCE = 1          # 구간(회색 배경이 이어지는 구간)당 빨간 글 강조 주제 수(레퍼런스: 2분에 2~3개)
+OPENING_START_SECONDS = 0.2         # 영상 첫 장면의 첫 그래픽이 움직이기 시작하는 시각(후킹: 첫 음성 전에 화면이 비지 않게)
+OPENING_ENTER_MIN, OPENING_ENTER_MAX = 1.0, 3.4   # 오프닝 그래픽이 천천히 움직이며 말하는 순간에 완성되는 시간(초)
+ANCHOR_LEAD_SECONDS = 0.4              # 그래픽이 나타나기 시작해 완성될 때까지(2026-10-19: 말하는 순간에 완성되게)
+RED_TOPICS_PER_SEQUENCE = 0          # 빨간 글 강조 주제 수 — 2026-10-19 운영자 결정: 쓰지 않는다(정리 카드·그림으로 대체)
 RED_TEXT_MIN_GAP_SECONDS = 20.0      # 앞 빨간 글 강조와 이만큼 떨어져야 다음 빨간 글을 쓴다
 TOPIC_OVERLAP_SECONDS = 0.12         # 주제 전환 때 앞 주제 요소를 남겨 두는 시간(화면이 비는 깜빡임 방지)
 MIN_UPDATE_SECONDS = 1.5             # 같은 종류 숫자를 제자리에서 바꿀 때 앞 값이 머무는 최소 시간
@@ -113,10 +116,9 @@ _SEQUENCE_SYSTEM = (
     "레퍼런스 영상의 가장 대표적인 카드다. 이유·조건·종류를 2~4개 나열하면(\"첫째, 둘째\", \"A와 B와 C\") list를 우선한다. "
     "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n"
     "8. 화면은 자막이 못 전하는 것을 더해야 한다. 장면 줄에 [역할]이 있으면 따른다: number→큰 숫자·막대·비교 행, action(행위·변화·압력·연쇄)→그림(pictogram·아이콘 있는 flow), "
-    "object(회사·기관·사물 소개)→로고·소재 그림+짧은 라벨, list(진짜 나열)→목록, claim(주장·결론·질문)→자막과 다른 짧은 제목 글(headline_sub), "
-    "link(연결·분위기)→아무것도 얹지 않아도 된다. 빨간 글(headline_sub)은 구간당 " + str(RED_TOPICS_PER_SEQUENCE) + "개까지, 앞 빨간 글과 "
-    + str(int(RED_TEXT_MIN_GAP_SECONDS)) + "초 이상 떨어져야 한다. 자막을 빨간 글씨로 되풀이하는 headline_sub는 마지막 수단이다(구간당 최대 1개, 자막과 다른 '주제 제목'일 때만). 말하는 대상이 눈에 그려지는 명사(사람·건물·돈·은행·"
-    "반도체·국기·회사)이거나 방향·압력·충격 같은 장면이면 pictogram이나 아이콘이 있는 flow·compare_pair로 보여 준다. 글이 없는 그림(연상)이 글 강조보다 낫다.\n"
+    "object(회사·기관·사물 소개)→로고·소재 그림+짧은 라벨, list(진짜 나열)→목록, claim(주장·결론·질문)→'정리' 카드(list: 자막과 다른 짧은 제목 + 서로 다른 핵심 2~3개를 원문 그대로 요약), "
+    "link(연결·분위기)→아무것도 얹지 않아도 된다. 빨간 글씨 강조(headline_sub)는 쓰지 않는다 — 운영자 결정(2026-10-19): 자막을 빨간 글로 따라 쓰는 대신 정리 카드로 요약하거나 그림으로 보여 준다. "
+    "말하는 대상이 눈에 그려지는 명사(사람·건물·돈·은행·반도체·국기·회사)이거나 방향·압력·충격 같은 장면이면 pictogram이나 아이콘이 있는 flow·compare_pair로 보여 준다. 글이 없는 그림(연상)이 글 강조보다 낫다.\n"
     "9. 내레이션이 아래 '회사 로고' 목록에 있는 회사(삼성전자·SK하이닉스 등)를 말하면 그 회사를 가리키는 아이콘 자리에 로고를 쓴다(icon 필드에 로고 이름 그대로). "
     "회사 이름을 나열하는 구절은 list·flow·compare_pair에서 로고로 보여 주고, 그 회사를 말하는 순간(anchor)에 뜨게 한다.\n\n"
     "[템플릿] 주제 객체의 필드: template, scene(구간에 포함된 장면 번호), anchor(그 장면 내레이션에 글자 그대로 있는 구절 — "
@@ -189,8 +191,8 @@ def _anchor_time(scene: dict, scene_start: float, anchor: str) -> float:
     """구절을 말하는 순간을 등장 시각으로 한다. 자막 줄(TTS 청크) 시각이 있으면 그 줄에서, 없으면 장면 안 글자 비율로 근사한다."""
     spoken = phrase_offset(scene.get("chunks") or [], anchor) if anchor else None
     if spoken is not None:
-        # 말이 시작되기 직전에 등장해 읽을 시간을 조금 준다(장면 범위로 한정).
-        return round(scene_start + min(max(spoken - 0.1, 0.1), max(scene["duration"] - 0.6, 0.15)), 2)
+        # 등장 애니메이션이 끝날 즈음 그 구절을 말하게 한다: 말하기 전 ANCHOR_LEAD_SECONDS에 나타나기 시작한다(장면 범위로 한정).
+        return round(scene_start + min(max(spoken - ANCHOR_LEAD_SECONDS, 0.1), max(scene["duration"] - 0.6, 0.15)), 2)
     narration = scene["narration"]
     position = narration.find(anchor) if anchor else -1
     if position < 0:
@@ -297,8 +299,9 @@ def _normalize_elements(raw_elements: list, run: list[dict], plan: dict) -> list
     return elements
 
 
-def _fallback_elements(run: list[dict], plan: dict, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> list[dict]:
+def _fallback_elements(run: list[dict], plan: dict, red_budget: int | None = None) -> list[dict]:
     """Claude 설계가 실패하면 장면별 후편집(이미 검증됨)을 장면 시작 시점의 요소로 이어 붙인다."""
+    red_budget = RED_TOPICS_PER_SEQUENCE if red_budget is None else red_budget
     starts = _scene_starts(plan)
     seq_start = starts[run[0]["index"]]
     elements: list[dict] = []
@@ -631,7 +634,7 @@ def _is_red_topic(expanded: list[dict]) -> bool:
 
 def _topics_to_elements(
     raw_topics: list, run: list[dict], plan: dict, llm_call=None, failures: list[str] | None = None,
-    red_budget: int = RED_TOPICS_PER_SEQUENCE,
+    red_budget: int | None = None,
 ) -> list[dict]:
     """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
     raw_topics = fill_missing_icons_in_topics(raw_topics, run, llm_call=llm_call)  # 빠진 아이콘 자리에 라이브러리의 맞는 그림을 먼저 붙인다
@@ -645,6 +648,7 @@ def _topics_to_elements(
     elements: list[dict] = []
     seen: set[str] = set()
     recent = _recent_shown(plan, run)
+    red_budget = RED_TOPICS_PER_SEQUENCE if red_budget is None else red_budget
     number = 0
     for raw in (raw_topics or [])[:12]:
         if not isinstance(raw, dict):
@@ -689,10 +693,11 @@ def _red_count(elements: list[dict]) -> int:
     return sum(1 for e in elements if e["kind"] == "text" and (e.get("content") or {}).get("color") == "red")
 
 
-def _fill_gaps(elements: list[dict], run: list[dict], plan: dict, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> list[dict]:
+def _fill_gaps(elements: list[dict], run: list[dict], plan: dict, red_budget: int | None = None) -> list[dict]:
     """템플릿 주제가 거절돼 한 화면이 MAX_TOPIC_SECONDS보다 오래 멈추면, 그 사이 장면의 후편집(이미 검증됨)을 새 주제로 보충한다."""
     if not elements:
         return elements
+    red_budget = RED_TOPICS_PER_SEQUENCE if red_budget is None else red_budget
     starts = _scene_starts(plan)
     seq_start = starts[run[0]["index"]]
     topic_starts = sorted({e["topic"]: e["at"] for e in elements}.values())
@@ -762,11 +767,12 @@ def _expire_stale_topics(elements: list[dict], run: list[dict], plan: dict) -> l
     return elements
 
 
-def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> list[dict]:
+def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float, red_budget: int | None = None) -> list[dict]:
     """회색 칠판이 비는 구간을, 그 구간을 말하는 장면의 후편집(이미 검증됨)이나 원문 핵심 구절로 채운다 — 앞 그래픽을 붙들고 있지 않는다.
 
     2026-10-18 운영자 피드백: 2분 42초·3분 14초에 아무것도 없었고, 반대로 앞 그래픽이 남아 있는 것도 어색했다. 채우는 요소는 그 구절을
     말하는 시각에 나오고(싱크), 이미 화면에 나온 내용은 반복하지 않으며, 채울 것이 없으면 비워 둔다."""
+    red_budget = RED_TOPICS_PER_SEQUENCE if red_budget is None else red_budget
     starts = _scene_starts(plan)
     seq_start = starts[run[0]["index"]]
     added: list[dict] = []
@@ -855,8 +861,32 @@ def _evoke_hints(plan: dict, run: list[dict]) -> dict[int, str]:
     return hints
 
 
-def design_sequence(run: list[dict], plan: dict, *, llm_call=None, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> dict | None:
+def _open_with_motion(elements: list[dict], run: list[dict]) -> list[dict]:
+    """영상 맨 앞(첫 장면)의 첫 주제는 말하기 전부터 천천히 움직이기 시작해 말하는 순간에 완성된다.
+
+    2026-10-19 운영자 결정(후킹): 시작하고 2초가 지나서야 그래픽이 나오면 집중이 떨어진다. 숫자는 카운트업으로 올라가고 다른 그래픽은 천천히 떠오르며,
+    말하는 순간(원래 등장 시각)에는 완성돼 있다. 첫 장면에만 적용한다(다른 곳은 말하는 순간 맞춤을 그대로 지킨다)."""
+    if not elements or not run or run[0]["index"] != 0:
+        return elements
+    first_topic = min((e for e in elements if e.get("topic")), key=lambda e: (e["topic"], e["at"]), default=None)
+    if not first_topic:
+        return elements
+    topic = first_topic["topic"]
+    group = sorted((e for e in elements if e.get("topic") == topic), key=lambda e: e["at"])
+    lead = group[0]
+    target = lead["at"] + ANCHOR_LEAD_SECONDS            # 원래 말하는 순간(등장 시각 + 등장 시간)
+    if lead["at"] <= OPENING_START_SECONDS + 0.05:
+        return elements
+    enter = min(max(target - OPENING_START_SECONDS, OPENING_ENTER_MIN), OPENING_ENTER_MAX)
+    lead["at"] = OPENING_START_SECONDS
+    lead["enter"] = round(enter, 2)
+    lead["opening"] = True
+    return elements
+
+
+def design_sequence(run: list[dict], plan: dict, *, llm_call=None, red_budget: int | None = None) -> dict | None:
     """한 회색 배경 구간의 시퀀스(요소 타임라인)를 만든다. Claude 설계가 비면 장면별 후편집으로 대체한다."""
+    red_budget = RED_TOPICS_PER_SEQUENCE if red_budget is None else red_budget
     starts = _scene_starts(plan)
     seq_start = starts[run[0]["index"]]
     duration = round(sum(s["duration"] for s in run), 2)
@@ -924,6 +954,7 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None, red_budget: i
     if not designed:
         return None
     designed = _fill_blanks(_expire_stale_topics(designed, run, plan), run, plan, duration, red_budget)
+    designed = _open_with_motion(designed, run)
     return {
         "id": 0, "version": SEQUENCE_VERSION, "scenes": [s["index"] for s in run], "start": round(seq_start, 2),
         # 장면별 시퀀스 시간축 시작점: 장면 클립은 이 구간만 잘라 낸다
@@ -1226,7 +1257,7 @@ def expand_primitives(sequence: dict) -> list[dict]:
         kind, content, at, until = element["kind"], element["content"], element["at"], element["until"]
         # 템플릿 요소는 위치(pos)·글자 크기(size)·최대 폭을 직접 정한다. 자유 배치 요소만 슬롯을 쓴다.
         cx, cy = element.get("pos") or SLOTS.get(element["slot"], SLOTS["center"])
-        base = {"element": element["id"], "until": until, "anim": element["anim"],
+        base = {"element": element["id"], "until": until, "anim": element["anim"], "enter": element.get("enter"),
                 "max_width": element.get("max_width")
                 or (SIDE_SLOT_MAX_WIDTH if element["slot"] in _SIDE_SLOTS else WIDE_SLOT_MAX_WIDTH)}
         if kind in ("text", "symbol"):

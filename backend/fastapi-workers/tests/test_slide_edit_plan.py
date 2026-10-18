@@ -24,6 +24,17 @@ from app.services.slide_edit_plan import (
 from app.workers.slides_worker import SlidesWorker
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def allow_one_red_topic(monkeypatch):
+    """이 모듈은 템플릿·수명·대체 경로의 메커니즘을 확인하므로 빨간 글 주제 1개를 허용한다(운영 기본값 0은 test_slide_summary_policy에서 확인)."""
+    from app.services import slide_sequence
+
+    monkeypatch.setattr(slide_sequence, "RED_TOPICS_PER_SEQUENCE", 1)
+
+
 def _briefs(*texts, duration=4.0):
     return {i: {"narration": t, "context": "", "duration": duration} for i, t in enumerate(texts)}
 
@@ -372,21 +383,21 @@ def test_plan_scenes_keep_the_caption_chunks_and_sequence_anchors_use_them():
                         {"text": "코스피를 팔았습니다", "start": 1.5, "end": 4.0}]}
     ratio_only = {k: v for k, v in scene.items() if k != "chunks"}
 
-    assert 11.3 <= _anchor_time(scene, 10.0, "코스피를") <= 11.6               # 둘째 줄 시작(1.5초) 직전
+    assert 10.9 <= _anchor_time(scene, 10.0, "코스피를") <= 11.2               # 둘째 줄 시작(1.5초)보다 등장 시간(0.4초) 앞서 나타난다
     assert _anchor_time(scene, 10.0, "코스피를") != _anchor_time(ratio_only, 10.0, "코스피를")
 
 
-def test_fallback_key_phrase_avoids_repeating_the_subtitle_line():
-    """대체 구절이 자막 줄 그대로면 같은 말이 두 번 보인다 — 줄의 앞부분 핵심어로 줄인다(원문 글자 그대로)."""
+def test_fallback_key_phrase_never_repeats_the_subtitle_nor_cuts_a_fragment():
+    """2026-10-19 운영자 지적: 자막 복사 빨간 글도, 억지로 자른 조각("그런데 이")도 쓰지 않는다 — 대체 구절이 없으면 비운다."""
     from app.services.slide_edit_plan import fallback_key_phrase
 
     narration = "긴급 진단에 나섰습니다."
     chunks = [{"text": "긴급 진단에 나섰습니다.", "start": 0.0, "end": 2.0}]
 
     assert fallback_key_phrase(narration) == "긴급 진단에 나섰습니다"                 # 자막 정보가 없으면 기존 동작
-    short = fallback_key_phrase(narration, chunks)
-    assert short != "긴급 진단에 나섰습니다" and 4 <= len(short) < len("긴급 진단에 나섰습니다")
-    assert short in narration                                                          # 원문 일부 그대로
+    assert fallback_key_phrase(narration, chunks) == ""                               # 자막과 같으면 비운다(조각으로 줄이지 않는다)
+    other = [{"text": "다른 줄", "start": 0.0, "end": 1.0}]
+    assert fallback_key_phrase(narration, other) == "긴급 진단에 나섰습니다"           # 자막과 겹치지 않으면 그대로
 
 
 # ── 그래픽 지속(2026-10-17): 데이터 후편집은 다음 스톡 장면까지 이어서 보여 준다 ──

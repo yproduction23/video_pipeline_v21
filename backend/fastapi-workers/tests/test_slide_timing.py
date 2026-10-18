@@ -70,3 +70,23 @@ def test_a_phrase_spanning_two_subtitle_lines_is_still_a_duplicate():
     assert duplicates_subtitle("첫 번째 핵심 변수는 미국 금리", chunks) is True          # 줄 둘에 걸친 복사
     assert duplicates_subtitle("미국 금리", chunks) is False                           # 짧은 핵심어는 복사가 아니다
     assert duplicates_subtitle("공통으로", chunks) is False
+
+
+def test_scene_windows_follow_the_tts_contract_like_the_assembly_does():
+    """2026-10-19 20번 Job: 이미지 단계의 장면 길이(추정, 합계 300초)가 조립의 TTS 구간(289.9초)과 달라 후반 장면의 자막 줄 시각이 0초로 깨졌다."""
+    from app.services.slide_timing import apply_tts_windows, scene_chunks, tts_windows
+
+    scenes = [
+        {"duration": 4.0, "caption_chunk_contract": {"chunk_start_index": 0, "chunk_end_index": 1, "end": 3.6}},
+        {"duration": 5.0, "caption_chunk_contract": {"chunk_start_index": 2, "chunk_end_index": 3, "end": 7.9}},
+    ]
+    chunks = [{"text": "가", "start": 0.4, "end": 2.0}, {"text": "나", "start": 2.1, "end": 3.6},
+              {"text": "다", "start": 3.97, "end": 5.9}, {"text": "라", "start": 6.1, "end": 7.9}]
+
+    assert tts_windows(scenes) == [(0.0, 3.6), (3.6, 7.9)]                   # 앞 장면이 끝난 시각에서 다음 장면이 시작
+    assert apply_tts_windows(scenes) is True
+    assert [s["duration"] for s in scenes] == [3.6, 4.3] and scenes[1]["start_seconds"] == 3.6
+    rel = scene_chunks(chunks, scenes[1]["caption_chunk_contract"], scenes[1]["start_seconds"])
+    assert [(c["start"], c["end"]) for c in rel] == [(0.37, 2.3), (2.5, 4.3)]  # 장면 안 상대 시각이 0으로 깨지지 않는다
+    # 계약 시각이 없으면 건드리지 않는다
+    assert tts_windows([{"duration": 4.0}]) is None and apply_tts_windows([{"duration": 4.0}]) is False
