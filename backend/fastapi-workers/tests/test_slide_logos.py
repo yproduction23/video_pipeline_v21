@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from PIL import Image
 
@@ -9,6 +10,17 @@ from app.services import slide_logos
 from app.services.slide_edit_plan import assemble_plan
 from app.services.slide_sequence import board_runs, design_sequence
 
+
+
+def _approving(payload):
+    """설계 응답은 payload로, 아이콘 적합성 판정 요청에는 모든 항목을 통과시키는 가짜 LLM."""
+    def call(system, messages, max_tokens):
+        if "아이콘 검수자" in system:
+            ids = re.findall(r"^(\d+)\. 아이콘=", messages[0]["content"], re.M)
+            return json.dumps({"ok": [int(i) for i in ids]})
+        return json.dumps(payload, ensure_ascii=False)
+
+    return call
 
 def _library(tmp_path, monkeypatch):
     for slug, size in (("samsung", (400, 120)), ("hynix", (300, 300))):
@@ -63,7 +75,7 @@ def test_a_compare_pair_of_two_companies_draws_logos_in_the_icon_slots(tmp_path,
     topic = {"template": "compare_pair", "scene": 0, "anchor": "삼성전자와", "op": "+",
              "a": {"label": "삼성전자", "icon": "삼성전자"}, "b": {"label": "하이닉스", "icon": "SK하이닉스", "anchor": "하이닉스가"}}
 
-    seq = design_sequence(board_runs(plan)[0], plan, llm_call=lambda s, m, t: json.dumps({"topics": [topic]}, ensure_ascii=False))
+    seq = design_sequence(board_runs(plan)[0], plan, llm_call=_approving({"topics": [topic]}))
 
     icons = [e for e in seq["elements"] if e["kind"] == "icon"]
     assert sorted(e["content"]["name"] for e in icons) == ["logo:SK하이닉스", "logo:삼성전자"]

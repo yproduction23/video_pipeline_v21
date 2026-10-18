@@ -55,6 +55,7 @@ from app.services.slide_overlay import (
     render_compare_numbers_layers,
     render_equation_overlay,
     render_flow_layers,
+    render_streak_layers,
     render_disclaimer_card,
     render_key_text_overlay,
     render_news_clip_overlay,
@@ -810,8 +811,14 @@ class SlidesWorker:
                 raise RuntimeError("강조 텍스트 렌더링 실패")
             spec.update(text=overlay_plan["text"], icon=overlay_plan.get("icon"))
             out["visual_type"] = "slide_key_text"
-        elif kind in {"big_number", "compare_numbers", "flow"}:
-            if kind == "big_number":
+        elif kind in {"big_number", "compare_numbers", "flow", "streak"}:
+            if kind == "streak":
+                layers = render_streak_layers(
+                    count=int(overlay_plan["days"]), phrase=overlay_plan["count"], output_path=str(overlay_png),
+                )
+                spec.update(count=overlay_plan["count"], days=overlay_plan["days"])
+                out["visual_type"] = "slide_streak"
+            elif kind == "big_number":
                 layers = render_big_number_overlay(
                     value=overlay_plan["value"], label=overlay_plan.get("label", ""),
                     icon=overlay_plan.get("icon"), output_path=str(overlay_png),
@@ -834,12 +841,18 @@ class SlidesWorker:
             self._credit_source(layers[0], overlay_plan, capture, spec)
             # 요소가 내레이션 흐름대로 하나씩 나타난다: 레이어마다 시작 시점을 늦춘다.
             step = 0.9 if len(layers) > 1 and not carry else 0.0
+            if kind == "streak":
+                # 날짜 칸마다 X가 차례로 쳐진다: 장면 길이 안에서 층 간격을 정한다(최대 0.4초).
+                step = min(0.4, max((duration - base_offset - 1.2) / max(len(layers) - 1, 1), 0.12))
             last_start = max(duration - 1.0, 0.35)
             for k, layer in enumerate(layers):
+                layer_kwargs = (
+                    {"fade_in_seconds": 0.3 if k == 0 else 0.08, "motion": "none"} if kind == "streak" else carry_kwargs
+                )
                 self._compose_into_clip(
                     index=index, duration=duration, job_dir=job_dir, out=out,
                     overlay_png=Path(layer), suffix=f"composed{k}",
-                    start_offset=min(base_offset + k * step, last_start), **carry_kwargs,
+                    start_offset=min(base_offset + k * step, last_start if kind != "streak" else duration - 0.3), **layer_kwargs,
                     dim_base=dim_base and k == 0,  # 이후 층은 이미 눌린 클립 위에 쌓인다
                 )
             spec["overlay_png"] = [str(layer) for layer in layers]
@@ -917,6 +930,8 @@ class SlidesWorker:
             return str(overlay_plan.get("value") or "")
         if kind == "compare_numbers":
             return str(overlay_plan.get("headline") or "")
+        if kind == "streak":
+            return str(overlay_plan.get("count") or "")
         if kind == "flow":
             nodes = overlay_plan.get("nodes") or []
             return str(nodes[0].get("label") or "") if nodes else ""

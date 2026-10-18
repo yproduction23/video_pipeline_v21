@@ -1204,3 +1204,27 @@ def test_disclaimer_pause_marks_the_scene_for_a_narration_pause_instead_of_overl
     assert scene["sfx_events"] == [{"name": "title_hit", "at": 12.0}]
     assert seen.get("composed", []) == []                  # 장면 위에는 합성하지 않는다
     assert [s["index"] for s in result["scenes"] if s.get("pause_before")] == [3]
+
+
+def test_streak_overlay_on_stock_stacks_layers_with_each_x_appearing_in_order(monkeypatch, tmp_path):
+    """"8거래일 연속" 장면: 달력 → X 8개 → 일수 문구가 층으로 차례로 쌓인다(스톡 위 후편집에서도)."""
+    worker = SlidesWorker()
+    scene = {"content": "외국인은 8거래일 연속으로 코스피를 팔았습니다.", "start_seconds": 0, "end_seconds": 6}
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    seen = _fake_composer(monkeypatch)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.plan_slide_overlays",
+        lambda briefs, **kw: {0: {"type": "streak", "count": "8거래일", "days": 8, "title": "", "explain": False}},
+    )
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    out_scene = result["scenes"][0]
+    assert out_scene["visual_type"] == "slide_streak" and out_scene["overlay_type"] == "streak"
+    composed = seen["composed"]
+    assert len(composed) == 10                                         # 달력 + X 8개 + 문구
+    offsets = [c["start_offset"] for c in composed]
+    assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets)
+    assert all(c["motion"] == "none" for c in composed)
+    assert offsets[-1] < 6.0 - 0.3                                     # 장면 안에 다 들어간다

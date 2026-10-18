@@ -4,6 +4,7 @@ Claude는 주제마다 템플릿과 내용만 정하고, 자리·크기·정렬�
 from __future__ import annotations
 
 import json
+import re
 
 from app.services.slide_edit_plan import assemble_plan
 from app.services.slide_sequence import board_runs, design_sequence, element_rect
@@ -14,6 +15,17 @@ NARRATIONS = [
     "완충재 감소와 외부 충격이 이어지면 낙폭이 더 빨라집니다.",
 ]
 
+
+
+def _approving(payload):
+    """설계 응답은 payload로, 아이콘 적합성 판정 요청에는 모든 항목을 통과시키는 가짜 LLM."""
+    def call(system, messages, max_tokens):
+        if "아이콘 검수자" in system:
+            ids = re.findall(r"^(\d+)\. 아이콘=", messages[0]["content"], re.M)
+            return json.dumps({"ok": [int(i) for i in ids]})
+        return json.dumps(payload, ensure_ascii=False)
+
+    return call
 
 def _plan(duration=6.0):
     briefs = {i: {"narration": t, "context": "", "duration": duration} for i, t in enumerate(NARRATIONS)}
@@ -26,7 +38,7 @@ def _design(topics, duration=6.0):
     plan = _plan(duration)
     run = board_runs(plan)[0]
     payload = {"topics": topics}
-    return design_sequence(run, plan, llm_call=lambda s, m, t: json.dumps(payload, ensure_ascii=False))
+    return design_sequence(run, plan, llm_call=_approving(payload))
 
 
 PAIR = {

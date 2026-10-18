@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from app.services.slide_streak import STREAK_MAX_DAYS, STREAK_MIN_DAYS, streak_layers
 from app.services.slide_timing import duplicates_subtitle
 
 import json
@@ -70,6 +71,8 @@ _PLAN_SYSTEM_PROMPT = (
     '- "big_number": 한 장면의 중심이 숫자 하나일 때 그 숫자를 화면 가득 크게. {"value": 내레이션에 글자 그대로 있는 숫자 구절 16자 이내, "label": 8자 이내 소제목(없어도 됨, 숫자 금지)}\n'
     '- "compare_numbers": 같은 대상의 두 시점·두 조건 수치를 순서대로 보여줄 때. {"headline": 내레이션에 글자 그대로 있는 12자 이내 대상 구절, "rows": [{"label": 6자 이내(숫자 금지), "value": 내레이션에 글자 그대로 있는 숫자 구절}] 2~3개}\n'
     '- "flow": 개념이 A에서 B로 이어지는 흐름(원인→결과, 자산→현금)을 말할 때. {"nodes": [{"label": 8자 이내(숫자 금지), "icon": 아이콘 이름}] 2~3개}\n'
+    '- "streak": 내레이션이 "N일(거래일·주·개월) 연속"을 말할 때 — 달력에 날짜 칸 N개가 나오고 X가 차례로 쳐지는 그림. '
+    '{"count": 내레이션에 글자 그대로 있는 구절(예: "8거래일"), 2~14}. 이런 표현이 있으면 key_text 대신 반드시 쓴다.\n'
     '- "article_card": 장면 정보에 article이 있고, 그 보도 인용이 신뢰를 더해주는 장면에서만. 추가 필드 없음.\n\n'
     "공통 선택 필드:\n"
     '- "explain": true/false — 이 장면은 배경 영상보다 설명(인포그래픽) 자체가 중심이다. true면 스톡/AI 배경을 '
@@ -127,7 +130,7 @@ def _title_is_grounded(title: str, narration: str) -> bool:
     return bool(title) and all(d in narration_digits for d in _NUMBER_RE.findall(title))
 
 
-_DIAGRAM_KINDS = {"equation", "compare_numbers", "flow", "big_number", "stat_chart", "bullet_list"}
+_DIAGRAM_KINDS = {"equation", "compare_numbers", "flow", "big_number", "stat_chart", "bullet_list", "streak"}
 _OPERATORS = {"+", "−", "×", "÷"}
 _OP_ALIASES = {"-": "−", "–": "−", "x": "×", "X": "×", "*": "×", "/": "÷"}
 
@@ -279,6 +282,14 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
                     nodes.append({"label": label, "icon": node_icon if node_icon in ICON_NAMES else None})
             if len(nodes) >= 2:
                 plan[index] = {"type": "flow", "nodes": nodes, "explain": explain}
+        elif kind == "streak":
+            # 연속 일수 달력: 일수 문구는 내레이션에 글자 그대로 있어야 하고 2~14일만 그린다.
+            phrase = str(entry.get("count") or "").strip()
+            days = re.search(r"\d+", phrase)
+            if phrase and days and _in_narration(phrase, narration) and STREAK_MIN_DAYS <= int(days.group()) <= STREAK_MAX_DAYS:
+                title = str(entry.get("title") or "").strip()[:12]
+                plan[index] = {"type": "streak", "count": phrase, "days": int(days.group()),
+                               "title": title if title and _title_is_grounded(title, narration) else "", "explain": explain}
         elif kind == "equation":
             equation = _validate_equation(entry, numeric_ground)
             if equation:
@@ -746,6 +757,21 @@ def render_compare_numbers_layers(
         return paths
     except Exception:
         logger.exception("비교 수치 오버레이 렌더링 실패")
+        return None
+
+
+def render_streak_layers(*, count: int, phrase: str, output_path: str) -> list[str] | None:
+    """연속 일수 달력 층(달력 → X 하나씩 → 일수 문구). 첫 층은 output_path, 나머지는 _layer_path 이름으로 저장한다."""
+    try:
+        paths: list[str] = []
+        for k, layer in enumerate(streak_layers(count, phrase)):
+            path = output_path if k == 0 else _layer_path(output_path, k)
+            if not _save(layer, path):
+                return None
+            paths.append(path)
+        return paths
+    except Exception:
+        logger.exception("연속 일수 달력 렌더링 실패")
         return None
 
 

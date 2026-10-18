@@ -11,6 +11,7 @@ import logging
 import re
 import time
 
+from app.services.slide_icon_judge import strip_unjudged_icons_from_plan
 from app.services.slide_edit_plan import (
     BACKGROUNDS,
     MAX_BARE_STOCK_SECONDS,
@@ -349,5 +350,6 @@ def build_edit_plan_with_repair(
         plan = trim_excess_stock_overlays(repaired)
         rounds += 1
     plan["auto_repair_rounds"] = rounds
+    plan = strip_unjudged_icons_from_plan(plan, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다(글은 그대로)
     # 회색 배경 구간마다 장면 경계를 넘어 이어지는 모션 시퀀스를 설계한다(실패해도 장면별 후편집으로 대체).
     return attach_sequences(plan, llm_call=llm_call)

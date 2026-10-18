@@ -29,7 +29,7 @@ def _briefs(*texts, duration=4.0):
 
 
 def test_board_scene_without_a_valid_overlay_gets_a_verbatim_fallback_phrase():
-    briefs = _briefs("외국인은 8거래일 연속으로 코스피를 팔았습니다. 규모가 컸습니다.")
+    briefs = _briefs("외국인은 코스피를 대량으로 팔았습니다. 규모가 컸습니다.")
     entries = [{"index": 0, "background": "board",
                 "overlay": {"type": "key_text", "text": "원문에 없는 문구입니다 확실히"}}]
 

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from app.services.slide_streak import detect_streak
 from app.services.slide_timing import duplicates_subtitle
 
 import hashlib
@@ -337,6 +338,22 @@ def plan_violations(plan: dict) -> dict:
 CARRY_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "bullet_list", "flow", "equation"}
 
 
+def apply_metaphor_cues(scenes: list[dict]) -> None:
+    """내레이션이 뜻을 직접 그림으로 그릴 수 있는 표현이면 Claude의 선택에 맡기지 않고 그 그림을 넣는다.
+
+    2026-10-17 운영자 요청("8거래일 연속이면 진짜 달력에 8개를 동그라미 치듯 연상이 되게"): "N일 연속"은 달력 X(streak).
+    운영자가 직접 고친 장면(revised)은 건드리지 않는다. 기사 카드가 계획된 장면도 그대로 둔다."""
+    for scene in scenes:
+        if scene.get("revised") or (scene.get("overlay") or {}).get("type") in {"article_card", "streak"}:
+            continue
+        cue = detect_streak(scene.get("narration"))
+        if cue:
+            scene["overlay"] = {
+                "type": "streak", "count": cue["phrase"], "days": cue["days"], "title": "",
+                "explain": scene["background"] == "board", "source": "metaphor_cue",
+            }
+
+
 def mark_carry_overlays(scenes: list[dict]) -> None:
     """그래픽 지속(2026-10-17 운영자 피드백: 모션그래픽이 너무 빨리 지나간다, 레퍼런스는 한 그래픽을 자막 여러 줄 동안 둔다).
 
@@ -359,6 +376,7 @@ def mark_carry_overlays(scenes: list[dict]) -> None:
 def refresh_plan(plan: dict, demoted: list[int] | None = None) -> None:
     """장면 목록에서 구간·요약·총 길이를 다시 계산한다(전체 계획과 부분 재계획 공통)."""
     scenes = plan["scenes"]
+    apply_metaphor_cues(scenes)
     mark_carry_overlays(scenes)
     highlight_end_index = plan.get("highlight_end_index")
     segments: list[dict] = []

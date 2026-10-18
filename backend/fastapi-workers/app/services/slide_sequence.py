@@ -24,6 +24,8 @@ from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
+from app.services.slide_icon_judge import strip_unjudged_icons_from_topics
+from app.services.slide_streak import streak_sprite as _streak_sprite
 from app.services.slide_timing import phrase_offset
 from app.services.slide_motifs import PREFIX as MOTIF_PREFIX, motif_prompt_hint, motif_sprite, resolve_motif
 from app.services.slide_templates import expand_topic
@@ -81,7 +83,7 @@ MAX_TEXT_CHARS = 16                  # 자막과 같은 문장을 되풀이하�
 
 _KIND_TO_OVERLAY = {
     "text": "key_text", "number": "big_number", "bars": "stat_chart", "list": "bullet_list",
-    "rows": "compare_numbers", "flow": "flow",
+    "rows": "compare_numbers", "flow": "flow", "streak": "streak",
 }
 _OVERLAY_TO_KIND = {value: key for key, value in _KIND_TO_OVERLAY.items()}
 
@@ -228,6 +230,8 @@ def _validate_content(kind: str, content: dict, scene_index: int, scenes: dict[i
         return {"headline": validated["headline"], "rows": validated["rows"]}
     if kind == "flow":
         return {"nodes": validated["nodes"]}
+    if kind == "streak":
+        return {"count": validated["days"], "phrase": validated["count"]}
     return None
 
 
@@ -309,11 +313,13 @@ def _fallback_scene_element(scene: dict, starts: dict, seq_start: float, element
         content = {"title": overlay["title"], "items": overlay["items"]}
     elif kind == "rows":
         content = {"headline": overlay["headline"], "rows": overlay["rows"]}
+    elif kind == "streak":
+        content = {"count": overlay["days"], "phrase": overlay["count"]}
     else:
         content = {"nodes": overlay["nodes"]}
     return {
         "id": element_id, "kind": kind, "scene": scene["index"], "anchor": "", "slot": "center", "replaces": None,
-        "anim": {"number": "count", "bars": "grow"}.get(kind, "rise"),
+        "anim": {"number": "count", "bars": "grow", "streak": "draw"}.get(kind, "rise"),
         "at": round(starts[scene["index"]] - seq_start + 0.3, 2), "content": content,
     }
 
@@ -572,6 +578,7 @@ def _topics_to_elements(
     raw_topics: list, run: list[dict], plan: dict, llm_call=None, failures: list[str] | None = None,
 ) -> list[dict]:
     """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
+    raw_topics = strip_unjudged_icons_from_topics(raw_topics, run, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다
     ctx = _TemplateContext(run, plan, _approve_paraphrases(raw_topics, run, plan, llm_call))
     if failures is not None:
         failures.extend(ctx.failures)  # 같은 리스트를 계속 갱신하도록 아래에서 다시 합친다
@@ -827,45 +834,6 @@ def _number_sprite(
     sprite = Image.new("RGBA", (max(main.width, tag.width), main.height + tag.height - 10), (0, 0, 0, 0))
     sprite.alpha_composite(tag, ((sprite.width - tag.width) // 2, 0))
     sprite.alpha_composite(main, ((sprite.width - main.width) // 2, tag.height - 10))
-    return sprite
-
-
-def _streak_sprite(count: int, phrase: str, p: float) -> Image.Image:
-    """연속 일수 달력: 달력 카드가 나오고 날짜 칸(동그라미)마다 X가 차례로 그려진 뒤 일수 문구가 나온다. 날짜 숫자는 쓰지 않는다."""
-    rows = 1 if count <= 7 else 2          # 8일은 4+4처럼 줄을 고르게 나눈다(7+1로 한 칸만 남기지 않는다)
-    cols = -(-count // rows)
-    cell, pad, header, footer = 170, 60, 84, 170
-    width, height = cols * cell + pad * 2, header + rows * cell + pad + footer
-    sprite = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(sprite)
-    card_bottom = header + rows * cell + pad
-    card_alpha = int(255 * min(p / 0.12, 1.0))
-    draw.rounded_rectangle((0, 0, width, card_bottom), radius=34, fill=(244, 245, 248, card_alpha))
-    draw.rounded_rectangle((0, 0, width, header + 20), radius=34, fill=ACCENT[:3] + (card_alpha,))
-    draw.rectangle((0, header - 10, width, header + 20), fill=(244, 245, 248, card_alpha))
-    for ring in (width * 0.26, width * 0.74):
-        draw.rounded_rectangle((ring - 9, -14, ring + 9, 34), radius=9, fill=(60, 64, 72, card_alpha))
-    marked = max(0.0, (p - 0.15) / 0.75) * count      # 0..count: 정수 부분은 완성된 X, 소수 부분은 그리는 중인 X
-    for k in range(count):
-        cx = pad + (k % cols) * cell + cell // 2
-        cy = header + pad // 2 + (k // cols) * cell + cell // 2
-        r = 58
-        draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=ACCENT[:3] + (card_alpha,), width=8)
-        done = min(max(marked - k, 0.0), 1.0)
-        if done <= 0:
-            continue
-        first, second = min(done / 0.5, 1.0), max((done - 0.5) / 0.5, 0.0)
-        reach = r * 0.78
-        draw.line((cx - reach, cy - reach, cx - reach + 2 * reach * first, cy - reach + 2 * reach * first),
-                  fill=(229, 57, 53, 255), width=14)
-        if second > 0:
-            draw.line((cx + reach, cy - reach, cx + reach - 2 * reach * second, cy - reach + 2 * reach * second),
-                      fill=(229, 57, 53, 255), width=14)
-    if p > 0.92:
-        text = _text_sprite(phrase, 120, ACCENT[:3], max_width=width)
-        alpha = min((p - 0.92) / 0.08, 1.0)
-        text.putalpha(text.getchannel("A").point(lambda v, a=alpha: int(v * a)))
-        sprite.alpha_composite(text, ((width - text.width) // 2, card_bottom + 20))
     return sprite
 
 
