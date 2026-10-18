@@ -13,7 +13,10 @@ suppress_legacy_style_lock=True(STYLE_LOCK 카툰 상수 미주입).
 from __future__ import annotations
 
 
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 # 스톡 검색용 검색어("stock market crash red screen numbers falling")를 그대로 넘기면 Gemini가
 # 전광판·수치판·차트를 그려 넣는다(20번 Job 카나리). 화면·글자·수치를 부르는 단어는 제거한다.
@@ -22,7 +25,9 @@ _TEXT_PRONE_WORDS = re.compile(
     r"displays?|led|digital|numbers?|figures?|digits?|charts?|graphs?|candlesticks?|text|words?|"
     r"letters?|headlines?|banners?|newspapers?|documents?|reports?|percent(?:age)?|prices?|"
     r"stocks?|markets?|index|indices|trading|traders?|exchange|kospi|kosdaq|nasdaq|s&p|dow|"
-    r"earnings|profits?|revenue|rates?|yields?|bonds?|crash(?:es|ed)?|plunge[sd]?)(?![A-Za-z])",
+    r"earnings|profits?|revenue|rates?|yields?|bonds?|crash(?:es|ed)?|plunge[sd]?|"
+    # 추상어는 Gemini가 만화·인포그래픽으로 그리게 만든다(2026-10-18 작업 20: 'concept' → 영어 글자가 든 만화 마스코트).
+    r"concepts?|ideas?|metaphors?|illustrations?|cartoons?|infographics?|diagrams?|icons?|symbols?|abstract)(?![A-Za-z])",
     re.IGNORECASE,
 )
 _FALLBACK_SCENE = "busy Korean city street with office workers walking under umbrellas, overcast rainy daylight"
@@ -35,8 +40,72 @@ def sanitize_photo_query(prompt_en: str) -> str:
     return cleaned if len(cleaned.split()) >= 3 else _FALLBACK_SCENE
 
 
+STRICT_PHOTO_SUFFIX = (
+    " Real documentary photograph taken with a camera ONLY. Absolutely no cartoon, no illustration, no drawing, no 3D render, "
+    "no mascot, no character, no infographic, no poster and no readable text, letters or numbers anywhere in the image."
+)
+
+_GATE_SYSTEM = (
+    "너는 영상 배경 이미지 검수자다. 이미지가 (1) 실제 카메라로 찍은 듯한 사진인지(만화·일러스트·3D 캐릭터·마스코트·인포그래픽·포스터가 아님), "
+    "(2) 읽을 수 있는 글자·숫자(영어 포함)가 화면에 없는지 확인한다. 흐릿해서 읽히지 않는 간판은 글자로 치지 않는다. "
+    '출력은 JSON만: {"photo": true|false, "has_text": true|false, "reason": "한 줄"}'
+)
+
+
+class BackgroundRejected(RuntimeError):
+    """AI 배경이 실사 사진이 아니거나 읽히는 글자가 있어 쓰지 않는다."""
+
+
+def _default_vision_call(system: str, text: str, images: list[bytes]) -> str:
+    import base64
+    import os
+
+    from anthropic import Anthropic
+
+    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.standard_b64encode(images[0]).decode()}},
+               {"type": "text", "text": text}]
+    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+        model="claude-sonnet-4-6", max_tokens=200, system=system, messages=[{"role": "user", "content": content}],
+    )
+    return "".join(block.text for block in response.content if hasattr(block, "text"))
+
+
+def assess_background(image_path: str, *, vision_call=None) -> tuple[bool, str]:
+    """만든 AI 배경이 글자 없는 실사 사진인지 확인한다. 확인 자체가 실패하면 통과시키지 않는다(사유에 '확인 실패')."""
+    import json
+
+    try:
+        from PIL import Image
+        import io
+
+        with Image.open(image_path) as image:
+            thumb = image.convert("RGB")
+            thumb.thumbnail((1024, 1024))
+            buffer = io.BytesIO()
+            thumb.save(buffer, "PNG")
+        raw = (vision_call or _default_vision_call)(_GATE_SYSTEM, "이 배경 이미지를 검수해라. JSON만 반환.", [buffer.getvalue()])
+        match = re.search(r"\{[\s\S]*\}", str(raw or ""))
+        data = json.loads(match.group(0) if match else raw)
+        ok = bool(data.get("photo")) and not bool(data.get("has_text"))
+        return ok, str(data.get("reason") or "")
+    except Exception as exc:
+        return False, f"배경 검수 확인 실패: {exc}"
+
+
+def ensure_photo_background(make, output_path: str, *, prompt: str, vision_call=None) -> None:
+    """make(prompt, path, strict)로 배경을 만들고 검수한다. 통과하지 못하면 엄격한 프롬프트로 한 번 더 만들고, 그래도 아니면 BackgroundRejected."""
+    reason = ""
+    for strict in (False, True):
+        make(prompt, output_path, strict)
+        ok, reason = assess_background(output_path, vision_call=vision_call)
+        if ok:
+            return
+        logger.warning("AI 배경 검수 불합격(%s회차, 엄격=%s): %s", 2 if strict else 1, strict, reason)
+    raise BackgroundRejected(reason)
+
+
 def generate_korean_slide_background(
-    prompt_en: str, output_path: str, *, job_id: int, scene_key: str,
+    prompt_en: str, output_path: str, *, job_id: int, scene_key: str, strict: bool = False,
 ) -> None:
     from app.providers.real.image import NanaBananaProvider
     from app.utils.budget import ProviderRequestAudit
@@ -45,6 +114,7 @@ def generate_korean_slide_background(
     model = "gemini-3-pro-image"
     provider.generate_image(
         prompt=(
+            (STRICT_PHOTO_SUFFIX if strict else "") +
             f"Photorealistic documentary photograph: {sanitize_photo_query(prompt_en)}, in South Korea, "
             "authentic Korean architecture and street scenery, natural lighting, real camera photo, "
             "news B-roll footage style. No illustration, no cartoon, no anime, no drawing, "

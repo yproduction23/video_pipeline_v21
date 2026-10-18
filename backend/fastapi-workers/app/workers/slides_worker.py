@@ -37,7 +37,7 @@ from pathlib import Path
 
 from app import runtime_config
 from app.services.scene_preparation import prepare_job_scenes
-from app.services.slide_background import generate_korean_slide_background
+from app.services.slide_background import ensure_photo_background, generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
 from app.services.slide_motion_parts import compose_motion_part, part_phrase
 from app.services.slide_timing import phrase_offset, scene_chunks
@@ -1324,9 +1324,12 @@ class SlidesWorker:
         # 2026-10-14 사용자 재현: 압축된 pexels_query만 넘기면 "마트 안" 같은
         # 장소 맥락이 사라져 AI 배경이 엉뚱한 장소로 나왔다. 내레이션 원문을
         # 함께 넘겨 장소/맥락을 보존한다.
-        generate_korean_slide_background(
-            scene_prompt, str(image_path),
-            job_id=job_id, scene_key=f"slide_bg:{index}",
+        # 2026-10-18 작업 20: 만화풍·영어 글자가 든 AI 배경이 그대로 쓰였다 — 만든 뒤 사진·무글자인지 검수하고, 아니면 엄격하게 한 번 더, 그래도 아니면 쓰지 않는다.
+        ensure_photo_background(
+            lambda prompt, path, strict: generate_korean_slide_background(
+                prompt, path, job_id=job_id, scene_key=f"slide_bg:{index}", **({"strict": True} if strict else {}),
+            ),
+            str(image_path), prompt=scene_prompt,
         )
         out["image_path"] = str(image_path)
         out["visual_type"] = "slide_ai_background"
