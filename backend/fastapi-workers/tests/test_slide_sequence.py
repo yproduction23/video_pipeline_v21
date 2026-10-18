@@ -407,7 +407,7 @@ def test_bars_have_yellow_value_labels_and_a_baseline_like_the_reference():
     pixels = list(sprite.convert("RGBA").getdata())
     yellow = [p for p in pixels if p[3] > 200 and p[0] > 230 and 150 < p[1] < 215 and p[2] < 80]
     assert len(yellow) > 20000  # 막대와 값 글자가 노랗다
-    baseline = sprite.getpixel((30, 130 + 380 + 2))  # 첫 막대 왼쪽 바깥, 막대 바닥 바로 아래
+    baseline = sprite.getpixel((30, 190 + 380 + 2))  # 첫 막대 왼쪽 바깥, 막대 바닥 바로 아래
     assert baseline[3] > 150 and baseline[0] > 180  # 막대 아래 기준선
 
 
@@ -422,3 +422,19 @@ def test_scenes_with_a_motion_part_stay_out_of_the_gray_board_sequence():
     runs = board_runs({"scenes": scenes})
 
     assert [[s["index"] for s in run] for run in runs] == [[0], [2]]
+
+
+def test_bars_with_long_value_labels_are_not_clipped_and_do_not_touch_the_title():
+    """2026-10-18 분석: "107조 4000억 원" 같은 긴 값 라벨이 막대 폭보다 넓어 잘리고 제목과 닿았다."""
+    from app.services.slide_sequence import _bars_sprite
+
+    items = [{"label": "매출", "value_text": "195조 원", "value": 195.0}, {"label": "영업이익", "value_text": "107조 4000억 원", "value": 107.4}]
+    sprite = _bars_sprite("분기 실적", items, 1.0)
+    alpha = sprite.getchannel("A")
+
+    width, height = sprite.size
+    assert alpha.crop((0, 0, 6, height)).getbbox() is None and alpha.crop((width - 6, 0, width, height)).getbbox() is None  # 가장자리에서 잘리지 않는다
+    rows = [alpha.crop((0, y, width, y + 1)).getbbox() is not None for y in range(height)]
+    title_end = max(y for y in range(0, 110) if rows[y])
+    first_label = next(y for y in range(title_end + 1, height) if rows[y])
+    assert first_label - title_end >= 14                                            # 제목과 값 라벨 사이에 틈이 있다

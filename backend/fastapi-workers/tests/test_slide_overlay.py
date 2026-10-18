@@ -438,3 +438,23 @@ def test_key_text_that_repeats_a_subtitle_line_is_rejected_but_keywords_pass():
 
     assert repeated == {}
     assert keyword[1]["text"] == "긴급 진단"
+
+
+def test_stat_chart_shrinks_long_value_labels_so_neighbouring_labels_do_not_overlap(tmp_path):
+    from PIL import Image
+
+    items = [{"label": f"항목{i}", "value": 10 + i, "value_text": "107조 4000억 원"} for i in range(4)]
+    out = tmp_path / "stat.png"
+
+    assert render_stat_overlay(title="분기 실적", items=items, output_path=str(out))
+
+    image = Image.open(out).convert("RGBA")
+    width, height = image.size
+    # 값 글자 높이대(막대 위)에서 칸 사이 경계에 노란 글자가 걸쳐 있지 않다
+    slot = int(width * 0.62 / len(items))
+    left = int((width - slot * len(items)) / 2)
+    yellow = lambda px: px[3] > 200 and px[0] > 230 and 150 < px[1] < 215 and px[2] < 80  # noqa: E731
+    band = [y for y in range(int(height * 0.32) - 90, int(height * 0.32) + 5)]
+    for k in range(1, len(items)):
+        edge = left + k * slot
+        assert not any(yellow(image.getpixel((edge + dx, y))) for y in band for dx in (-3, 0, 3))

@@ -66,3 +66,14 @@ def duplicates_subtitle(text: object, chunks: list[dict]) -> bool:
         if len(line) >= 4 and line in shown and len(line) / len(shown) > DUPLICATE_COVERAGE:
             return True
     return False
+
+
+DEFAULT_OVERLAY_OFFSET = 0.35  # 자막 줄 시각이 없을 때 후편집이 장면 시작 뒤 나오는 시각(초)
+
+
+def overlay_start_offset(chunks: list[dict], phrase: object, duration: float) -> float:
+    """후편집이 장면 안에서 시작하는 시각: 그 구절을 말하기 직전(자막 줄 시각), 없으면 기본값. 계획서와 렌더가 같은 값을 쓴다."""
+    spoken = phrase_offset(chunks, phrase)
+    if spoken is None:
+        return DEFAULT_OVERLAY_OFFSET
+    return min(max(spoken - 0.15, 0.2), max(float(duration) - 1.0, 0.2))

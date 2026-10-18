@@ -96,8 +96,9 @@ def test_validated_part_params_replace_a_key_text_overlay_with_a_motion_part():
     first, second = updated["scenes"]
     assert first["overlay"]["type"] == "motion_part" and first["overlay"]["part"] == "support"
     assert first["overlay"]["params"]["state"] == "holding" and first["overlay"]["source"] == "concept"
-    assert second["overlay"]["type"] == "key_text"                      # 검증 실패 → 기존 후편집 유지
-    assert updated["concept_applied"] == {"motion_parts": 1, "rejected": 1}
+    assert second["overlay"]["type"] == "motion_part" and second["overlay"]["span"]["head"] == 0   # 검증 실패한 자기 그림은 없고, 앞 그림이 이어진다
+    assert second["overlay"]["params"]["state"] == "holding"
+    assert updated["concept_applied"] == {"motion_parts": 1, "scenes": 2, "rejected": 1}
 
 
 def test_concept_does_not_override_data_overlays_or_operator_edits():
@@ -114,3 +115,54 @@ def test_concept_does_not_override_data_overlays_or_operator_edits():
 
     assert updated["scenes"][0]["overlay"]["type"] == "big_number"       # 숫자 후편집은 그대로
     assert updated["scenes"][1]["overlay"]["type"] == "key_text"         # 운영자가 고친 장면은 그대로
+
+
+# ── 연상 그림은 적게·다양하게·천천히(2026-10-18 운영자 피드백: 너무 빠르고 조잡하다, 같은 장면이 자주 나온다) ──
+
+def _scenes_plan(count, seconds=4.0, background="stock"):
+    from app.services.slide_edit_plan import assemble_plan
+
+    briefs = {i: {"narration": f"외국인이 팔았고 자금이 빠져나갔습니다 {i}.", "duration": seconds} for i in range(count)}
+    entries = [{"index": i, "background": background, "stock_queries": ["q"], "overlay": None} for i in range(count)]
+    return assemble_plan(briefs, entries, job_id=1)
+
+
+def _move_concept(index, importance=1, part="motif_move"):
+    params = {"item": "달러 지폐 더미", "source_label": "외국인이"} if part == "motif_move" else {"origin": "외국인이", "effect": "자금이"}
+    return {"index": index, "evokes": "x", "tool": part, "tool_ready": True, "motifs": [], "importance": importance, "params": params}
+
+
+def test_motion_parts_keep_a_minimum_gap_and_avoid_repeating_the_same_part():
+    from app.services.slide_concepts import MIN_PART_GAP_SECONDS, apply_concepts
+
+    plan = _scenes_plan(12, 4.0)       # 48초
+    # 짝수 장면은 이동, 홀수 장면은 확산 후보(같은 부품이 연속되면 안 된다는 규칙을 보려고 번갈아 둔다)
+    concepts = {"concepts": [
+        _move_concept(i, importance=3 if i == 0 else 1, part="motif_move" if i % 2 == 0 else "motif_spread") for i in range(12)
+    ], "missing": []}
+
+    updated = apply_concepts(plan, concepts)
+
+    heads = [s["index"] for s in updated["scenes"] if (s.get("overlay") or {}).get("type") == "motion_part"
+             and s["overlay"]["span"]["head"] == s["index"]]
+    assert heads[0] == 0                                                       # 가장 중요한 장면이 먼저 뽑힌다
+    starts = [h * 4.0 for h in heads]
+    assert all(b - a >= MIN_PART_GAP_SECONDS for a, b in zip(starts, starts[1:]))
+    assert 2 <= len(heads) <= 3                                                # 48초에 20초당 1개 안팎
+    parts = [updated["scenes"][h]["overlay"]["part"] for h in heads]
+    assert all(a != b for a, b in zip(parts, parts[1:]))                       # 같은 부품 연속 금지
+
+
+def test_a_part_continues_over_the_following_bare_scenes_so_it_moves_slowly():
+    from app.services.slide_concepts import apply_concepts
+
+    plan = _scenes_plan(5, 4.0)
+    updated = apply_concepts(plan, {"concepts": [_move_concept(1, importance=3)], "missing": []})
+
+    head, follower, last = updated["scenes"][1], updated["scenes"][2], updated["scenes"][3]
+    assert head["overlay"]["span"]["head"] == 1 and head["overlay"]["span"]["total_scenes"] == 3
+    assert follower["overlay"]["type"] == "motion_part" and follower["overlay"]["span"]["head"] == 1
+    assert follower["overlay"]["span"]["elapsed_before"] > 3.0               # 앞 장면에서 이미 진행한 시간
+    assert last["overlay"]["span"]["last"] is True and follower["overlay"]["span"]["last"] is False
+    assert updated["scenes"][4].get("overlay") is None                       # 최대 3장면까지만 이어진다
+    assert head["overlay"]["span"]["anim"] >= 5.0                            # 한 장면 안에 몰아 그리지 않고 천천히

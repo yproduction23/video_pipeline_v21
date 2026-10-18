@@ -88,3 +88,49 @@ def test_part_overlay_is_composed_over_the_base_frame_by_frame_and_appears_after
     before, after = frame(0.3), frame(2.0)
     assert before != after                                    # 시작 시각 뒤에 그림이 나타난다
     assert max(before) - min(before) < 8                      # 시작 전에는 배경뿐이다
+
+
+def test_a_continued_part_picks_up_the_animation_where_the_previous_scene_left_it(tmp_path):
+    """여러 장면에 걸친 그림: 뒤 장면은 이미 진행된 모습으로 처음부터 떠 있고(등장 연출 없음), 마지막 장면에서만 사라진다."""
+    import subprocess
+
+    from app.services.slide_motion_parts import compose_motion_part
+
+    base = tmp_path / "base.png"
+    Image.new("RGB", (1920, 1080), (40, 40, 44)).save(base)
+    params = {"label": "금리", "level": "high"}
+
+    def frame(path, t):
+        result = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", str(t), "-i", str(path), "-frames:v", "1",
+                                 "-vf", "scale=96:54,format=gray", "-f", "rawvideo", "-"], capture_output=True)
+        return result.stdout
+
+    follower = tmp_path / "follower.mp4"
+    assert compose_motion_part(
+        base_path=str(base), base_is_video=False, output_path=str(follower), duration=2.0, part="gauge", params=params,
+        start_offset=0.0, dim_base=False, progress_offset=3.0, anim_total=6.0, fade_out=False,
+    )
+    first = frame(follower, 0.05)
+    assert max(first) - min(first) > 20                       # 첫 프레임부터 그림이 떠 있다(진행도 50% 지점)
+    assert first != frame(follower, 1.9)                      # 이어서 계속 움직인다
+    last = frame(follower, 1.95)
+    assert max(last) - min(last) > 20                         # 마지막 장면이 아니면 장면 끝에서 사라지지 않는다
+
+
+def test_part_is_drawn_on_a_soft_dark_panel_so_labels_stay_readable_on_bright_footage(tmp_path):
+    import subprocess
+
+    from app.services.slide_motion_parts import compose_motion_part
+
+    base = tmp_path / "bright.png"
+    Image.new("RGB", (1920, 1080), (235, 235, 235)).save(base)
+    out = tmp_path / "panel.mp4"
+    assert compose_motion_part(
+        base_path=str(base), base_is_video=False, output_path=str(out), duration=3.0, part="balance",
+        params={"left": "자사주 매입", "right": "외국인 매도", "heavier": "right"}, start_offset=0.2, dim_base=False,
+    )
+    raw = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-ss", "2.4", "-i", str(out), "-frames:v", "1",
+                          "-vf", "scale=192:108,format=gray", "-f", "rawvideo", "-"], capture_output=True).stdout
+    # 밝은 배경(235) 위에 어두운 패널이 깔려 중앙부에 어두운 픽셀이 넓게 있다
+    dark = sum(1 for v in raw if v < 120)
+    assert dark > 192 * 108 * 0.12

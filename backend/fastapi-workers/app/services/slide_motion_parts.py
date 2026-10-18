@@ -307,11 +307,12 @@ def _pile(params: dict, p: float) -> Image.Image:
     total = 6
     eased = _ease(_ramp(p, 0.05, 0.85))
     shown = math.ceil(total * eased) if params["trend"] == "grow" else total - int(5 * eased)
-    art = _motif(params["item"], 150)
+    art = _motif(params["item"], 135)
+    # 피라미드로 쌓는다(아래 3개, 가운데 2개, 위 1개): 세로로 길게 겹치지 않고 "쌓였다"가 한눈에 보인다.
+    slots = [(330, 520), (500, 520), (670, 520), (415, 385), (585, 385), (500, 250)]
     for k in range(shown):
-        cx, cy = 500 + (14 if k % 2 else -14), 510 - k * 92
         if art is not None:
-            _paste_center(layer, art, cx, cy)
+            _paste_center(layer, art, *slots[k])
     labels, ld = _layer(size)
     if params.get("label"):
         _text(ld, (500, 640), params["label"], 58, WHITE)
@@ -330,11 +331,14 @@ def part_sprite(part: str, params: dict, p: float) -> Image.Image:
 
 def compose_motion_part(
     *, base_path: str, base_is_video: bool, output_path: str, duration: float, part: str, params: dict,
-    start_offset: float = 0.35, dim_base: bool = False,
+    start_offset: float = 0.35, dim_base: bool = False, progress_offset: float = 0.0,
+    anim_total: Optional[float] = None, fade_out: bool = True,
 ) -> bool:
     """배경(영상·정지 이미지) 위에 움직임 부품을 프레임 단위로 그려 얹은 mp4를 만든다.
 
-    부품은 start_offset부터 진행도 p가 0→1로 움직이고(최대 3.5초), 끝나면 마지막 모습을 유지하다가 장면 끝에서 사라진다."""
+    부품은 start_offset부터 진행도 p가 0→1로 움직이고, 끝나면 마지막 모습을 유지하다가 장면 끝에서 사라진다.
+    여러 장면에 걸친 그림은 장면마다 이 함수를 부른다: anim_total은 전체 진행 시간, progress_offset은 앞 장면에서 이미 진행된 시간이며,
+    마지막 장면이 아니면 fade_out=False로 장면 끝에서 사라지지 않게 한다. 글자가 잘 읽히도록 그림 뒤에 어두운 반투명 패널을 깐다."""
     import subprocess
     from pathlib import Path
 
@@ -344,7 +348,7 @@ def compose_motion_part(
     fps = 30
     duration = max(float(duration), 0.8)
     start = min(max(float(start_offset), 0.0), max(duration - 0.8, 0.0))
-    anim = max(min(duration - start - 0.4, 3.5), 0.8)
+    anim = float(anim_total) if anim_total else max(min(duration - start - 0.4, 3.5), 0.8)
     base_input = ["-stream_loop", "-1", "-i", base_path] if base_is_video else ["-loop", "1", "-framerate", str(fps), "-i", base_path]
     cmd = [
         "ffmpeg", "-y", "-nostdin", "-threads", str(_FFMPEG_THREADS), *base_input,
@@ -358,6 +362,10 @@ def compose_motion_part(
     blank = bytes(width * height * 4)
     frames = max(int(round(duration * fps)), 1)
     final_bytes: Optional[bytes] = None
+    # 패널 크기는 완성된 그림 기준으로 고정한다(그림이 자라도 패널은 흔들리지 않는다).
+    full = part_sprite(part, params, 1.0)
+    full_box = full.getchannel("A").getbbox() or (0, 0, full.width, full.height)
+    panel_pad = 46
     try:
         with _COMPOSE_SLOTS:
             process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -367,17 +375,26 @@ def compose_motion_part(
                     if t < start:
                         process.stdin.write(blank)
                         continue
-                    p = min((t - start) / anim, 1.0)
-                    if p >= 1.0 and final_bytes is not None and duration - t > 0.3:
+                    p = min((float(progress_offset) + t - start) / anim, 1.0)
+                    fade = min((duration - t) / 0.3, 1.0) if fade_out else 1.0
+                    if p >= 1.0 and fade >= 1.0 and final_bytes is not None:
                         process.stdin.write(final_bytes)
                         continue
                     sprite = part_sprite(part, params, p)
-                    fade = min((duration - t) / 0.3, 1.0)
                     if fade < 1.0:
                         sprite = _with_alpha(sprite, max(fade, 0.0))
                     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                    left = (width - sprite.width) // 2
                     top = max(min(500 - sprite.height // 2, 890 - sprite.height), 20)
-                    canvas.alpha_composite(sprite, ((width - sprite.width) // 2, top))
+                    panel = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                    ImageDraw.Draw(panel).rounded_rectangle(
+                        (left + full_box[0] - panel_pad, top + full_box[1] - panel_pad,
+                         left + full_box[2] + panel_pad, top + full_box[3] + panel_pad),
+                        radius=44, fill=(12, 16, 24, 165),
+                    )
+                    panel_alpha = min(max(p, 0.0) / 0.12, 1.0) * max(fade, 0.0)
+                    canvas.alpha_composite(_with_alpha(panel, panel_alpha))
+                    canvas.alpha_composite(sprite, (left, top))
                     data = canvas.tobytes()
                     if p >= 1.0 and fade >= 1.0:
                         final_bytes = data

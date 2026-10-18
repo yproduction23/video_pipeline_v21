@@ -881,28 +881,34 @@ def _arrow_sprite(direction: str, p: float, size: int = 300) -> Image.Image:
 
 def _bars_sprite(title: str, items: list[dict], p: float) -> Image.Image:
     count = max(len(items), 1)
-    slot, base_h = 260, 380
-    width = slot * count + 120
-    sprite = Image.new("RGBA", (width, base_h + 260), (0, 0, 0, 0))
+    probe = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    value_font, name_font, title_font = _font(_FONT_BOLD, 56), _font(_FONT_BOLD, 44), _font(_FONT_BOLD, 64)
+    # 긴 값 라벨("107조 4000억 원")이 막대 칸보다 넓으면 칸을 넓힌다(잘림·옆 라벨과 겹침 방지, 2026-10-18 분석).
+    widest = max([probe.textlength(str(i.get("value_text") or ""), font=value_font) for i in items]
+                 + [probe.textlength(str(i.get("label") or ""), font=name_font) for i in items] + [0])
+    slot, base_h, head = max(260, int(widest) + 60), 380, 190   # head: 제목과 가장 높은 막대 라벨 사이 여유 포함
+    width = max(slot * count + 120, int(probe.textlength(title or "", font=title_font)) + 80)
+    sprite = Image.new("RGBA", (width, base_h + head + 130), (0, 0, 0, 0))
     draw = ImageDraw.Draw(sprite)
     if title:
-        tw = draw.textlength(title, font=_font(_FONT_BOLD, 64))
-        draw.text(((width - tw) / 2, 0), title, font=_font(_FONT_BOLD, 64), fill=WHITE + (255,))
+        tw = draw.textlength(title, font=title_font)
+        draw.text(((width - tw) / 2, 0), title, font=title_font, fill=WHITE + (255,))
     top = max(float(item.get("value") or 0) for item in items) or 1.0
+    left = (width - slot * count) // 2
     # 레퍼런스 막대 카드: 노란 막대, 막대 위 노란 값 글자, 아래 회색 기준선
-    draw.rectangle((20, 130 + base_h + 1, width - 20, 130 + base_h + 3), fill=(200, 202, 208, 230))
+    draw.rectangle((20, head + base_h + 1, width - 20, head + base_h + 3), fill=(200, 202, 208, 230))
     for k, item in enumerate(items):
         h = max(int(base_h * float(item.get("value") or 0) / top * _ease_out(p)), 6)
-        x = 60 + k * slot + 28
-        draw.rectangle((x, 130 + base_h - h, x + slot - 56, 130 + base_h), fill=ACCENT[:3] + (255,))
+        x = left + k * slot + 28
+        bar_w = slot - 56
+        draw.rectangle((x, head + base_h - h, x + bar_w, head + base_h), fill=ACCENT[:3] + (255,))
         if p > 0.65:
             label = str(item.get("value_text") or "")
-            lw = draw.textlength(label, font=_font(_FONT_BOLD, 56))
-            draw.text((x + (slot - 56 - lw) / 2, 130 + base_h - h - 72), label, font=_font(_FONT_BOLD, 56),
-                      fill=ACCENT[:3] + (255,))
+            lw = draw.textlength(label, font=value_font)
+            draw.text((x + (bar_w - lw) / 2, head + base_h - h - 72), label, font=value_font, fill=ACCENT[:3] + (255,))
         name = str(item.get("label") or "")
-        nw = draw.textlength(name, font=_font(_FONT_BOLD, 44))
-        draw.text((x + (slot - 56 - nw) / 2, 130 + base_h + 22), name, font=_font(_FONT_BOLD, 44), fill=(235, 236, 240, 255))
+        nw = draw.textlength(name, font=name_font)
+        draw.text((x + (bar_w - nw) / 2, head + base_h + 22), name, font=name_font, fill=(235, 236, 240, 255))
     return sprite
 
 

@@ -867,9 +867,14 @@ class SlidesWorker:
             if not base:
                 raise RuntimeError("합성할 배경이 없습니다")
             clip_path = job_dir / f"scene_{index:03d}_part.mp4"
+            span = overlay_plan.get("span") or {}
+            continued = bool(span.get("index"))
             if not compose_motion_part(
                 base_path=str(base), base_is_video=bool(base_video), output_path=str(clip_path), duration=duration,
-                part=overlay_plan["part"], params=overlay_plan["params"], start_offset=base_offset, dim_base=dim_base,
+                part=overlay_plan["part"], params=overlay_plan["params"], dim_base=dim_base,
+                # 이어지는 장면은 앞 장면에서 진행된 만큼 처음부터 떠 있고, 마지막 장면에서만 사라진다.
+                start_offset=0.0 if continued else base_offset, progress_offset=float(span.get("elapsed_before") or 0.0),
+                anim_total=float(span["anim"]) if span.get("anim") else None, fade_out=bool(span.get("last", True)),
             ):
                 raise RuntimeError("움직임 부품 합성 실패")
             out["stock_video_path"] = str(clip_path)

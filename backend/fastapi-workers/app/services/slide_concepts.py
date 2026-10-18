@@ -61,7 +61,9 @@ _SYSTEM = (
     '- motif_spread: {"origin": 시작 구절, "effect": 결과 구절}\n'
     '- motif_support: {"top": 받쳐지는 대상 구절, "pillar": 받치는 것 구절, "state": "holding"|"weakening"}\n'
     '- motif_pile: {"item": 현재 소재 이름, "trend": "grow"|"shrink", "label": 구절(선택)}\n\n'
-    '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","motifs":["현재 소재 이름"],'
+    "importance: 이 그림이 대본 이해에 얼마나 중요한가 1~3(3=이 대본에서 손꼽히게 중요하고 그림이 없으면 이해가 어려운 장면). "
+    "그림은 자주 쓰면 정신이 없으므로 중요도가 낮은 장면은 tool을 none으로 두는 편이 낫다.\n\n"
+    '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","importance":1~3,"motifs":["현재 소재 이름"],'
     '"params":{...부품일 때만},"missing":[{"type":"...","name":"...","description":"..."}]}]}'
 )
 
@@ -137,6 +139,7 @@ def design_concepts(briefs: dict[int, dict], *, llm_call=None) -> dict | None:
             "index": index, "evokes": str(item.get("evokes") or "").strip()[:120], "tool": tool,
             "tool_ready": bool(TOOLS[tool]["ready"]), "motifs": list(dict.fromkeys(motifs)),
             "params": item.get("params") if isinstance(item.get("params"), dict) else {},
+            "importance": int(item["importance"]) if str(item.get("importance") or "").isdigit() and 1 <= int(item["importance"]) <= 3 else 1,
         })
     ordered = sorted(missing.values(), key=lambda m: (-m["count"], m["name"]))
     return {"version": CONCEPT_VERSION, "concepts": concepts, "missing": ordered}
@@ -150,15 +153,35 @@ _PART_OF_TOOL = {
 _KEEP_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "equation", "article_card", "streak", "bullet_list", "flow"}
 
 
+# 연상 그림은 적게·다양하게·천천히(2026-10-18 운영자 피드백: 너무 빠르고 조잡하다, 같은 장면이 자주 나온다).
+MIN_PART_GAP_SECONDS = 20.0       # 두 그림이 시작하는 시각 사이 최소 간격(초)
+MAX_SPAN_SCENES = 3               # 한 그림이 이어지는 최대 장면 수
+MAX_SPAN_SECONDS = 12.0
+MAX_ITEM_REPEATS = 2              # 같은 소재(예: 지폐 더미)를 쓸 수 있는 최대 횟수
+MAX_ANIM_SECONDS = 8.0
+
+
 def apply_concepts(plan: dict, concepts: dict | None) -> dict:
-    """연출 단계가 고른 움직임 부품을 계획서 장면 후편집으로 바꾼다. 인자가 검증을 통과한 장면만 바꾸고 나머지는 그대로 둔다."""
+    """연출 단계가 고른 움직임 부품을 계획서 장면 후편집으로 바꾼다.
+
+    인자가 검증을 통과한 후보만 쓰고, 중요도 순으로 뽑되 시작 간격·같은 부품 연속·같은 소재 반복을 제한한다(영상 20초당 1개 안팎).
+    뽑힌 그림은 뒤따르는 후편집 없는 장면까지(최대 3장면) 이어서 천천히 진행한다."""
     if not concepts:
         return plan
-    from app.services.slide_motion_parts import part_phrase, validate_part  # noqa: F401
+    from app.services.slide_motion_parts import part_phrase, validate_part
+    from app.services.slide_timing import overlay_start_offset
 
-    by_index = {s["index"]: s for s in plan["scenes"]}
-    order = [s["index"] for s in plan["scenes"]]
-    applied = rejected = 0
+    scenes = plan["scenes"]
+    by_index = {s["index"]: s for s in scenes}
+    order = [s["index"] for s in scenes]
+    starts, acc = {}, 0.0
+    for scene in scenes:
+        starts[scene["index"]] = acc
+        acc += scene["duration"]
+    limit = max(1, int(acc // MIN_PART_GAP_SECONDS))
+
+    candidates = []
+    rejected = 0
     for concept in concepts.get("concepts", []):
         part = _PART_OF_TOOL.get(concept.get("tool"))
         scene = by_index.get(concept.get("index"))
@@ -170,11 +193,66 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
         if not params:
             rejected += 1
             continue
-        scene["overlay"] = {
-            "type": "motion_part", "part": part, "params": params, "explain": scene["background"] == "board",
-            "evokes": concept.get("evokes", ""), "source": "concept",
-        }
-        applied += 1
-    plan["concept_applied"] = {"motion_parts": applied, "rejected": rejected}
+        candidates.append((concept, part, params))
+    candidates.sort(key=lambda c: (-int(c[0].get("importance") or 1), c[0]["index"]))
+
+    chosen: list[dict] = []
+    occupied: set[int] = set()
+    item_uses: dict[str, int] = {}
+    for concept, part, params in candidates:
+        if len(chosen) >= limit:
+            break
+        index = concept["index"]
+        if index in occupied:
+            continue
+        start = starts[index]
+        if any(abs(c["start"] - start) < MIN_PART_GAP_SECONDS for c in chosen):
+            continue
+        before = max((c for c in chosen if c["start"] < start), key=lambda c: c["start"], default=None)
+        after = min((c for c in chosen if c["start"] > start), key=lambda c: c["start"], default=None)
+        if any(c and c["part"] == part for c in (before, after)):
+            continue
+        item = str(params.get("item") or "")
+        if item and item_uses.get(item, 0) >= MAX_ITEM_REPEATS:
+            continue
+        # 뒤따르는 후편집 없는 장면까지 이어서 천천히 진행한다.
+        span = [index]
+        total = by_index[index]["duration"]
+        position = order.index(index)
+        for follower in order[position + 1:position + MAX_SPAN_SCENES]:
+            scene = by_index[follower]
+            if (
+                scene.get("revised") or follower in occupied or total + scene["duration"] > MAX_SPAN_SECONDS
+                or scene["background"] != by_index[index]["background"]
+                or (scene.get("overlay") and scene["overlay"].get("type") != "key_text")
+            ):
+                break
+            span.append(follower)
+            total += scene["duration"]
+        head_scene = by_index[index]
+        head_start = overlay_start_offset(head_scene.get("chunks") or [], part_phrase(part, params), head_scene["duration"])
+        if len(span) > 1:
+            anim = max(min(total - head_start - 0.5, MAX_ANIM_SECONDS), 3.0)
+        else:
+            anim = max(min(head_scene["duration"] - head_start - 0.4, 3.5), 0.8)
+        chosen.append({"index": index, "start": start, "part": part, "params": params, "span": span, "anim": anim,
+                       "head_start": head_start, "concept": concept})
+        occupied.update(span)
+        if item:
+            item_uses[item] = item_uses.get(item, 0) + 1
+
+    for entry in chosen:
+        elapsed = -entry["head_start"]
+        for number, index in enumerate(entry["span"]):
+            scene = by_index[index]
+            scene["overlay"] = {
+                "type": "motion_part", "part": entry["part"], "params": entry["params"],
+                "explain": scene["background"] == "board", "evokes": entry["concept"].get("evokes", ""), "source": "concept",
+                "span": {"head": entry["index"], "index": number, "total_scenes": len(entry["span"]),
+                         "elapsed_before": round(max(elapsed, 0.0), 3) if number else 0.0, "anim": round(entry["anim"], 3),
+                         "last": number == len(entry["span"]) - 1},
+            }
+            elapsed += scene["duration"]
+    plan["concept_applied"] = {"motion_parts": len(chosen), "scenes": sum(len(c["span"]) for c in chosen), "rejected": rejected}
     plan["concept_version"] = concepts.get("version")
     return plan

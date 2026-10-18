@@ -377,6 +377,11 @@ def render_stat_overlay(*, title: str, items: list[dict], output_path: str, canv
         top = max(float(it["value"]) for it in items) or 1.0
         chart_top, baseline = int(height * 0.32), int(height * 0.80)
         slot = int(width * 0.62 / count)
+        # 값 글자가 옆 막대 칸과 겹치지 않게, 가장 긴 값이 칸 안에 들어오도록 글자 크기를 줄인다(2026-10-18 분석).
+        size = 56
+        while size > 34 and max(draw.textlength(str(it["value_text"]), font=_font(_FONT_BOLD, size)) for it in items) > slot - 30:
+            size -= 4
+        value_font = _font(_FONT_BOLD, size)
         bar_w = min(int(slot * 0.55), 220)
         left = int((width - slot * count) / 2)
         for i, item in enumerate(items):
