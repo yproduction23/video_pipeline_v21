@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
 from app.services.slide_icon_judge import strip_unjudged_icons_from_topics
+from app.services.slide_title_judge import fix_titles_in_topics
 from app.services.slide_streak import streak_sprite as _streak_sprite
 from app.services.slide_timing import phrase_offset
 from app.services.slide_motifs import PREFIX as MOTIF_PREFIX, motif_prompt_hint, motif_sprite, resolve_motif
@@ -579,6 +580,7 @@ def _topics_to_elements(
 ) -> list[dict]:
     """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
     raw_topics = strip_unjudged_icons_from_topics(raw_topics, run, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다
+    raw_topics = fix_titles_in_topics(raw_topics, run, llm_call=llm_call)  # 그래프 제목의 대상이 어긋나면 고치거나 뺀다
     ctx = _TemplateContext(run, plan, _approve_paraphrases(raw_topics, run, plan, llm_call))
     if failures is not None:
         failures.extend(ctx.failures)  # 같은 리스트를 계속 갱신하도록 아래에서 다시 합친다

@@ -360,7 +360,7 @@ def add_source_credit(png_path: str, publisher: str) -> bool:
 
 def render_stat_overlay(*, title: str, items: list[dict], output_path: str, canvas: tuple[int, int] = CANVAS) -> bool:
     """어두운 스크림 위에 제목과 노란 막대 비교 그래프를 그린 전체 화면 RGBA PNG."""
-    if not title or len(items) < 2:
+    if len(items) < 2:
         return False
     try:
         width, height = canvas
@@ -370,8 +370,9 @@ def render_stat_overlay(*, title: str, items: list[dict], output_path: str, canv
         value_font = _font(_FONT_BOLD, 56)
         label_font = _font(_FONT_REGULAR, 40)
 
-        tw = draw.textlength(title, font=title_font)
-        draw.text(((width - tw) / 2, int(height * 0.10)), title, font=title_font, fill=(255, 255, 255, 255))
+        if title:  # 제목 검수에서 대상이 어긋나 뺀 경우(2026-10-18)에는 제목 없이 막대만 그린다
+            tw = draw.textlength(title, font=title_font)
+            draw.text(((width - tw) / 2, int(height * 0.10)), title, font=title_font, fill=(255, 255, 255, 255))
 
         count = len(items)
         top = max(float(it["value"]) for it in items) or 1.0

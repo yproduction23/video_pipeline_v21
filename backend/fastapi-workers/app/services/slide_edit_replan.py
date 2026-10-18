@@ -13,6 +13,7 @@ import time
 
 from app.services.slide_concepts import apply_concepts, design_concepts
 from app.services.slide_icon_judge import strip_unjudged_icons_from_plan
+from app.services.slide_title_judge import fix_titles_in_plan
 from app.services.slide_edit_plan import (
     BACKGROUNDS,
     MAX_BARE_STOCK_SECONDS,
@@ -358,5 +359,6 @@ def build_edit_plan_with_repair(
         plan = apply_concepts(plan, concepts)
         refresh_plan(plan)
     plan = strip_unjudged_icons_from_plan(plan, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다(글은 그대로)
+    plan = fix_titles_in_plan(plan, llm_call=llm_call)  # 그래프 제목의 대상이 현재 장면과 어긋나면 고치거나 뺀다
     # 회색 배경 구간마다 장면 경계를 넘어 이어지는 모션 시퀀스를 설계한다(실패해도 장면별 후편집으로 대체).
     return attach_sequences(plan, llm_call=llm_call)

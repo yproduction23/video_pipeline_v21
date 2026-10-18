@@ -177,3 +177,19 @@ def test_without_span_to_the_part_ends_with_its_own_scene():
 
     assert updated["scenes"][1]["overlay"]["span"]["total_scenes"] == 1
     assert updated["scenes"][2].get("overlay") is None
+
+
+def test_same_part_with_the_same_item_is_not_repeated_within_a_minute():
+    from app.services.slide_concepts import apply_concepts
+
+    plan = _scenes_plan(20, 4.0)          # 80초
+    concepts = {"concepts": [
+        _move_concept(0, importance=3), _move_concept(6, importance=3),      # 24초 뒤 같은 이동·같은 지폐 → 건너뜀
+        _move_concept(18, importance=3),                                      # 72초 뒤 → 허용
+    ], "missing": []}
+
+    updated = apply_concepts(plan, concepts)
+
+    heads = [s["index"] for s in updated["scenes"] if (s.get("overlay") or {}).get("type") == "motion_part"
+             and s["overlay"]["span"]["head"] == s["index"]]
+    assert heads == [0, 18]

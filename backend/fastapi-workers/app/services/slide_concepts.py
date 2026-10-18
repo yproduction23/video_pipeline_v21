@@ -211,6 +211,7 @@ _KEEP_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "equation"
 MIN_PART_GAP_SECONDS = 20.0       # 두 그림이 시작하는 시각 사이 최소 간격(초)
 MAX_SPAN_SCENES = 3               # 한 그림이 이어지는 최대 장면 수
 MAX_SPAN_SECONDS = 12.0
+REPEAT_WINDOW_SECONDS = 60.0
 MAX_ITEM_REPEATS = 2              # 같은 소재(예: 지폐 더미)를 쓸 수 있는 최대 횟수
 MAX_ANIM_SECONDS = 8.0
 
@@ -268,6 +269,10 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
             continue
         item = str(params.get("item") or "")
         if item and item_uses.get(item, 0) >= MAX_ITEM_REPEATS:
+            continue
+        # 같은 부품에 같은 소재를 60초 안에 다시 쓰지 않는다(같은 설명의 반복, 2026-10-18 피드백).
+        if any(c["part"] == part and str(c["params"].get("item") or "") == item and abs(c["start"] - start) < REPEAT_WINDOW_SECONDS
+               for c in chosen):
             continue
         # 연출 단계가 "아직 같은 이야기"라고 한 장면(span_to)까지만 이어서 천천히 진행한다(2026-10-18: 이야기가 바뀐 뒤에도 그림이 남았다).
         span = [index]
