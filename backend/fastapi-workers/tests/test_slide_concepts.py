@@ -184,12 +184,14 @@ def test_same_part_with_the_same_item_is_not_repeated_within_a_minute():
 
     plan = _scenes_plan(20, 4.0)          # 80초
     concepts = {"concepts": [
-        _move_concept(0, importance=3), _move_concept(6, importance=3),      # 24초 뒤 같은 이동·같은 지폐 → 건너뜀
-        _move_concept(18, importance=3),                                      # 72초 뒤 → 허용
+        _move_concept(0, importance=3),                              # 0초 이동·지폐
+        _move_concept(6, importance=3, part="motif_spread"),         # 24초 확산
+        _move_concept(12, importance=3),                             # 48초 이동·지폐 → 0초와 같은 설명이라 건너뜀
+        _move_concept(18, importance=2),                             # 72초 → 허용
     ], "missing": []}
 
     updated = apply_concepts(plan, concepts)
 
     heads = [s["index"] for s in updated["scenes"] if (s.get("overlay") or {}).get("type") == "motion_part"
              and s["overlay"]["span"]["head"] == s["index"]]
-    assert heads == [0, 18]
+    assert heads == [0, 6, 18]
