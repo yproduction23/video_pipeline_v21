@@ -934,7 +934,8 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None, red_budget: i
 
 
 def _red_elements(seq: dict) -> list[dict]:
-    return [e for e in seq["elements"] if e.get("topic") and e["kind"] == "text" and (e.get("content") or {}).get("color") == "red"]
+    """빨간 글 요소 전부(설계 주제뿐 아니라 빈 구간 보충·대체 요소도 센다 — 193초와 201초에 빨간 글이 붙었던 이유)."""
+    return [e for e in seq["elements"] if e["kind"] == "text" and (e.get("content") or {}).get("color") == "red"]
 
 
 def _space_out_red_text(built: list, runs: list[list[dict]], plan: dict, *, llm_call=None) -> list:

@@ -61,3 +61,12 @@ def test_sentence_end_offset_uses_the_chunk_that_finishes_the_sentence():
     assert 1.5 < sentence_end_offset(narration, [], 4.0, "뉴욕에서") < 2.5
     # 구절을 찾지 못하면 장면 끝까지 남긴다(일찍 지우지 않는다)
     assert sentence_end_offset(narration, chunks, 4.0, "없는 구절") == 4.0
+
+
+def test_a_phrase_spanning_two_subtitle_lines_is_still_a_duplicate():
+    """2026-10-18 운영자 피드백(4:17): 자막 두 줄에 걸친 문장을 빨간 글씨로 그대로 또 썼는데 줄마다 따로 비교해 통과했다."""
+    chunks = [{"text": "리서치 센터장들이 공통으로"}, {"text": "꼽은 첫 번째 핵심"}, {"text": "변수는 미국 금리입니다."}]
+
+    assert duplicates_subtitle("첫 번째 핵심 변수는 미국 금리", chunks) is True          # 줄 둘에 걸친 복사
+    assert duplicates_subtitle("미국 금리", chunks) is False                           # 짧은 핵심어는 복사가 아니다
+    assert duplicates_subtitle("공통으로", chunks) is False

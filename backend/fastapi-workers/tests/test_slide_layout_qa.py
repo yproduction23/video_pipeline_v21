@@ -251,3 +251,13 @@ def test_a_sequence_too_close_to_the_previous_red_text_is_redesigned_without_red
     assert any(calls)                                               # 두 번째 구간은 빨간 글 없이 다시 설계됐다
     second = [q for q in plan["sequences"] if 2 in q["scenes"]][0]
     assert not [e for e in second["elements"] if e["topic"] > 0 and e["kind"] == "text" and e["content"].get("color") == "red"]
+
+
+def test_red_text_spacing_counts_fillers_too():
+    """빈 구간 보충 요소(topic 0)의 빨간 글도 앞 빨간 글과의 20초 간격에 센다."""
+    from app.services.slide_sequence import _red_elements
+
+    seq = {"elements": [{"kind": "text", "topic": 0, "content": {"text": "x", "color": "red"}},
+                        {"kind": "text", "topic": 1, "content": {"text": "y", "color": "gray"}}]}
+
+    assert len(_red_elements(seq)) == 1

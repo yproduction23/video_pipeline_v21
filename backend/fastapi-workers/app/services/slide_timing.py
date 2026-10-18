@@ -59,8 +59,11 @@ def duplicates_subtitle(text: object, chunks: list[dict]) -> bool:
     shown = compact(text)
     if not shown:
         return False
-    for chunk in chunks or []:
-        line = compact(chunk.get("text"))
+    lines = [compact(chunk.get("text")) for chunk in chunks or []]
+    # 한 줄뿐 아니라 이어지는 두세 줄(자막은 한 문장을 줄 여러 개로 나눈다)을 이어 붙인 글과도 비교한다
+    # (2026-10-18: "첫 번째 핵심 변수는 미국 금리"가 두 줄에 걸쳐 있어 자막 복사인데 통과했다).
+    windows = [line for line in lines] + ["".join(lines[i:i + size]) for size in (2, 3) for i in range(len(lines) - size + 1)]
+    for line in windows:
         if len(line) >= 4 and shown in line and len(shown) / len(line) > DUPLICATE_COVERAGE:
             return True
         if len(line) >= 4 and line in shown and len(line) / len(shown) > DUPLICATE_COVERAGE:
