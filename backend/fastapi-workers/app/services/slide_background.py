@@ -129,7 +129,10 @@ def generate_korean_slide_background(
             "graphs on screens, no newspapers or documents with readable writing. Shop signs and "
             "street signs, if present, must be blurred or unreadable. The scene context is only for "
             "choosing what to photograph; never write it into the image. Show the mood through people, "
-            "streets, buildings, offices, trains and everyday objects instead of screens."
+            "streets, buildings, offices, trains and everyday objects instead of screens. "
+            # 2026-10-19 9034 재현: 거리·상가 사진은 간판 글자가 읽혀 검수에서 대부분 불합격했다 — 처음부터 간판이 안 나오는 구도(넓은 전경·실내·사물 클로즈업)를 고른다.
+            "Prefer compositions without storefronts or street-level signage: wide skylines seen from a distance, interiors, "
+            "desks, hands, objects, trains and bridges."
         ),
         output_path=output_path,
         section="news",

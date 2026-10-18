@@ -994,9 +994,11 @@ SYNC_LATE_SECONDS = 2.5      # 말한 뒤 이만큼 이상 늦게 뜨면 싱크 
 
 
 def audit_sequence_sync(plan: dict) -> dict:
-    """시퀀스 요소가 그 구절을 말하는 순간에 맞게 뜨는지 사후 점검한다(2026-10-18 운영자 피드백: 미국 채권 시장이 너무 일찍 뜬다).
+    """주제의 첫 요소가 그 구절을 말하는 순간에 맞게 뜨는지 사후 점검한다(2026-10-18 운영자 피드백: 미국 채권 시장이 너무 일찍 뜬다).
 
-    자막 줄 시각으로 구절을 찾을 수 있는 요소만 비교한다. 결과는 계획서에 남겨 새 주제의 Job에서도 확인할 수 있게 한다."""
+    자막 줄 시각으로 구절을 찾을 수 있는 주제만 비교한다. 같은 주제의 뒤따르는 요소(둘째 항목 등)는 템플릿이 일부러 늦추므로 보지 않고,
+    오프닝(영상 맨 앞, 일부러 먼저 움직이기 시작)도 뺀다. 등장 애니메이션 시간(ANCHOR_LEAD_SECONDS)만큼은 먼저 뜨는 것이 정상이다.
+    시각은 TTS 실제 구간 기준(plan["timeline"]["source"] == "tts_windows")일 때만 믿을 수 있어 그 값도 함께 남긴다."""
     scenes = {s["index"]: s for s in plan.get("scenes", [])}
     starts = _scene_starts(plan)
     checked, flagged = 0, []
@@ -1005,19 +1007,23 @@ def audit_sequence_sync(plan: dict) -> dict:
         if not run:
             continue
         seq_start = starts[run[0]["index"]]
+        first_of_topic: dict[int, dict] = {}
         for element in seq.get("elements", []):
+            if element.get("topic") and (element["topic"] not in first_of_topic or element["at"] < first_of_topic[element["topic"]]["at"]):
+                first_of_topic[element["topic"]] = element
+        for element in first_of_topic.values():
             scene, anchor = scenes.get(element.get("scene")), element.get("anchor")
-            if not scene or not anchor or not element.get("topic"):
+            if not scene or not anchor or element.get("opening"):
                 continue
             spoken = phrase_offset(scene.get("chunks") or [], anchor)
             if spoken is None:
                 continue
             checked += 1
             delta = round(element["at"] - (starts[scene["index"]] - seq_start + spoken), 2)
-            if delta < -SYNC_EARLY_SECONDS or delta > SYNC_LATE_SECONDS:
+            if delta < -(ANCHOR_LEAD_SECONDS + SYNC_EARLY_SECONDS) or delta > SYNC_LATE_SECONDS:
                 flagged.append({"sequence": seq.get("id"), "element": element.get("id"), "scene": scene["index"],
                                 "anchor": anchor, "delta": delta, "verdict": "early" if delta < 0 else "late"})
-    plan["sync_audit"] = {"checked": checked, "out_of_sync": flagged}
+    plan["sync_audit"] = {"checked": checked, "out_of_sync": flagged, "timeline": (plan.get("timeline") or {}).get("source", "unknown")}
     return plan["sync_audit"]
 
 
