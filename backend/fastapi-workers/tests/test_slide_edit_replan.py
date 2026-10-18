@@ -290,3 +290,23 @@ def test_trim_keeps_informative_overlays_and_only_removes_key_text():
     for scene in trimmed["scenes"]:
         if kept_types[scene["index"]] == "bullet_list":
             assert scene["overlay"] and scene["overlay"]["type"] == "bullet_list"
+
+
+def test_replanned_stock_key_text_cannot_repeat_the_subtitle_line():
+    """부분 재계획도 같은 자막 중복 검증을 거친다(2026-10-17: 자동 보정에서 자막과 같은 강조 텍스트가 살아남았다)."""
+    chunks = [{"text": "이 구조가 버틸 수 있는가가", "start": 0.0, "end": 2.0},
+              {"text": "핵심 질문입니다.", "start": 2.0, "end": 4.0}]
+    briefs = {i: {"narration": t, "context": "", "duration": 4.0} for i, t in enumerate(TEXTS)}
+    briefs[3]["chunks"] = chunks
+    entries = [{"index": i, "background": "board", "overlay": {"type": "key_text", "text": t[:12].strip()}}
+               for i, t in enumerate(TEXTS)]
+    plan = assemble_plan(briefs, entries, job_id=20)
+    reply = {"scenes": [{
+        "index": 3, "background": "stock", "stock_queries": ["office"], "reason": "스톡",
+        "overlay": {"type": "key_text", "text": "핵심 질문입니다"},
+    }]}
+
+    updated = replan_scenes(plan, [{"index": 3, "note": "스톡으로"}], llm_call=_llm(reply))
+
+    overlay = updated["scenes"][3].get("overlay")
+    assert not overlay or overlay.get("text") != "핵심 질문입니다"   # 자막 줄(핵심 질문입니다.) 그대로면 거절된다

@@ -657,7 +657,7 @@ class LongformWorker:
         ass_exists = os.path.exists(ass_path) and os.path.getsize(ass_path) > 200
         audio_exists = os.path.exists(audio_path) and os.path.getsize(audio_path) > 0
         # 편집점 효과음(예: 고지 카드)을 나레이션 오디오에 미리 합성한다. 길이는 그대로이고 실패하면 원본을 쓴다.
-        sfx_events = [event for scene in scenes for event in (scene.get("sfx_events") or [])]
+        sfx_events = collect_sfx_events(scenes, scene_pauses)
         if audio_exists and sfx_events:
             sfx_audio = str(temp_dir / "narration_with_sfx.wav")
             if mix_sfx_events(audio_path, sfx_events, sfx_audio, workdir=str(temp_dir)):
@@ -2276,6 +2276,16 @@ def plan_scene_pauses(scenes: list[dict]) -> list[dict]:
                 "seconds": round(seconds, 3), "card_png": str(request["card_png"]),
             })
     return pauses
+
+
+def collect_sfx_events(scenes: list[dict], pauses: list[dict]) -> list[dict]:
+    """장면의 편집점 효과음을 모은다. 정지 구간이 있는 장면의 효과음은 정지 카드가 나오는 시각에 맞춘다."""
+    pause_at = {p["position"]: p["at"] for p in pauses or []}
+    events: list[dict] = []
+    for position, scene in enumerate(scenes):
+        for event in scene.get("sfx_events") or []:
+            events.append({**event, "at": pause_at[position]} if position in pause_at else event)
+    return events
 
 
 def shift_chunks_for_pauses(chunks: list[dict], pauses: list[dict]) -> list[dict]:

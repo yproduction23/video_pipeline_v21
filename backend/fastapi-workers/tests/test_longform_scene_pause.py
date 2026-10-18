@@ -78,3 +78,18 @@ def test_pause_clip_is_a_still_card_of_the_requested_length(tmp_path):
                             "-of", "csv=p=0", str(clip)], capture_output=True, text=True).stdout
     assert "1920,1080" in probe.replace("h264,", "") or "1920" in probe
     assert abs(float(probe.strip().splitlines()[-1]) - 1.0) < 0.15
+
+
+def test_sfx_for_a_paused_scene_plays_when_the_card_appears():
+    """효과음은 장면 시작이 아니라 정지 카드가 나오는 시각(정지 시작)에 맞춘다 — 장면 시작이 청크 경계로 보정돼 달라질 수 있다."""
+    from app.workers.longform_worker import collect_sfx_events
+
+    scenes = [
+        {"index": 0},
+        {"index": 1, "pause_before": {"seconds": 1.0, "card_png": "x"}, "sfx_events": [{"name": "title_hit", "at": 4.56}]},
+        {"index": 2, "sfx_events": [{"name": "other", "at": 9.0}]},
+    ]
+    pauses = [{"position": 1, "at": 4.0, "seconds": 1.0, "card_png": "x"}]
+
+    assert collect_sfx_events(scenes, pauses) == [{"name": "title_hit", "at": 4.0}, {"name": "other", "at": 9.0}]
+    assert collect_sfx_events(scenes, []) == [{"name": "title_hit", "at": 4.56}, {"name": "other", "at": 9.0}]

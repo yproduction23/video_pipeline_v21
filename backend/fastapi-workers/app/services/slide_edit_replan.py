@@ -68,9 +68,14 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
         context = " ".join(scenes[i]["narration"] for i in ordered[max(0, position - 2):position])
         briefs[index] = {
             "narration": scenes[index]["narration"], "context": context, "duration": scenes[index]["duration"],
+            "chunks": scenes[index].get("chunks") or [],  # 자막 줄과 같은 글자인지 검증하는 데 쓴다
         }
 
-    lines = [f"{i} ({scenes[i]['duration']:.1f}초): {scenes[i]['narration']}" for i in ordered]
+    lines = [
+        f"{i} ({scenes[i]['duration']:.1f}초): {scenes[i]['narration']}"
+        + (f" [자막 줄: {' | '.join(c['text'] for c in scenes[i]['chunks'])}]" if scenes[i].get("chunks") else "")
+        for i in ordered
+    ]
     targets = []
     for index, note in sorted(notes.items()):
         current = scenes[index]

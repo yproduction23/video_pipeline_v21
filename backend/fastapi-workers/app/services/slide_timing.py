@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 
 # 자막 줄의 이 비율 이상을 그래픽 글자가 덮으면 같은 말을 두 번 보여 주는 것으로 본다.
-DUPLICATE_COVERAGE = 0.7
+DUPLICATE_COVERAGE = 0.5
 
 
 def compact(text: object) -> str:
@@ -61,8 +61,8 @@ def duplicates_subtitle(text: object, chunks: list[dict]) -> bool:
         return False
     for chunk in chunks or []:
         line = compact(chunk.get("text"))
-        if len(line) >= 4 and shown in line and len(shown) / len(line) >= DUPLICATE_COVERAGE:
+        if len(line) >= 4 and shown in line and len(shown) / len(line) > DUPLICATE_COVERAGE:
             return True
-        if len(line) >= 4 and line in shown and len(line) / len(shown) >= DUPLICATE_COVERAGE:
+        if len(line) >= 4 and line in shown and len(line) / len(shown) > DUPLICATE_COVERAGE:
             return True
     return False
