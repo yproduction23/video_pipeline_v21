@@ -141,8 +141,59 @@ def design_concepts(briefs: dict[int, dict], *, llm_call=None) -> dict | None:
             "params": item.get("params") if isinstance(item.get("params"), dict) else {},
             "importance": int(item["importance"]) if str(item.get("importance") or "").isdigit() and 1 <= int(item["importance"]) <= 3 else 1,
         })
+    _fix_invalid_params(concepts, briefs, llm_call)
     ordered = sorted(missing.values(), key=lambda m: (-m["count"], m["name"]))
     return {"version": CONCEPT_VERSION, "concepts": concepts, "missing": ordered}
+
+
+def _context_for(briefs: dict[int, dict], index: int) -> str:
+    keys = sorted(briefs)
+    position = keys.index(index)
+    return " ".join(briefs[i].get("narration", "") for i in keys[max(0, position - 1):position])
+
+
+def _fix_invalid_params(concepts: list[dict], briefs: dict[int, dict], llm_call=None) -> None:
+    """부품 인자의 글자가 대본 원문과 달라 거절될 장면만 이유를 알려 주고 한 번 더 받는다(2026-10-18 시험: 22개 중 12개가 거절됐다).
+    그래도 어긋나면 그 장면은 그림 없이 둔다(지어내지 않는다)."""
+    from app.services.slide_motion_parts import validate_part
+
+    def valid(concept: dict) -> bool:
+        part = _PART_OF_TOOL.get(concept["tool"])
+        return bool(part and validate_part(part, concept.get("params"), briefs[concept["index"]].get("narration", ""),
+                                           _context_for(briefs, concept["index"])))
+
+    invalid = [c for c in concepts if _PART_OF_TOOL.get(c["tool"]) and not valid(c)]
+    if not invalid:
+        return
+    lines = [
+        f'- 장면 {c["index"]}: 대본 "{briefs[c["index"]].get("narration", "")}" / 고른 도구 {c["tool"]} / 거절된 params '
+        f'{json.dumps(c.get("params"), ensure_ascii=False)}'
+        for c in invalid
+    ]
+    prompt = (
+        "아래 장면의 부품 params가 거절됐다. 글자(label, source_label, left, origin 같은 문구)는 그 장면 대본(또는 직전 장면)에 "
+        "글자 그대로 있는 2~12자 구절이어야 하고, level·heavier·state·trend는 허용된 값이어야 한다. 소재 이름(item)은 현재 소재 목록의 이름이어야 한다. "
+        "대본에서 알맞은 구절을 그대로 복사해 params를 다시 쓴다. 맞는 구절이 없으면 tool을 none으로 한다.\n"
+        + "\n".join(lines)
+        + '\n\nJSON만 반환: {"scenes":[{"index":번호,"tool":"...","params":{...}}]}'
+    )
+    fixed: dict[int, dict] = {}
+    try:
+        raw = _call_llm(_SYSTEM, prompt, llm_call=llm_call)
+        cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        for item in json.loads(match.group(0) if match else cleaned).get("scenes") or []:
+            fixed[int(item["index"])] = item
+    except Exception as exc:
+        logger.warning("연출 단계 params 재요청 실패(해당 장면은 그림 없이 둔다): %s", exc)
+    for concept in invalid:
+        item = fixed.get(concept["index"]) or {}
+        tool = str(item.get("tool") or "none").strip()
+        if tool in TOOLS and isinstance(item.get("params"), dict) and tool != "none":
+            concept["tool"], concept["params"] = tool, item["params"]
+            concept["tool_ready"] = bool(TOOLS[tool]["ready"])
+        if not valid(concept):
+            concept["tool"], concept["tool_ready"], concept["params"] = "none", True, {}
 
 
 _PART_OF_TOOL = {

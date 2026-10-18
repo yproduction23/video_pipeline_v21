@@ -363,8 +363,14 @@ def compose_motion_part(
     frames = max(int(round(duration * fps)), 1)
     final_bytes: Optional[bytes] = None
     # 패널 크기는 완성된 그림 기준으로 고정한다(그림이 자라도 패널은 흔들리지 않는다).
+    # 쌓임(줄어드는 경우)처럼 마지막 모습이 가장 작을 수 있어, 진행 중 여러 시점의 영역을 합쳐 패널 크기를 정한다.
+    boxes = []
+    for q in (0.0, 0.25, 0.5, 0.75, 1.0):
+        frame_box = part_sprite(part, params, q).getchannel("A").getbbox()
+        if frame_box:
+            boxes.append(frame_box)
     full = part_sprite(part, params, 1.0)
-    full_box = full.getchannel("A").getbbox() or (0, 0, full.width, full.height)
+    full_box = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))         if boxes else (0, 0, full.width, full.height)
     panel_pad = 46
     try:
         with _COMPOSE_SLOTS:
