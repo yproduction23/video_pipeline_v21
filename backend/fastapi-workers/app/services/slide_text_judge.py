@@ -121,3 +121,67 @@ def fix_key_texts_in_topics(topics: list, run: list[dict], *, llm_call=None) -> 
         elif key == "sub":
             topic.pop(key, None)
     return topics
+
+
+_LIST_SYSTEM = (
+    "너는 한국 경제 해설 영상의 '목록 카드' 검수자다. 각 항목은 목록 카드 제목, 번호 항목들, 그 장면 내레이션이다. "
+    "목록은 서로 독립된 이유·조건·종류가 나열될 때만 의미가 있다. 항목들이 한 문장을 둘로 나눈 조각이거나(예: '금리와 수급과 신뢰가' / "
+    "'함께 맞아야 하는 시장인 겁니다'), 항목 하나가 제목과 같거나, 항목이 서로 다른 '것'이 아니라 한 주장의 앞뒤 절이면 목록이 아니다(ok=false). "
+    "'첫째·둘째', 'A와 B와 C'처럼 병렬 대상이 실제로 나열될 때만 ok=true다. 확신이 없으면 ok=false.\n"
+    '출력은 JSON만: {"results":[{"id":번호,"ok":true|false}]}'
+)
+
+
+def judge_lists(items: list[dict], *, llm_call=None) -> set[int]:
+    """items[{id, title, items, narration}] → 목록으로 성립하지 않는 항목 번호 집합. 판정 호출이 실패하면 아무것도 빼지 않는다.
+
+    2026-10-18 운영자 피드백(4분 42초): 한 문장을 줄바꿈해 1·2로 쓰면 '정리'라 볼 수 없다. 병렬 나열인지는 규칙이 아니라 의미 판단이다."""
+    if not items:
+        return set()
+    lines = [f'{i["id"]}. 제목="{i["title"]}" / 항목={i["items"]} / 내레이션="{i["narration"]}"' for i in items]
+    try:
+        raw = _call_llm(_LIST_SYSTEM, "\n".join(lines), llm_call=llm_call)
+        cleaned = re.sub(r"```json|```", "", str(raw or "")).strip()
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        data = json.loads(match.group(0) if match else cleaned)
+    except Exception as exc:
+        logger.warning("목록 검수 실패(목록은 그대로 둔다): %s", exc)
+        return set()
+    rejected: set[int] = set()
+    for result in data.get("results") or []:
+        try:
+            ident = int(result["id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if result.get("ok") is False:
+            rejected.add(ident)
+    return rejected
+
+
+def drop_fake_lists_in_plan(plan: dict, *, llm_call=None) -> dict:
+    """계획서의 목록(bullet_list) 후편집 중 병렬 나열이 아닌 것을 뺀다."""
+    uses = []
+    for scene in plan.get("scenes", []):
+        overlay = scene.get("overlay") or {}
+        if overlay.get("type") == "bullet_list":
+            uses.append((scene, {"id": len(uses), "title": overlay.get("title", ""), "items": overlay.get("items", []),
+                                 "narration": scene["narration"]}))
+    rejected = judge_lists([u[1] for u in uses], llm_call=llm_call)
+    for scene, item in uses:
+        if item["id"] in rejected:
+            scene["overlay"] = None
+    plan["list_judgement"] = {"checked": len(uses), "dropped": len(rejected & {u[1]["id"] for u in uses})}
+    return plan
+
+
+def drop_fake_lists_in_topics(topics: list, run: list[dict], *, llm_call=None) -> list:
+    """시퀀스 설계의 list 주제 중 병렬 나열이 아닌 것을 뺀다."""
+    narrations = {s["index"]: s["narration"] for s in run}
+    uses = []
+    for topic in topics or []:
+        if isinstance(topic, dict) and topic.get("template") == "list":
+            uses.append((topic, {"id": len(uses), "title": topic.get("title", ""), "items": topic.get("items", []),
+                                 "narration": narrations.get(topic.get("scene"), " ".join(narrations.values()))}))
+    rejected = judge_lists([u[1] for u in uses], llm_call=llm_call)
+    drop = {id(u[0]) for u in uses if u[1]["id"] in rejected}
+    return [t for t in topics if id(t) not in drop]

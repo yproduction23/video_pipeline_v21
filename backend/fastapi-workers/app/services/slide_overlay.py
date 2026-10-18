@@ -695,6 +695,37 @@ def _layer_path(output_path: str, k: int) -> str:
     return str(base.with_name(f"{base.stem}_l{k}{base.suffix}"))
 
 
+def draw_big_number_canvas(
+    *, value: str, label: str, icon: str | None = None, shown: str | None = None, canvas: tuple[int, int] = CANVAS,
+) -> Image.Image:
+    """큰 숫자 한 장(화면 전체 어둡게 + 가운데 숫자). shown은 카운트업 도중 보여 줄 글자(없으면 value).
+
+    글자 크기와 자리는 최종 값(value) 기준으로 정해, 카운트업 도중에도 흔들리지 않고 이어지는 장면의 정지 숫자와 같은 모양이 된다
+    (2026-10-18 운영자 피드백: 같은 숫자인데 앞은 위쪽 상자, 뒤는 가운데로 달랐다)."""
+    width, height = canvas
+    overlay = Image.new("RGBA", canvas, (0, 0, 0, 120))
+    draw = ImageDraw.Draw(overlay)
+    size = 230
+    while size > 90:
+        font = _font(_FONT_BOLD, size)
+        if draw.textlength(value, font=font) <= width * 0.86:
+            break
+        size -= 12
+    font = _font(_FONT_BOLD, size)
+    text = value if shown is None else shown
+    tw = draw.textlength(text, font=font)
+    y = int(height * 0.40)
+    if icon:
+        draw_icon(draw, icon, width // 2, y - 170, 190)
+    if label:
+        label_font = _font(_FONT_BOLD, 54)
+        lw = draw.textlength(label, font=label_font)
+        draw.text(((width - lw) / 2, y - 80 if not icon else y - 60), label, font=label_font, fill=ACCENT)
+    # 카운트업 글자는 가운데 정렬(자릿수가 늘어도 가운데에서 벗어나지 않는다).
+    draw.text(((width - tw) / 2, y), text, font=font, fill=(255, 255, 255, 255))
+    return overlay
+
+
 def render_big_number_overlay(
     *, value: str, label: str, output_path: str, icon: str | None = None, canvas: tuple[int, int] = CANVAS,
 ) -> list[str] | None:
@@ -703,25 +734,7 @@ def render_big_number_overlay(
     if not value:
         return None
     try:
-        width, height = canvas
-        overlay = Image.new("RGBA", canvas, (0, 0, 0, 120))
-        draw = ImageDraw.Draw(overlay)
-        size = 230
-        while size > 90:
-            font = _font(_FONT_BOLD, size)
-            if draw.textlength(value, font=font) <= width * 0.86:
-                break
-            size -= 12
-        font = _font(_FONT_BOLD, size)
-        tw = draw.textlength(value, font=font)
-        y = int(height * 0.40)
-        if icon:
-            draw_icon(draw, icon, width // 2, y - 170, 190)
-        if label:
-            label_font = _font(_FONT_BOLD, 54)
-            lw = draw.textlength(label, font=label_font)
-            draw.text(((width - lw) / 2, y - 80 if not icon else y - 60), label, font=label_font, fill=ACCENT)
-        draw.text(((width - tw) / 2, y), value, font=font, fill=(255, 255, 255, 255))
+        overlay = draw_big_number_canvas(value=value, label=label, icon=icon, canvas=canvas)
         return [output_path] if _save(overlay, output_path) else None
     except Exception:
         logger.exception("큰 숫자 오버레이 렌더링 실패")

@@ -25,10 +25,10 @@ from PIL import Image, ImageDraw
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
 from app.services.slide_icon_judge import strip_unjudged_icons_from_topics
-from app.services.slide_text_judge import fix_key_texts_in_topics
+from app.services.slide_text_judge import drop_fake_lists_in_topics, fix_key_texts_in_topics
 from app.services.slide_title_judge import fix_titles_in_topics
 from app.services.slide_streak import streak_sprite as _streak_sprite
-from app.services.slide_timing import phrase_offset
+from app.services.slide_timing import duplicates_subtitle, phrase_offset
 from app.services.slide_motifs import PREFIX as MOTIF_PREFIX, motif_prompt_hint, motif_sprite, resolve_motif
 from app.services.slide_templates import expand_topic
 from app.services.slide_overlay import (
@@ -110,7 +110,9 @@ _SEQUENCE_SYSTEM = (
     "7. 같은 단위의 숫자 2~4개를 비교하면(현재 vs 과거, A사 vs B사, 기간별 수치) 아이콘 비교(compare_pair)보다 막대(bars)를 우선한다 — "
     "레퍼런스 영상의 가장 대표적인 카드다. 이유·조건·종류를 2~4개 나열하면(\"첫째, 둘째\", \"A와 B와 C\") list를 우선한다. "
     "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n"
-    "8. 내레이션이 아래 '회사 로고' 목록에 있는 회사(삼성전자·SK하이닉스 등)를 말하면 그 회사를 가리키는 아이콘 자리에 로고를 쓴다(icon 필드에 로고 이름 그대로). "
+    "8. 자막을 빨간 글씨로 되풀이하는 headline_sub는 마지막 수단이다(구간당 최대 1개, 자막과 다른 '주제 제목'일 때만). 말하는 대상이 눈에 그려지는 명사(사람·건물·돈·은행·"
+    "반도체·국기·회사)이거나 방향·압력·충격 같은 장면이면 pictogram이나 아이콘이 있는 flow·compare_pair로 보여 준다. 글이 없는 그림(연상)이 글 강조보다 낫다.\n"
+    "9. 내레이션이 아래 '회사 로고' 목록에 있는 회사(삼성전자·SK하이닉스 등)를 말하면 그 회사를 가리키는 아이콘 자리에 로고를 쓴다(icon 필드에 로고 이름 그대로). "
     "회사 이름을 나열하는 구절은 list·flow·compare_pair에서 로고로 보여 주고, 그 회사를 말하는 순간(anchor)에 뜨게 한다.\n\n"
     "[템플릿] 주제 객체의 필드: template, scene(구간에 포함된 장면 번호), anchor(그 장면 내레이션에 글자 그대로 있는 구절 — "
     "이 말을 하는 순간에 주제가 시작된다) + 템플릿별 필드.\n"
@@ -126,6 +128,7 @@ _SEQUENCE_SYSTEM = (
     '- "bars": 막대 비교. {"title": 18자 이내(숫자 금지), "items": [{"label": 대상, "value_text": 숫자+단위 그대로}] 2~4개}\n'
     '- "streak": 연속 일수 달력. 내레이션이 "N일(거래일) 연속"을 말할 때 달력이 나오고 날짜 칸마다 X 표시가 차례로 그려진다. '
     '{"count": 내레이션에 글자 그대로 있는 일수 구절(예: "8거래일", "5일") 2~14일, "title": 선택, 2~12자 핵심어}\n'
+    '- "pictogram": 큰 그림 하나 + 짧은 라벨. {"icon": 아이콘 이름·소재(motif:이름)·회사 로고 중 하나(필수), "label": 내레이션에 글자 그대로 있는 2~12자 핵심어(필수)}\n'
     '- "list": 번호 목록. {"title": 18자 이내(숫자 금지), "items": [24자 이내 구절 2~4개]}\n'
     '- "rows": 숫자 행 비교. {"headline": 12자 이내 구절, "rows": [{"label": 6자 이내(숫자 금지), "value": 숫자 구절}] 2~3개}\n'
     "아이콘 이름: " + ", ".join(f"{name}({ICON_HINTS[name]})" for name in ICON_NAMES) + "\n\n"
@@ -308,7 +311,12 @@ def _fallback_scene_element(scene: dict, starts: dict, seq_start: float, element
     kind = _OVERLAY_TO_KIND.get(overlay.get("type"))
     if not kind:
         return None
+    if overlay.get("source") == "fallback_phrase":
+        return None          # 판정 없이 원문에서 잘라 낸 구절은 쓰지 않는다("그는 이를" 같은 뜻 없는 조각이 빨간 글씨로 나왔다)
     if kind == "text":
+        # 자막 줄을 그대로 옮긴 강조 문구는 쓰지 않는다(2026-10-18 운영자 피드백: 자막을 빨간 글씨로 또 쓰는 건 좋은 편집이 아니다).
+        if duplicates_subtitle(overlay["text"], scene.get("chunks") or []):
+            return None
         content = {"text": overlay["text"], "color": "red"}
     elif kind == "number":
         content = {"value": overlay["value"], "label": overlay.get("label", "")}
@@ -579,6 +587,37 @@ def _approve_paraphrases(raw_topics: list, run: list[dict], plan: dict, llm_call
     return {items[n - 1] for n in ok if 1 <= n <= len(items)}
 
 
+RECENT_SHOWN_SECONDS = 30.0   # 이 시간 안에 앞 장면 후편집이 보여 준 숫자·문구는 시퀀스가 되풀이하지 않는다
+
+
+def _recent_shown(plan: dict, run: list[dict]) -> set[str]:
+    """구간 시작 직전(RECENT_SHOWN_SECONDS 이내) 장면의 후편집이 이미 화면에 보여 준 숫자·문구(공백 제거).
+
+    2026-10-18 운영자 피드백: 같은 5.3%가 앞 장면에서 나왔는데 뒤에서 또 나온다."""
+    starts = _scene_starts(plan)
+    seq_start = starts[run[0]["index"]]
+    shown: set[str] = set()
+    for scene in plan["scenes"]:
+        if scene["index"] >= run[0]["index"]:
+            break
+        if seq_start - (starts[scene["index"]] + scene["duration"]) > RECENT_SHOWN_SECONDS:
+            continue
+        overlay = scene.get("overlay") or {}
+        for value in (overlay.get("value"), overlay.get("text"), *[i.get("value_text") for i in overlay.get("items") or [] if isinstance(i, dict)]):
+            if value:
+                shown.add(re.sub(r"\s+", "", str(value)))
+    return shown
+
+
+def _repeats_recent(expanded: list[dict], recent: set[str]) -> bool:
+    for element in expanded:
+        content = element.get("content") or {}
+        value = content.get("value") if element["kind"] == "number" else content.get("text") if element["kind"] == "text" else None
+        if value and re.sub(r"\s+", "", str(value)) in recent:
+            return True
+    return False
+
+
 def _topics_to_elements(
     raw_topics: list, run: list[dict], plan: dict, llm_call=None, failures: list[str] | None = None,
 ) -> list[dict]:
@@ -586,11 +625,13 @@ def _topics_to_elements(
     raw_topics = strip_unjudged_icons_from_topics(raw_topics, run, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다
     raw_topics = fix_titles_in_topics(raw_topics, run, llm_call=llm_call)  # 그래프 제목의 대상이 어긋나면 고치거나 뺀다
     raw_topics = fix_key_texts_in_topics(raw_topics, run, llm_call=llm_call)  # 잘려서 뜻이 뒤집히는 문구는 바꾸거나 뺀다
+    raw_topics = drop_fake_lists_in_topics(raw_topics, run, llm_call=llm_call)  # 한 문장을 쪼갠 가짜 목록은 뺀다
     ctx = _TemplateContext(run, plan, _approve_paraphrases(raw_topics, run, plan, llm_call))
     if failures is not None:
         failures.extend(ctx.failures)  # 같은 리스트를 계속 갱신하도록 아래에서 다시 합친다
     elements: list[dict] = []
     seen: set[str] = set()
+    recent = _recent_shown(plan, run)
     number = 0
     for raw in (raw_topics or [])[:12]:
         if not isinstance(raw, dict):
@@ -603,6 +644,8 @@ def _topics_to_elements(
         )
         if core in seen:
             continue
+        if _repeats_recent(expanded, recent):
+            continue                       # 직전 장면 후편집이 이미 보여 준 숫자·문구는 다시 띄우지 않는다
         seen.add(core)
         number += 1
         for element in expanded:
@@ -696,21 +739,6 @@ def _expire_stale_topics(elements: list[dict], run: list[dict], plan: dict) -> l
     return elements
 
 
-def _short_phrase(text: str, chunks: list | None = None) -> str:
-    """원문에서 그대로 떼어 낸 16자 이내 핵심 구절(앞쪽 단어부터)."""
-    from app.services.slide_edit_plan import fallback_key_phrase
-
-    phrase = fallback_key_phrase(text, chunks)
-    if len(phrase) <= MAX_TEXT_CHARS:
-        return phrase
-    picked: list[str] = []
-    for word in phrase.split(" "):
-        if len(" ".join([*picked, word])) > MAX_TEXT_CHARS:
-            break
-        picked.append(word)
-    return " ".join(picked)
-
-
 def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float) -> list[dict]:
     """회색 칠판이 비는 구간을, 그 구간을 말하는 장면의 후편집(이미 검증됨)이나 원문 핵심 구절로 채운다 — 앞 그래픽을 붙들고 있지 않는다.
 
@@ -737,14 +765,7 @@ def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: fl
                 if fallback["kind"] in ("text", "number") and key:
                     fallback["at"] = round(_anchor_time(scene, starts[scene["index"]], key) - seq_start, 2)
                 return fallback
-        phrase = _short_phrase(str(scene["narration"]), scene.get("chunks"))
-        if 4 <= len(phrase) <= MAX_TEXT_CHARS and phrase not in shown:
-            return {
-                "id": "b0", "kind": "text", "scene": scene["index"], "anchor": "", "slot": "center", "replaces": None,
-                "anim": "rise", "at": round(_anchor_time(scene, starts[scene["index"]], phrase) - seq_start, 2),
-                "content": {"text": phrase, "color": "red"}, "size": 120,
-            }
-        return None
+        return None                      # 원문 조각을 억지로 잘라 쓰지 않는다("외국인은 그" 같은 뜻 없는 조각이 나왔다)
 
     def first_blank(after: float) -> tuple[float, float] | None:
         cursor = 0.0
@@ -836,6 +857,12 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
             if second and _longest_gap(second, duration) < gap:
                 designed = second
             failures[:] = failures_before
+        if not designed:
+            # 글 강조가 전부 거절돼 비면(자막과 겹침 등) 글 대신 그림(pictogram·아이콘 있는 flow)으로 한 번 더 설계한다.
+            designed = attempt(
+                chr(10) * 2 + "[재설계 요청] 앞 설계는 모두 거절됐다. 글 강조(headline_sub)를 쓰지 말고, 말하는 대상을 그림으로 보여 주는 "
+                "pictogram이나 아이콘이 있는 flow·compare_pair로 다시 설계해라(라벨은 내레이션 구절 그대로 2~12자)."
+            )
         designed = _fill_gaps(designed, run, plan)
     except Exception as exc:
         logger.warning("시퀀스 설계 실패(장면별 후편집으로 대체): %s", exc)

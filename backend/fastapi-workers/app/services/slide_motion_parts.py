@@ -21,6 +21,7 @@ from app.services.slide_motifs import motif_sprite, resolve_motif
 logger = logging.getLogger(__name__)
 
 COMPOSE_TIMEOUT_SECONDS = 300.0
+FULLSCREEN_PARTS = ("counter",)   # 화면 전체 크기로 그려 위치·패널 보정 없이 그대로 얹는 부품
 PARTS = ("move", "gauge", "balance", "spread", "support", "pile", "chart", "target", "mood")
 MAX_LABEL_CHARS = 12
 GAUGE_LEVELS = ("high", "low", "rising", "falling")
@@ -460,18 +461,15 @@ def _counter(params: dict, p: float) -> Image.Image:
     """큰 숫자 하나가 0에서 목표 값까지 올라간다(카운트업). 장면 단위 big_number 후편집용 — 부품 목록(PARTS)에는 넣지 않는다.
 
     2026-10-18 운영자 피드백: 숫자가 12345처럼 차르르 올라가는 연출이 없다. 값은 승인 대본 구절 그대로이고, 올라가는 도중의 숫자는
-    화면 연출일 뿐이며 마지막에는 원문 값이 그대로 남는다."""
-    from app.services.slide_sequence import _icon_sprite, _number_sprite
+    화면 연출일 뿐이며 마지막에는 원문 값이 그대로 남는다. 이어지는 장면의 정지 숫자와 같은 그림이 되도록 같은 그리기 함수를 쓰며,
+    화면 전체 크기(어둡게 + 가운데 숫자)로 그린다(compose_motion_part의 fullscreen)."""
+    from app.services.slide_overlay import CANVAS, draw_big_number_canvas
+    from app.services.slide_sequence import _number_text
 
-    size = (1700, 760)
-    layer = Image.new("RGBA", size, (0, 0, 0, 0))
-    sprite = _number_sprite(str(params["value"]), str(params.get("label") or ""), p, max_width=1500, size_cap=230)
-    top = 40
-    if params.get("icon"):
-        icon = _icon_sprite(str(params["icon"]), 190)
-        layer.alpha_composite(icon, ((size[0] - icon.width) // 2, 20))
-        top = 20 + icon.height
-    layer.alpha_composite(sprite, ((size[0] - sprite.width) // 2, min(top, size[1] - sprite.height - 10)))
+    value = str(params["value"])
+    layer = draw_big_number_canvas(
+        value=value, label=str(params.get("label") or ""), icon=params.get("icon"), shown=_number_text(value, p), canvas=CANVAS,
+    )
     return _with_alpha(layer, _ramp(p, 0.0, 0.08))
 
 
@@ -503,6 +501,7 @@ def compose_motion_part(
 
     width, height = CANVAS
     fps = 30
+    fullscreen = part in FULLSCREEN_PARTS
     duration = max(float(duration), 0.8)
     start = min(max(float(start_offset), 0.0), max(duration - 0.8, 0.0))
     anim = float(anim_total) if anim_total else max(min(duration - start - 0.4, 3.5), 0.8)
@@ -550,6 +549,12 @@ def compose_motion_part(
                     sprite = part_sprite(part, params, p)
                     if fade < 1.0:
                         sprite = _with_alpha(sprite, max(fade, 0.0))
+                    if fullscreen:
+                        data = sprite.tobytes()
+                        if p >= 1.0 and fade >= 1.0:
+                            final_bytes = data
+                        process.stdin.write(data)
+                        continue
                     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
                     left = (width - sprite.width) // 2
                     top = max(min(500 - sprite.height // 2, 890 - sprite.height), 20)

@@ -49,3 +49,29 @@ def test_topic_sub_text_can_be_dropped_but_the_headline_is_kept():
     fix_key_texts_in_topics(topics, run, llm_call=_reply([{"id": 0, "ok": False, "text": ""}, {"id": 1, "ok": False, "text": ""}]))
 
     assert topics[0]["headline"] == "단순 조정이라고" and "sub" not in topics[0]
+
+
+def test_fake_list_that_splits_one_sentence_is_dropped_but_a_real_enumeration_stays():
+    """2026-10-18 운영자 피드백(4:42): 한 문장을 줄바꿈해 1·2로 쓰면 '정리'라 볼 수 없다."""
+    from app.services.slide_text_judge import drop_fake_lists_in_plan, drop_fake_lists_in_topics
+
+    one = "금리와 수급과 신뢰가 함께 맞아야 하는 시장인 겁니다."
+    briefs = {0: {"narration": one, "context": "", "duration": 4.0}, 1: {"narration": "이유는 금리, 수급, 신뢰입니다.", "context": "", "duration": 4.0}}
+    entries = [
+        {"index": 0, "background": "board", "overlay": {"type": "bullet_list", "title": "주가 상승 조건", "items": ["금리와 수급과 신뢰가", "함께 맞아야 하는 시장인 겁니다"]}},
+        {"index": 1, "background": "board", "overlay": {"type": "bullet_list", "title": "이유", "items": ["금리", "수급", "신뢰"]}},
+    ]
+    plan = assemble_plan(briefs, entries, job_id=1)
+
+    drop_fake_lists_in_plan(plan, llm_call=_reply_ids([{"id": 0, "ok": False}, {"id": 1, "ok": True}]))
+
+    assert plan["scenes"][0]["overlay"] is None and plan["scenes"][1]["overlay"]["type"] == "bullet_list"
+    assert plan["list_judgement"] == {"checked": 2, "dropped": 1}
+
+    topics = [{"template": "list", "scene": 0, "items": ["a", "b"]}, {"template": "headline_sub", "scene": 0, "headline": "x"}]
+    kept = drop_fake_lists_in_topics(topics, [{"index": 0, "narration": one}], llm_call=_reply_ids([{"id": 0, "ok": False}]))
+    assert [t["template"] for t in kept] == ["headline_sub"]
+
+
+def _reply_ids(results):
+    return lambda system, messages, max_tokens: json.dumps({"results": results}, ensure_ascii=False)

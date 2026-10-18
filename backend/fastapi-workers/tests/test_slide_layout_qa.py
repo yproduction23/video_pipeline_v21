@@ -95,14 +95,16 @@ def test_first_element_waits_for_the_spoken_phrase_up_to_the_opening_limit():
     assert all(e["until"] <= first + 0.2 for e in filler)                                # 그 사이 빈 칠판은 말하는 구절로 채운다
 
 
-def test_a_gray_board_run_that_starts_without_any_overlay_still_shows_something_early():
+def test_a_gray_board_run_without_any_overlay_never_invents_narration_fragments():
+    """2026-10-18: 비는 칠판을 원문 조각("외국인은 그")으로 채우면 뜻 없는 빨간 글씨가 나온다 — 채울 검증된 후편집이 없으면 비워 둔다."""
     plan = _plan(overlays={0: None})
     run = board_runs(plan)[0]
     plan["scenes"][0]["overlay"] = None
     seq = design_sequence(run, plan, llm_call=lambda s, m, t: "not json")
 
-    first = min(p["at"] for p in expand_primitives(seq))
-    assert first <= 3.0                                           # 첫 장면에 후편집이 없어도 그 구절을 말할 때 원문 핵심 구절이 나온다
+    shown = [p.get("text") for p in expand_primitives(seq) if p["kind"] == "text"]
+    assert all(text and text in NARRATIONS[1] + NARRATIONS[2] + "외국인 이탈과 자사주" for text in shown)  # 장면 1·2의 검증된 후편집뿐
+    assert not any(text in ("외국인은 그",) for text in shown)
 
 
 def test_a_topic_leaves_the_screen_soon_after_its_sentence_ends():
@@ -134,3 +136,41 @@ def test_sync_audit_flags_elements_that_appear_before_their_phrase_is_spoken():
     assert audit["checked"] == 1 and audit["out_of_sync"][0]["verdict"] == "early"      # 말하기 3초 전에 떴다
     element["at"] = 3.6
     assert audit_sequence_sync(plan)["out_of_sync"] == []
+
+
+def test_fallback_never_repeats_a_subtitle_line_as_red_text():
+    """2026-10-18 운영자 피드백(4:17): 자막 줄을 그대로 빨간 글씨로 또 쓴다 — 설계 실패 시 장면별 후편집도 자막과 겹치면 쓰지 않는다."""
+    briefs = {0: {"narration": "핵심 변수는 미국 금리입니다.", "context": "", "duration": 4.0,
+                  "chunks": [{"text": "핵심 변수는 미국 금리입니다.", "start": 0.0, "end": 4.0}]}}
+    plan = assemble_plan(briefs, [{"index": 0, "background": "board", "overlay": {"type": "key_text", "text": "핵심 변수는 미국 금리입니다"}}], job_id=1)
+    run = board_runs(plan)[0]
+
+    seq = design_sequence(run, plan, llm_call=lambda s, m, t: "not json")
+
+    assert seq is None or not [e for e in seq["elements"] if e["kind"] == "text"]
+
+
+def test_pictogram_shows_a_big_icon_with_a_short_verbatim_label_in_the_center():
+    topic = {"template": "pictogram", "scene": 2, "anchor": "삼성전자와", "icon": "chip", "label": "AI 반도체"}
+    seq = _seq([topic])
+
+    prims = expand_primitives(seq)
+    icon = [p for p in prims if p["kind"] == "icon"]
+    label = [p for p in prims if p["kind"] == "text" and p["text"] == "AI 반도체"]
+    assert icon and label
+    assert icon[0]["pos"][0] == 960 and label[0]["pos"][0] == 960 and icon[0]["pos"][1] < label[0]["pos"][1]
+    assert [e["content"]["text"] for e in seq["elements"] if e["kind"] == "text" and e["topic"] == 1] == ["AI 반도체"]  # 라벨은 원문 구절 그대로
+
+
+def test_a_number_the_previous_scene_already_showed_is_not_repeated_by_the_sequence():
+    """2026-10-18 운영자 피드백(1:29): 앞 장면에서 나온 같은 5.3%가 뒤에서 또 나온다."""
+    plan = _plan()
+    plan["scenes"][0]["background"] = "stock"
+    plan["scenes"][0]["overlay"] = {"type": "big_number", "value": "5.3%", "label": ""}
+    plan["scenes"][1]["narration"] = "금리가 5.3%를 넘었습니다."
+    topic = {"template": "title_number", "scene": 1, "anchor": "5.3%", "number": {"value": "5.3%", "label": ""}}
+    run = board_runs(plan)[0]
+
+    seq = design_sequence(run, plan, llm_call=_approving({"topics": [topic]}))
+
+    assert not [e for e in (seq or {"elements": []})["elements"] if e["kind"] == "number"]

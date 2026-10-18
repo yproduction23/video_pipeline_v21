@@ -176,7 +176,7 @@ def test_a_summary_label_containing_a_number_is_never_sent_for_approval():
 
     seq, calls = _design_with_judge([topic], ok=[1])
 
-    assert len(calls) == 1  # 숫자가 든 요약 문구는 검수 없이 거절(숫자는 원문 일치만 허용)
+    assert all('문구: "낙폭 30배 확대"' not in c for c in calls)  # 숫자가 든 요약 문구는 검수 없이 거절(숫자는 원문 일치만 허용)
     assert seq["source"] == "fallback_overlays"
 
 

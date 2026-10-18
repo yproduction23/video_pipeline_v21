@@ -12,6 +12,7 @@
 - headline_sub : 굵은 빨간 한 줄 + 작은 보조 문구
 - bars / list / rows : 막대 비교, 번호 목록, 숫자 행(화면 전체)
 - streak       : 연속 일수 달력(날짜 칸마다 X 표시가 차례로 그려진다)
+- pictogram    : 큰 그림(아이콘·소재·회사 로고) + 짧은 라벨 — 자막을 빨간 글씨로 되풀이하는 대신 대상을 그림으로 보여 준다
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import re
 from typing import Callable, Protocol
 
 CANVAS_W, CANVAS_H = 1920, 1080
-TEMPLATES = ("title_number", "compare_pair", "flow", "headline_sub", "bars", "list", "rows", "streak")
+TEMPLATES = ("title_number", "compare_pair", "flow", "headline_sub", "bars", "list", "rows", "streak", "pictogram")
 OPERATORS = ("+", "vs", "→", "=")
 GRAY = "gray"
 
@@ -31,6 +32,7 @@ PAIR_LEFT_X, PAIR_RIGHT_X, PAIR_MID_X = 560, 1360, 960
 PAIR_ICON_Y, PAIR_VALUE_Y, PAIR_LABEL_Y = 440, 480, 700
 PAIR_ICON_SIZE = 320
 HEADLINE_Y, SUB_Y = 470, 690
+PICTOGRAM_ICON_Y, PICTOGRAM_LABEL_Y, PICTOGRAM_ICON_SIZE = 410, 740, 460
 
 
 class Context(Protocol):
@@ -224,6 +226,22 @@ def _headline_sub(topic: dict, ctx: Context, scene: int, anchor: str, start: flo
     return elements
 
 
+def _pictogram(topic: dict, ctx: Context, scene: int, anchor: str, start: float) -> list[dict]:
+    """큰 그림 하나 + 짧은 라벨(원문 그대로). 그림이 없으면 주제로 성립하지 않는다 — 글만 있으면 headline_sub가 맡는다.
+
+    2026-10-18 운영자 피드백: 자막과 같은 내용을 빨간 글씨로 또 쓰는 편집이 많다. 레퍼런스는 대상(사람·건물·돈·은행)을 그림으로 보여 주고
+    라벨은 짧게만 붙인다."""
+    icon = ctx.icon(topic.get("icon"))
+    label = ctx.label(scene, topic.get("label")) if topic.get("label") else None
+    if not icon or not label:
+        return []
+    return [
+        _element("icon", scene, anchor, start, {"name": icon}, (CANVAS_W // 2, PICTOGRAM_ICON_Y), icon_size=PICTOGRAM_ICON_SIZE),
+        _element("text", scene, anchor, start + 0.35, {"text": label, "color": "white"}, (CANVAS_W // 2, PICTOGRAM_LABEL_Y),
+                 size=84, max_width=1500),
+    ]
+
+
 def _full_screen(kind: str, key: str) -> Callable:
     def handler(topic: dict, ctx: Context, scene: int, anchor: str, start: float) -> list[dict]:
         content = {k: topic.get(k) for k in ("title", "items", "headline", "rows") if k in topic}
@@ -244,4 +262,5 @@ _HANDLERS: dict[str, Callable] = {
     "list": _full_screen("list", "items"),
     "rows": _full_screen("rows", "rows"),
     "streak": _streak,
+    "pictogram": _pictogram,
 }

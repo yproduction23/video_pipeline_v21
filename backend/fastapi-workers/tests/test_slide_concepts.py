@@ -147,7 +147,7 @@ def test_motion_parts_keep_a_minimum_gap_and_avoid_repeating_the_same_part():
     assert heads[0] == 0                                                       # 가장 중요한 장면이 먼저 뽑힌다
     starts = [h * 4.0 for h in heads]
     assert all(b - a >= MIN_PART_GAP_SECONDS for a, b in zip(starts, starts[1:]))
-    assert 2 <= len(heads) <= 3                                                # 48초에 20초당 1개 안팎
+    assert 2 <= len(heads) <= 5                                                # 48초에 12초당 1개 안팎
     parts = [updated["scenes"][h]["overlay"]["part"] for h in heads]
     assert all(a != b for a, b in zip(parts, parts[1:]))                       # 같은 부품 연속 금지
 
