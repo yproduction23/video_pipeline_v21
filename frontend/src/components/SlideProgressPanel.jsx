@@ -286,6 +286,11 @@ const BACKGROUND_TONE = {
 const OVERLAY_LABEL = {
   key_text: '강조 텍스트', big_number: '큰 숫자', compare_numbers: '수치 비교', flow: '흐름도',
   bullet_list: '목록', stat_chart: '수치 그래프', equation: '계산식', article_card: '기사 카드',
+  streak: '연속 일수 달력', motion_part: '연상 그래픽',
+}
+const MOTION_PART_LABEL = {
+  move: '이동', gauge: '게이지', balance: '저울', spread: '확산(도미노)', support: '받침', pile: '쌓임',
+  chart: '꺾은선 그래프', target: '기대 대비', mood: '분위기 소품',
 }
 
 const BACKGROUND_HINT = {
@@ -333,8 +338,18 @@ function overlayLines(overlay) {
     case 'article_card':
       lines.push('기사 카드(보도 인용)')
       break
+    case 'streak':
+      lines.push(`연속 일수 달력 “${overlay.phrase || overlay.count}” (날짜 칸마다 X가 차례로)`)
+      break
+    case 'motion_part': {
+      lines.push(`연상 그래픽 ${MOTION_PART_LABEL[overlay.part] || overlay.part}${overlay.evokes ? ` — ${overlay.evokes}` : ''}`)
+      Object.entries(overlay.params || {}).forEach(([key, value]) => lines.push(`  · ${key}: ${value}`))
+      const span = overlay.span
+      if (span && span.total_scenes > 1) lines.push(`  · ${span.total_scenes}장면에 걸쳐 진행(${span.index + 1}번째)`)
+      break
+    }
     default:
-      lines.push(overlay.type)
+      lines.push(String(overlay.type || '알 수 없는 후편집'))
   }
   return lines
 }
@@ -519,6 +534,7 @@ export function EditPlanSection({ plan, onReplan, busy }) {
 
 const ELEMENT_KIND_LABEL = {
   text: '문구', number: '큰 숫자', icon: '그림', arrow: '화살표', bars: '막대 그래프', list: '목록', rows: '비교 행', flow: '흐름도', symbol: '기호',
+  streak: '연속 일수 달력',
 }
 const SLOT_LABEL = {
   center: '화면 가운데(전체)', top: '위', bottom: '아래', left: '왼쪽', right: '오른쪽',
@@ -532,6 +548,7 @@ const QUALITY_LABEL = {
 const ANIM_LABEL = { rise: '아래에서 올라오며', pop: '튀어나오며', draw: '그려지며', count: '숫자가 올라가며', grow: '막대가 자라며' }
 const KIND_TO_OVERLAY = {
   text: 'key_text', number: 'big_number', bars: 'stat_chart', list: 'bullet_list', rows: 'compare_numbers', flow: 'flow',
+  streak: 'streak',
 }
 
 function elementContentLines(element) {
@@ -572,7 +589,7 @@ function SequenceTimetable({ sequence }) {
                 {' '}· {element.fixed ? '템플릿 자리' : (SLOT_LABEL[element.slot] || element.slot)} · {ANIM_LABEL[element.anim] || element.anim} 등장
                 {element.anchor ? <span className="text-slate-700"> · “{element.anchor}” 말할 때</span> : null}
                 {lines.map((line, k) => (
-                  <span key={k} className="block pl-3 text-slate-800">{line.trimStart()}</span>
+                  <span key={k} className="block pl-3 text-slate-800">{String(line ?? '').trimStart()}</span>
                 ))}
                 <span className="block pl-3 text-slate-600">
                   {replaced ? `${(base + element.until).toFixed(1)}초에 사라짐(주제가 바뀔 때 한꺼번에)` : '구간 끝까지 화면에 남음'}
