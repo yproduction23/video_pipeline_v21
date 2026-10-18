@@ -1228,3 +1228,30 @@ def test_streak_overlay_on_stock_stacks_layers_with_each_x_appearing_in_order(mo
     assert offsets == sorted(offsets) and len(set(offsets)) == len(offsets)
     assert all(c["motion"] == "none" for c in composed)
     assert offsets[-1] < 6.0 - 0.3                                     # 장면 안에 다 들어간다
+
+
+def test_motion_part_overlay_is_rendered_with_the_part_composer_at_the_spoken_phrase(monkeypatch, tmp_path):
+    """연출 단계가 고른 움직임 부품은 합성 단계에서 프레임 단위로 그려지고, 그 구절을 말하는 줄에 맞춰 시작한다."""
+    worker = SlidesWorker()
+    scene = _timed_scene("외국인은 8거래일 연속 코스피를 팔았습니다.")
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    _fake_composer(monkeypatch)
+    calls = []
+
+    def fake_part(**kw):
+        calls.append(kw)
+        Path(kw["output_path"]).write_bytes(b"fake-part-mp4")
+        return True
+
+    monkeypatch.setattr("app.workers.slides_worker.compose_motion_part", fake_part)
+    overlay = {"type": "motion_part", "part": "spread", "params": {"origin": "외국인은", "effect": "코스피를"}, "explain": False}
+    monkeypatch.setattr("app.workers.slides_worker.plan_slide_overlays", lambda briefs, **kw: {0: overlay})
+
+    result = worker.generate(job_id=1, tts_meta_json=_timed_tts(), script_meta_json="{}")
+
+    out_scene = result["scenes"][0]
+    assert out_scene["visual_type"] == "slide_motion_part" and out_scene["overlay_type"] == "motion_part"
+    assert calls[0]["part"] == "spread" and calls[0]["params"]["effect"] == "코스피를"
+    assert calls[0]["start_offset"] < 0.5                                  # 첫 줄 처음에 말하는 구절(외국인은)
+    assert calls[0]["dim_base"] is True                                    # 영상 위에서는 배경을 눌러 그림이 읽히게 한다

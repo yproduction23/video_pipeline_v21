@@ -145,5 +145,143 @@
    "created": "2026-10-17",
    "ledger_job": 9100
   }
+ },
+ {
+  "slug": "open_box",
+  "label": "열린 상자",
+  "aliases": [
+   "상자",
+   "박스",
+   "자금 상자"
+  ],
+  "file": "open_box.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "heavy_cargo_box",
+  "label": "무거운 화물 상자",
+  "aliases": [
+   "화물",
+   "짐",
+   "무거운 짐"
+  ],
+  "file": "heavy_cargo_box.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "scale_balance",
+  "label": "저울",
+  "aliases": [
+   "균형",
+   "비교 저울"
+  ],
+  "file": "scale_balance.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "support_pillar",
+  "label": "받치는 기둥",
+  "aliases": [
+   "기둥",
+   "지지대"
+  ],
+  "file": "support_pillar.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "domino_tiles",
+  "label": "도미노",
+  "aliases": [
+   "도미노 타일",
+   "연쇄"
+  ],
+  "file": "domino_tiles.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "interest_rate_gauge",
+  "label": "온도계 게이지",
+  "aliases": [
+   "게이지",
+   "온도계"
+  ],
+  "file": "interest_rate_gauge.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "pie_slice",
+  "label": "파이 조각",
+  "aliases": [
+   "비중",
+   "점유율",
+   "파이차트"
+  ],
+  "file": "pie_slice.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "portfolio_basket",
+  "label": "투자 바구니",
+  "aliases": [
+   "바구니",
+   "포트폴리오"
+  ],
+  "file": "portfolio_basket.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
+ },
+ {
+  "slug": "push_down_arrow",
+  "label": "하방 압력 화살표",
+  "aliases": [
+   "하방 압력",
+   "누르는 화살표"
+  ],
+  "file": "push_down_arrow.png",
+  "source": {
+   "generator": "gemini-3-pro-image",
+   "style": "motif-style-v1",
+   "created": "2026-10-18",
+   "ledger_job": 9100
+  }
  }
 ]

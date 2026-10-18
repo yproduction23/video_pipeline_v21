@@ -32,12 +32,12 @@ TOOLS: dict[str, dict] = {
     "streak": {"ready": True, "hint": "N일(거래일·주·개월) 연속: 달력 칸에 X가 차례로 쳐진다"},
     "equation": {"ready": True, "hint": "계산 과정(A − B = C)"},
     "article_card": {"ready": True, "hint": "보도 인용 카드"},
-    "motif_move": {"ready": False, "hint": "소재가 A에서 B로 움직임(자금 유출입, 이동)"},
-    "motif_gauge": {"ready": False, "hint": "게이지·계단·온도계처럼 늘거나 줄어드는 정도"},
-    "motif_balance": {"ready": False, "hint": "저울·시소처럼 두 힘의 균형이나 기울어짐"},
-    "motif_spread": {"ready": False, "hint": "도미노·번짐처럼 충격이 퍼져 나감"},
-    "motif_support": {"ready": False, "hint": "아래에서 받침(하방 지지, 안전판)"},
-    "motif_pile": {"ready": False, "hint": "소재가 쌓이거나 줄어듦(누적, 감소)"},
+    "motif_move": {"ready": True, "hint": "소재가 A에서 B로 움직임(자금 유출입, 이동)"},
+    "motif_gauge": {"ready": True, "hint": "게이지·계단·온도계처럼 늘거나 줄어드는 정도"},
+    "motif_balance": {"ready": True, "hint": "저울·시소처럼 두 힘의 균형이나 기울어짐"},
+    "motif_spread": {"ready": True, "hint": "도미노·번짐처럼 충격이 퍼져 나감"},
+    "motif_support": {"ready": True, "hint": "아래에서 받침(하방 지지, 안전판)"},
+    "motif_pile": {"ready": True, "hint": "소재가 쌓이거나 줄어듦(누적, 감소)"},
 }
 
 _SYSTEM = (
@@ -54,8 +54,15 @@ _SYSTEM = (
     "특정 사건 전용 그림이 아니라 다른 대본에서도 재사용할 수 있는 일반 소재만 요청한다(예: 열린 상자, 받치는 기둥).\n"
     "5. 대본에 없는 숫자·사실을 만들지 않는다. 그림은 뜻만 옮기고 숫자·문구는 후편집이 내레이션 원문에서 가져온다.\n\n"
     "도구 목록:\n" + "\n".join(f"- {name} (ready={str(meta['ready']).lower()}): {meta['hint']}" for name, meta in TOOLS.items()) + "\n\n"
+    "움직임 부품의 params(글자는 그 장면 대본에 글자 그대로 있는 2~12자 구절만. 숫자·정도는 지어내지 않는다):\n"
+    '- motif_move: {"item": 현재 소재 이름(움직여 갈 것), "source_label": 보내는 쪽 구절(선택), "target_label": 받는 쪽 구절(선택)}\n'
+    '- motif_gauge: {"label": 구절, "level": "high"|"low"|"rising"|"falling", "value": 대본에 있는 숫자 구절(선택)}\n'
+    '- motif_balance: {"left": 구절, "right": 구절, "heavier": "left"|"right"}\n'
+    '- motif_spread: {"origin": 시작 구절, "effect": 결과 구절}\n'
+    '- motif_support: {"top": 받쳐지는 대상 구절, "pillar": 받치는 것 구절, "state": "holding"|"weakening"}\n'
+    '- motif_pile: {"item": 현재 소재 이름, "trend": "grow"|"shrink", "label": 구절(선택)}\n\n'
     '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","motifs":["현재 소재 이름"],'
-    '"missing":[{"type":"...","name":"...","description":"..."}]}]}'
+    '"params":{...부품일 때만},"missing":[{"type":"...","name":"...","description":"..."}]}]}'
 )
 
 
@@ -129,6 +136,45 @@ def design_concepts(briefs: dict[int, dict], *, llm_call=None) -> dict | None:
         concepts.append({
             "index": index, "evokes": str(item.get("evokes") or "").strip()[:120], "tool": tool,
             "tool_ready": bool(TOOLS[tool]["ready"]), "motifs": list(dict.fromkeys(motifs)),
+            "params": item.get("params") if isinstance(item.get("params"), dict) else {},
         })
     ordered = sorted(missing.values(), key=lambda m: (-m["count"], m["name"]))
     return {"version": CONCEPT_VERSION, "concepts": concepts, "missing": ordered}
+
+
+_PART_OF_TOOL = {
+    "motif_move": "move", "motif_gauge": "gauge", "motif_balance": "balance",
+    "motif_spread": "spread", "motif_support": "support", "motif_pile": "pile",
+}
+# 숫자·계산이 핵심인 후편집, 기사 카드, 달력은 연출 결과로 덮어쓰지 않는다(숫자가 화면의 중심이다).
+_KEEP_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "equation", "article_card", "streak", "bullet_list", "flow"}
+
+
+def apply_concepts(plan: dict, concepts: dict | None) -> dict:
+    """연출 단계가 고른 움직임 부품을 계획서 장면 후편집으로 바꾼다. 인자가 검증을 통과한 장면만 바꾸고 나머지는 그대로 둔다."""
+    if not concepts:
+        return plan
+    from app.services.slide_motion_parts import part_phrase, validate_part  # noqa: F401
+
+    by_index = {s["index"]: s for s in plan["scenes"]}
+    order = [s["index"] for s in plan["scenes"]]
+    applied = rejected = 0
+    for concept in concepts.get("concepts", []):
+        part = _PART_OF_TOOL.get(concept.get("tool"))
+        scene = by_index.get(concept.get("index"))
+        if not part or not scene or scene.get("revised") or (scene.get("overlay") or {}).get("type") in _KEEP_OVERLAY_TYPES:
+            continue
+        position = order.index(scene["index"])
+        context = " ".join(by_index[i]["narration"] for i in order[max(0, position - 1):position])
+        params = validate_part(part, concept.get("params"), scene["narration"], context)
+        if not params:
+            rejected += 1
+            continue
+        scene["overlay"] = {
+            "type": "motion_part", "part": part, "params": params, "explain": scene["background"] == "board",
+            "evokes": concept.get("evokes", ""), "source": "concept",
+        }
+        applied += 1
+    plan["concept_applied"] = {"motion_parts": applied, "rejected": rejected}
+    plan["concept_version"] = concepts.get("version")
+    return plan

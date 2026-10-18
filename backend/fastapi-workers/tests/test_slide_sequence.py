@@ -409,3 +409,16 @@ def test_bars_have_yellow_value_labels_and_a_baseline_like_the_reference():
     assert len(yellow) > 20000  # 막대와 값 글자가 노랗다
     baseline = sprite.getpixel((30, 130 + 380 + 2))  # 첫 막대 왼쪽 바깥, 막대 바닥 바로 아래
     assert baseline[3] > 150 and baseline[0] > 180  # 막대 아래 기준선
+
+
+def test_scenes_with_a_motion_part_stay_out_of_the_gray_board_sequence():
+    """움직임 부품은 장면 단위로 따로 그리므로 회색 배경 시퀀스 묶음을 끊는다."""
+    scenes = [
+        {"index": 0, "background": "board", "overlay": {"type": "key_text", "text": "하나"}},
+        {"index": 1, "background": "board", "overlay": {"type": "motion_part", "part": "move", "params": {}}},
+        {"index": 2, "background": "board", "overlay": {"type": "key_text", "text": "셋"}},
+    ]
+
+    runs = board_runs({"scenes": scenes})
+
+    assert [[s["index"] for s in run] for run in runs] == [[0], [2]]

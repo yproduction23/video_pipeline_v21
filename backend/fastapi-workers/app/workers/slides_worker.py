@@ -39,6 +39,7 @@ from app import runtime_config
 from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
+from app.services.slide_motion_parts import compose_motion_part, part_phrase
 from app.services.slide_timing import phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
@@ -859,6 +860,27 @@ class SlidesWorker:
             out["slide_layers"]["overlays"].append(spec)
             out["overlay_type"] = kind
             return
+        elif kind == "motion_part":
+            # 연출 단계가 고른 움직임 부품: 프레임 단위로 그려 배경 위에 얹는다(그 구절을 말하는 줄에 맞춰 시작).
+            base_video, base_image = out.get("stock_video_path"), out.get("image_path")
+            base = base_video or base_image
+            if not base:
+                raise RuntimeError("합성할 배경이 없습니다")
+            clip_path = job_dir / f"scene_{index:03d}_part.mp4"
+            if not compose_motion_part(
+                base_path=str(base), base_is_video=bool(base_video), output_path=str(clip_path), duration=duration,
+                part=overlay_plan["part"], params=overlay_plan["params"], start_offset=base_offset, dim_base=dim_base,
+            ):
+                raise RuntimeError("움직임 부품 합성 실패")
+            out["stock_video_path"] = str(clip_path)
+            frame_path = job_dir / f"scene_{index:03d}_part_frame.png"
+            if _extract_first_frame_at(str(clip_path), str(frame_path), min(2.0, max(duration - 0.5, 0.5))):
+                out["image_path"] = str(frame_path)
+            spec.update(part=overlay_plan["part"], params=overlay_plan["params"], evokes=overlay_plan.get("evokes", ""))
+            out["visual_type"] = "slide_motion_part"
+            out["slide_layers"]["overlays"].append(spec)
+            out["overlay_type"] = kind
+            return
         elif kind == "equation":
             if not render_equation_overlay(
                 label=overlay_plan.get("label", ""), left=overlay_plan["left"], ops=overlay_plan["ops"],
@@ -930,6 +952,8 @@ class SlidesWorker:
             return str(overlay_plan.get("value") or "")
         if kind == "compare_numbers":
             return str(overlay_plan.get("headline") or "")
+        if kind == "motion_part":
+            return part_phrase(overlay_plan.get("part"), overlay_plan.get("params") or {})
         if kind == "streak":
             return str(overlay_plan.get("count") or "")
         if kind == "flow":

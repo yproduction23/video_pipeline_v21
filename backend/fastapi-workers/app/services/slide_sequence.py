@@ -153,7 +153,7 @@ def board_runs(plan: dict) -> list[list[dict]]:
     """연속된 회색 배경 장면 묶음(장면 번호 순). 1장면짜리도 시퀀스로 만든다."""
     runs: list[list[dict]] = []
     for scene in plan.get("scenes", []):
-        if scene["background"] == "board":
+        if scene["background"] == "board" and (scene.get("overlay") or {}).get("type") != "motion_part":
             if runs and runs[-1][-1]["index"] == scene["index"] - 1:
                 runs[-1].append(scene)
             else:

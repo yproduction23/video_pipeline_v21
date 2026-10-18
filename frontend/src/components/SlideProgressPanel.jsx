@@ -23,6 +23,7 @@ const TYPE_LABEL = {
   slide_compare_numbers: '수치 비교',
   slide_flow: '흐름도',
   slide_streak: '연속 일수 달력',
+  slide_motion_part: '움직임 그래픽',
 }
 
 // 2026-10-15 사용자 요청: 씬별 생성을 누르면 장면이 몇 개로 나뉘었는지 보이고,
