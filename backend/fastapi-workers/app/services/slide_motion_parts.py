@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import threading
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +20,7 @@ from app.services.slide_motifs import motif_sprite, resolve_motif
 
 logger = logging.getLogger(__name__)
 
+COMPOSE_TIMEOUT_SECONDS = 300.0
 PARTS = ("move", "gauge", "balance", "spread", "support", "pile", "chart", "target", "mood")
 MAX_LABEL_CHARS = 12
 GAUGE_LEVELS = ("high", "low", "rising", "falling")
@@ -449,8 +451,32 @@ def _mood(params: dict, p: float) -> Image.Image:
     return _finish([_with_alpha(layer, grow), _with_alpha(labels, _ramp(p, 0.3, 0.2))], size)
 
 
+def is_countable(value: object) -> bool:
+    """숫자가 들어 있어 0에서 올라가는 카운트업으로 보여 줄 수 있는 값인가."""
+    return bool(re.search(r"\d", str(value or "")))
+
+
+def _counter(params: dict, p: float) -> Image.Image:
+    """큰 숫자 하나가 0에서 목표 값까지 올라간다(카운트업). 장면 단위 big_number 후편집용 — 부품 목록(PARTS)에는 넣지 않는다.
+
+    2026-10-18 운영자 피드백: 숫자가 12345처럼 차르르 올라가는 연출이 없다. 값은 승인 대본 구절 그대로이고, 올라가는 도중의 숫자는
+    화면 연출일 뿐이며 마지막에는 원문 값이 그대로 남는다."""
+    from app.services.slide_sequence import _icon_sprite, _number_sprite
+
+    size = (1700, 760)
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    sprite = _number_sprite(str(params["value"]), str(params.get("label") or ""), p, max_width=1500, size_cap=230)
+    top = 40
+    if params.get("icon"):
+        icon = _icon_sprite(str(params["icon"]), 190)
+        layer.alpha_composite(icon, ((size[0] - icon.width) // 2, 20))
+        top = 20 + icon.height
+    layer.alpha_composite(sprite, ((size[0] - sprite.width) // 2, min(top, size[1] - sprite.height - 10)))
+    return _with_alpha(layer, _ramp(p, 0.0, 0.08))
+
+
 _DRAW = {"move": _move, "gauge": _gauge, "balance": _balance, "spread": _spread, "support": _support, "pile": _pile,
-         "chart": _chart, "target": _target, "mood": _mood}
+         "chart": _chart, "target": _target, "mood": _mood, "counter": _counter}
 
 
 def part_sprite(part: str, params: dict, p: float) -> Image.Image:
@@ -506,6 +532,10 @@ def compose_motion_part(
     try:
         with _COMPOSE_SLOTS:
             process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            # ffmpeg가 입력을 받지 못해 멈추면(깨진 배경 파일 등) 작업 전체가 매달리지 않도록 제한 시간 뒤 강제로 끝낸다.
+            watchdog = threading.Timer(COMPOSE_TIMEOUT_SECONDS, process.kill)
+            watchdog.daemon = True
+            watchdog.start()
             try:
                 for k in range(frames):
                     t = k / fps
@@ -537,8 +567,12 @@ def compose_motion_part(
                         final_bytes = data
                     process.stdin.write(data)
             finally:
-                process.stdin.close()
-            process.wait(timeout=300)
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+            process.wait(timeout=COMPOSE_TIMEOUT_SECONDS)
+            watchdog.cancel()
         ok = process.returncode == 0 and Path(output_path).is_file() and Path(output_path).stat().st_size > 1000
         if not ok:
             logger.warning("움직임 부품 합성 실패(rc=%s): %s", process.returncode, (process.stderr.read() or b"")[-300:])

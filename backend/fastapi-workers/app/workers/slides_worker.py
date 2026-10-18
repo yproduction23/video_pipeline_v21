@@ -35,17 +35,20 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from PIL import Image
+
 from app import runtime_config
 from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import ensure_photo_background, generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
-from app.services.slide_motion_parts import compose_motion_part, part_phrase
+from app.services.slide_motion_parts import compose_motion_part, is_countable, part_phrase
 from app.services.slide_timing import phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
 from app.services.slide_sequence import render_sequence_clip
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
+    CANVAS,
     DISCLAIMER_CARD_SECONDS,
     add_source_credit,
     compose_animated_overlay,
@@ -56,6 +59,7 @@ from app.services.slide_overlay import (
     render_compare_numbers_layers,
     render_equation_overlay,
     render_flow_layers,
+    render_logo_row_layers,
     render_streak_layers,
     render_disclaimer_card,
     render_key_text_overlay,
@@ -812,13 +816,22 @@ class SlidesWorker:
                 raise RuntimeError("강조 텍스트 렌더링 실패")
             spec.update(text=overlay_plan["text"], icon=overlay_plan.get("icon"))
             out["visual_type"] = "slide_key_text"
-        elif kind in {"big_number", "compare_numbers", "flow", "streak"}:
-            if kind == "streak":
+        elif kind in {"big_number", "compare_numbers", "flow", "streak", "logo_row"}:
+            if kind == "logo_row":
+                layers = render_logo_row_layers(logos=overlay_plan["logos"], output_path=str(overlay_png))
+                spec.update(logos=overlay_plan["logos"])
+                out["visual_type"] = "slide_logo_row"
+            elif kind == "streak":
                 layers = render_streak_layers(
                     count=int(overlay_plan["days"]), phrase=overlay_plan["count"], output_path=str(overlay_png),
                 )
                 spec.update(count=overlay_plan["count"], days=overlay_plan["days"])
                 out["visual_type"] = "slide_streak"
+            elif kind == "big_number" and not carry and is_countable(overlay_plan["value"]) and self._apply_counter(
+                index=index, duration=duration, job_dir=job_dir, out=out, overlay_plan=overlay_plan, spec=spec,
+                capture=capture, base_offset=base_offset, dim_base=dim_base,
+            ):
+                return                                           # 카운트업으로 합성을 마쳤다
             elif kind == "big_number":
                 layers = render_big_number_overlay(
                     value=overlay_plan["value"], label=overlay_plan.get("label", ""),
@@ -846,6 +859,14 @@ class SlidesWorker:
                 # 날짜 칸마다 X가 차례로 쳐진다: 장면 길이 안에서 층 간격을 정한다(최대 0.4초).
                 step = min(0.4, max((duration - base_offset - 1.2) / max(len(layers) - 1, 1), 0.12))
             last_start = max(duration - 1.0, 0.35)
+            layer_starts = [min(base_offset + k * step, last_start if kind != "streak" else duration - 0.3) for k in range(len(layers))]
+            if kind == "logo_row":
+                # 로고는 그 회사 이름을 말하는 순간마다 하나씩 뜬다(못 찾으면 앞 로고 뒤 0.9초).
+                for k, item in enumerate(overlay_plan["logos"][:len(layers)]):
+                    moment = phrase_offset(scene.get("caption_chunks_rel") or [], item["phrase"])
+                    layer_starts[k] = min(max(moment - 0.15, base_offset if k == 0 else layer_starts[k - 1] + 0.3), last_start) \
+                        if moment is not None else min(base_offset + k * 0.9, last_start)
+                spec["layer_starts"] = [round(v, 2) for v in layer_starts]
             for k, layer in enumerate(layers):
                 layer_kwargs = (
                     {"fade_in_seconds": 0.3 if k == 0 else 0.08, "motion": "none"} if kind == "streak" else carry_kwargs
@@ -853,7 +874,7 @@ class SlidesWorker:
                 self._compose_into_clip(
                     index=index, duration=duration, job_dir=job_dir, out=out,
                     overlay_png=Path(layer), suffix=f"composed{k}",
-                    start_offset=min(base_offset + k * step, last_start if kind != "streak" else duration - 0.3), **layer_kwargs,
+                    start_offset=layer_starts[k], **layer_kwargs,
                     dim_base=dim_base and k == 0,  # 이후 층은 이미 눌린 클립 위에 쌓인다
                 )
             spec["overlay_png"] = [str(layer) for layer in layers]
@@ -947,6 +968,44 @@ class SlidesWorker:
         out["slide_layers"]["overlays"].append(spec)
         out["overlay_type"] = kind
 
+    def _apply_counter(
+        self, *, index: int, duration: float, job_dir: Path, out: dict, overlay_plan: dict, spec: dict, capture: dict,
+        base_offset: float, dim_base: bool,
+    ) -> bool:
+        """큰 숫자를 0에서 원문 값까지 올라가는 카운트업으로 합성한다. 실패하면 False(정지 숫자로 렌더링하고 표시를 남긴다).
+
+        2026-10-18 운영자 피드백: 숫자가 올라가는 연출이 없다. 이어지는 장면(carry)은 마지막 값이 그대로 남은 정지 숫자를 쓴다."""
+        base_video, base_image = out.get("stock_video_path"), out.get("image_path")
+        base = base_video or base_image
+        if not base:
+            return False
+        params = {"value": overlay_plan["value"], "label": overlay_plan.get("label", ""), "icon": overlay_plan.get("icon")}
+        clip_path = job_dir / f"scene_{index:03d}_counter.mp4"
+        anim = max(min(duration - base_offset - 0.6, 2.4), 0.8)
+        if not compose_motion_part(
+            base_path=str(base), base_is_video=bool(base_video), output_path=str(clip_path), duration=duration,
+            part="counter", params=params, dim_base=dim_base, start_offset=base_offset, anim_total=anim, fade_out=False,
+        ):
+            out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "counter_fallback_static"]))
+            return False
+        out["stock_video_path"] = str(clip_path)
+        frame_path = job_dir / f"scene_{index:03d}_counter_frame.png"
+        if _extract_first_frame_at(str(clip_path), str(frame_path), min(base_offset + anim + 0.2, max(duration - 0.3, 0.3))):
+            out["image_path"] = str(frame_path)
+        spec.update(value=overlay_plan["value"], label=overlay_plan.get("label", ""), animation="count_up", count_seconds=round(anim, 2))
+        credit_png = job_dir / f"scene_{index:03d}_counter_credit.png"
+        Image.new("RGBA", CANVAS, (0, 0, 0, 0)).save(credit_png)
+        self._credit_source(str(credit_png), overlay_plan, capture, spec)
+        if spec.get("source_credit"):
+            self._compose_into_clip(
+                index=index, duration=duration, job_dir=job_dir, out=out, overlay_png=credit_png, suffix="credit",
+                start_offset=base_offset, fade_in_seconds=0.3, motion="none",
+            )
+        out["visual_type"] = "slide_big_number"
+        out["slide_layers"]["overlays"].append(spec)
+        out["overlay_type"] = "big_number"
+        return True
+
     @staticmethod
     def _overlay_phrase(overlay_plan: dict) -> str:
         """후편집이 보여 주는 대표 구절(내레이션에서 그대로 가져온 글자) — 등장 시각을 정하는 기준."""
@@ -961,6 +1020,9 @@ class SlidesWorker:
             return part_phrase(overlay_plan.get("part"), overlay_plan.get("params") or {})
         if kind == "streak":
             return str(overlay_plan.get("count") or "")
+        if kind == "logo_row":
+            logos = overlay_plan.get("logos") or []
+            return str(logos[0].get("phrase") or "") if logos else ""
         if kind == "flow":
             nodes = overlay_plan.get("nodes") or []
             return str(nodes[0].get("label") or "") if nodes else ""

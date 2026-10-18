@@ -25,6 +25,7 @@ from PIL import Image, ImageDraw
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
 from app.services.slide_icon_judge import strip_unjudged_icons_from_topics
+from app.services.slide_text_judge import fix_key_texts_in_topics
 from app.services.slide_title_judge import fix_titles_in_topics
 from app.services.slide_streak import streak_sprite as _streak_sprite
 from app.services.slide_timing import phrase_offset
@@ -62,7 +63,8 @@ SUBTITLE_SAFE_BOTTOM = 890
 SIDE_SLOT_MAX_WIDTH = 820
 WIDE_SLOT_MAX_WIDTH = 1500
 _SIDE_SLOTS = {"left", "right", "upper_left", "upper_right", "lower_left", "lower_right"}
-OPENING_LATEST_SECONDS = 1.8   # 구간 첫 요소의 최대 지연(그보다 늦게 말하는 구절이면 이 시각에 나온다)
+OPENING_LATEST_SECONDS = 99.0  # 사용 안 함: 첫 요소도 그 구절을 말하는 순간에 나온다(2026-10-18 피드백: 말하기 전에 먼저 뜨면 싱크가 안 맞는다)
+SENTENCE_LINGER_SECONDS = 1.0  # 문장이 끝난 뒤 그래픽이 남아 있는 시간
 # 2026-10-16 운영자 요청: 구조와 애니메이션 순서는 복잡하지 않고 단순하며 보기 편해야 한다.
 # 20번 Job 1:17~1:33 재현(2초마다 같은 자리에서 서로 다른 아이콘 교체, 빈 화면) 뒤 레퍼런스 10~33초를 다시 분석해
 # 개수 제한이 아니라 "주제 단위로 쌓고, 주제가 바뀔 때만 비운다"로 바꿨다(레퍼런스는 5~6개가 동시에 있어도 짝지어져 읽힌다).
@@ -96,7 +98,8 @@ _SEQUENCE_SYSTEM = (
     "이어지는 구간을 받아, 그 구간을 '주제' 단위로 나누고 주제마다 구성 템플릿 하나와 채울 내용을 정한다. "
     "자리·크기·정렬은 템플릿이 정하므로 너는 정하지 않는다.\n\n"
     "[연출 원칙 — 레퍼런스 영상 분석 + 운영자 피드백]\n"
-    "1. 주제 하나는 '한 가지 이야기'이고 4~9초다(장면 경계와 무관). 주제가 바뀔 때만 화면이 한꺼번에 바뀐다.\n"
+    "1. 주제 하나는 '한 가지 이야기'이고 4~9초다(장면 경계와 무관). 주제가 바뀔 때만 화면이 한꺼번에 바뀐다. 주제는 그 구절이 속한 문장이 "
+    "끝나면 화면에서 물러나므로, 다음 문장의 내용을 미리 보여 주지 않는다. anchor는 그 요소를 실제로 말하는 구절이어야 하고, 말하기 전에 먼저 뜨지 않는다.\n"
     "2. 주제마다 시청자가 기억해야 할 핵심 하나만 보여 준다. 나열하지 않는다. 설명이 눈에 안 들어오는 요소 나열이 가장 나쁘다.\n"
     "3. 내레이션에 숫자(%·원·배·거래일 등)가 나오면 그 숫자를 큰 숫자로 보여 주는 것이 최우선이다.\n"
     "4. 같은 템플릿 안의 항목은 항상 같은 구조여야 한다(둘 다 아이콘+글, 또는 둘 다 숫자+글, 또는 둘 다 글).\n"
@@ -106,7 +109,9 @@ _SEQUENCE_SYSTEM = (
     "거절된다. 자막이 말하지 않는 정보(대상 이름·수치·단위·결과 라벨)를 보여 준다.\n"
     "7. 같은 단위의 숫자 2~4개를 비교하면(현재 vs 과거, A사 vs B사, 기간별 수치) 아이콘 비교(compare_pair)보다 막대(bars)를 우선한다 — "
     "레퍼런스 영상의 가장 대표적인 카드다. 이유·조건·종류를 2~4개 나열하면(\"첫째, 둘째\", \"A와 B와 C\") list를 우선한다. "
-    "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n\n"
+    "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n"
+    "8. 내레이션이 아래 '회사 로고' 목록에 있는 회사(삼성전자·SK하이닉스 등)를 말하면 그 회사를 가리키는 아이콘 자리에 로고를 쓴다(icon 필드에 로고 이름 그대로). "
+    "회사 이름을 나열하는 구절은 list·flow·compare_pair에서 로고로 보여 주고, 그 회사를 말하는 순간(anchor)에 뜨게 한다.\n\n"
     "[템플릿] 주제 객체의 필드: template, scene(구간에 포함된 장면 번호), anchor(그 장면 내레이션에 글자 그대로 있는 구절 — "
     "이 말을 하는 순간에 주제가 시작된다) + 템플릿별 필드.\n"
     '- "title_number": 제목 + 큰 숫자. {"title": 선택, 4~16자 핵심어, "number": {"value": 내레이션에 글자 그대로 있는 숫자 구절 16자 이내, '
@@ -127,7 +132,7 @@ _SEQUENCE_SYSTEM = (
     "규칙:\n"
     "- 모든 글자·숫자는 해당 장면 내레이션(또는 직전 두 장면)에 적힌 연속된 구절을 한 글자도 바꾸지 말고 복사한다"
     "(조사·어순·표기 그대로, 요약·바꿔쓰기·물음표 추가 금지). 숫자를 계산·반올림·추정·새로 만들지 않는다. 같은 문구를 두 번 쓰지 않는다.\n"
-    "- 구간은 첫 장면 시작과 함께 첫 주제가 나와야 하고, 주제가 바뀔 때마다 다음 주제가 바로 이어져 빈 화면이 없어야 한다.\n"
+    "- 빈 화면이 길어지지 않게 주제를 이어 가되, 어떤 주제도 그 구절을 말하기 전에 먼저 띄우지 않는다(말하는 순간에 맞춘다).\n"
     "- 주제 순서는 시간 순서이며 anchor가 앞 주제보다 뒤여야 한다.\n"
     '출력은 JSON만: {"topics":[{"template":"...","scene":번호,"anchor":"...", ...}]}'
 )
@@ -281,9 +286,6 @@ def _normalize_elements(raw_elements: list, run: list[dict], plan: dict) -> list
             "content": validated,
         })
     elements.sort(key=lambda e: e["at"])
-    if elements and elements[0]["at"] > OPENING_LATEST_SECONDS:
-        # 구간이 시작하자마자 첫 요소가 나와야 한다(레퍼런스: 장면 전환 직후 바로 등장).
-        elements[0]["at"] = OPENING_LATEST_SECONDS
     return elements
 
 
@@ -583,6 +585,7 @@ def _topics_to_elements(
     """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
     raw_topics = strip_unjudged_icons_from_topics(raw_topics, run, llm_call=llm_call)  # 뜻이 어긋난 아이콘은 뺀다
     raw_topics = fix_titles_in_topics(raw_topics, run, llm_call=llm_call)  # 그래프 제목의 대상이 어긋나면 고치거나 뺀다
+    raw_topics = fix_key_texts_in_topics(raw_topics, run, llm_call=llm_call)  # 잘려서 뜻이 뒤집히는 문구는 바꾸거나 뺀다
     ctx = _TemplateContext(run, plan, _approve_paraphrases(raw_topics, run, plan, llm_call))
     if failures is not None:
         failures.extend(ctx.failures)  # 같은 리스트를 계속 갱신하도록 아래에서 다시 합친다
@@ -610,13 +613,6 @@ def _topics_to_elements(
     if failures is not None:
         failures.extend(f for f in ctx.failures if f not in failures)
     elements.sort(key=lambda e: (e["topic"], e["at"]))
-    # 첫 주제는 구간이 시작하자마자 나온다(주제 안의 상대 시각은 그대로 둔다).
-    first = [e for e in elements if e["topic"] == 1]
-    if first:
-        shift = min(e["at"] for e in first) - OPENING_LATEST_SECONDS
-        if shift > 0:
-            for element in first:
-                element["at"] = round(max(element["at"] - shift, 0.0), 2)
     return elements
 
 
@@ -665,79 +661,128 @@ def _fill_gaps(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
     return elements + added
 
 
-MAX_BLANK_SECONDS = 0.6
+MAX_BLANK_SECONDS = 0.8
 
 
-def _cover_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float) -> list[dict]:
-    """회색 칠판이 비어 보이는 구간을 없앤다(2026-10-18 피드백: 2분 42초에 아무것도 없었다).
+def _expire_stale_topics(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
+    """주제의 요소는 그 구절이 속한 문장이 끝나면(여유 SENTENCE_LINGER_SECONDS) 물러난다.
 
-    - 중간에 빈 구간이 생기면 바로 앞 주제의 요소를 그 구간 끝까지 이어 둔다.
-    - 구간 시작이 OPENING_LATEST_SECONDS보다 오래 비면, 그때 말하는 자막 줄의 핵심어(원문 그대로)를 보충한다."""
+    2026-10-18 운영자 피드백: "뉴욕 투매 → 서울 급락"이 이야기가 다음으로 넘어간 뒤에도 8초 넘게 남았다. 여러 문장에 걸친 주제(출발 → 도착)는
+    마지막 요소가 나온 뒤 2.5초까지는 남긴다."""
+    from app.services.slide_timing import sentence_end_offset
+
+    scenes = {s["index"]: s for s in run}
+    starts = _scene_starts(plan)
+    seq_start = starts[run[0]["index"]]
+    groups: dict[int, list[dict]] = {}
+    for element in elements:
+        groups.setdefault(element["topic"], []).append(element)
+    for group in groups.values():
+        limit = None
+        for element in group:
+            scene = scenes.get(element.get("scene"))
+            anchor = element.get("anchor")
+            if not scene or not anchor:
+                continue
+            end = starts[scene["index"]] - seq_start + sentence_end_offset(
+                scene["narration"], scene.get("chunks") or [], scene["duration"], anchor,
+            )
+            limit = max(limit or 0.0, end)
+        if limit is None:
+            continue
+        limit = max(limit, max(e["at"] for e in group) + 2.5) + SENTENCE_LINGER_SECONDS
+        for element in group:
+            element["until"] = round(max(min(element["until"], limit), element["at"] + 0.6), 2)
+    return elements
+
+
+def _short_phrase(text: str, chunks: list | None = None) -> str:
+    """원문에서 그대로 떼어 낸 16자 이내 핵심 구절(앞쪽 단어부터)."""
     from app.services.slide_edit_plan import fallback_key_phrase
 
-    def short_phrase(text: str, chunks: list | None = None) -> str:
-        """원문에서 그대로 떼어 낸 16자 이내 핵심 구절(앞쪽 단어부터)."""
-        phrase = fallback_key_phrase(text, chunks)
-        if len(phrase) <= MAX_TEXT_CHARS:
-            return phrase
-        words, picked = phrase.split(" "), []
-        for word in words:
-            if len(" ".join([*picked, word])) > MAX_TEXT_CHARS:
-                break
-            picked.append(word)
-        return " ".join(picked)
+    phrase = fallback_key_phrase(text, chunks)
+    if len(phrase) <= MAX_TEXT_CHARS:
+        return phrase
+    picked: list[str] = []
+    for word in phrase.split(" "):
+        if len(" ".join([*picked, word])) > MAX_TEXT_CHARS:
+            break
+        picked.append(word)
+    return " ".join(picked)
 
-    def intervals() -> list[tuple[float, float]]:
-        return sorted((e["at"], e["until"]) for e in elements)
 
-    # 시작이 오래 비면 그때 말하는 줄의 핵심어를 먼저 띄운다.
-    first_at = min(e["at"] for e in elements)
-    if first_at > OPENING_LATEST_SECONDS + 0.2:
-        starts = _scene_starts(plan)
-        seq_start = starts[run[0]["index"]]
+def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float) -> list[dict]:
+    """회색 칠판이 비는 구간을, 그 구간을 말하는 장면의 후편집(이미 검증됨)이나 원문 핵심 구절로 채운다 — 앞 그래픽을 붙들고 있지 않는다.
+
+    2026-10-18 운영자 피드백: 2분 42초·3분 14초에 아무것도 없었고, 반대로 앞 그래픽이 남아 있는 것도 어색했다. 채우는 요소는 그 구절을
+    말하는 시각에 나오고(싱크), 이미 화면에 나온 내용은 반복하지 않으며, 채울 것이 없으면 비워 둔다."""
+    starts = _scene_starts(plan)
+    seq_start = starts[run[0]["index"]]
+    added: list[dict] = []
+
+    def everything() -> list[dict]:
+        return [*elements, *added]
+
+    def candidate(scene: dict) -> dict | None:
+        scene_start = starts[scene["index"]] - seq_start
+        shown = " ".join(json.dumps(e["content"], ensure_ascii=False) for e in everything())
+        fallback = _fallback_scene_element(scene, starts, seq_start, "b0")
+        if fallback:
+            key = str(fallback["content"].get("value") or fallback["content"].get("text") or "")
+            too_long = fallback["kind"] == "text" and len(key) > MAX_TEXT_CHARS
+            repeated = (key and key in shown) or any(
+                e["kind"] == fallback["kind"] and e["content"] == fallback["content"] for e in everything()
+            )
+            if not too_long and not repeated:
+                if fallback["kind"] in ("text", "number") and key:
+                    fallback["at"] = round(_anchor_time(scene, starts[scene["index"]], key) - seq_start, 2)
+                return fallback
+        phrase = _short_phrase(str(scene["narration"]), scene.get("chunks"))
+        if 4 <= len(phrase) <= MAX_TEXT_CHARS and phrase not in shown:
+            return {
+                "id": "b0", "kind": "text", "scene": scene["index"], "anchor": "", "slot": "center", "replaces": None,
+                "anim": "rise", "at": round(_anchor_time(scene, starts[scene["index"]], phrase) - seq_start, 2),
+                "content": {"text": phrase, "color": "red"}, "size": 120,
+            }
+        return None
+
+    def first_blank(after: float) -> tuple[float, float] | None:
+        cursor = 0.0
+        for begin, finish in sorted((e["at"], e["until"]) for e in everything()):
+            if begin - cursor > MAX_BLANK_SECONDS and begin > after + 1e-6:
+                return max(cursor, after), begin
+            cursor = max(cursor, finish)
+        if duration - cursor > MAX_BLANK_SECONDS and duration > after + 1e-6:
+            return max(cursor, after), duration
+        return None
+
+    sweep = 0.0
+    for _ in range(40):
+        blank = first_blank(sweep)
+        if not blank:
+            break
+        blank_start, blank_end = blank
+        best = None
         for scene in run:
-            for chunk in scene.get("chunks") or []:
-                moment = starts[scene["index"]] - seq_start + float(chunk["start"])
-                if OPENING_LATEST_SECONDS - 0.2 <= moment < first_at - 0.6:
-                    phrase = short_phrase(str(chunk["text"]), scene.get("chunks"))
-                    if 4 <= len(phrase) <= MAX_TEXT_CHARS:
-                        elements.append({
-                            "id": f"b{len(elements) + 1}", "kind": "text", "scene": scene["index"], "topic": 0, "anchor": "",
-                            "slot": "center", "replaces": None, "anim": "rise", "at": round(max(moment - 0.1, 0.0), 2),
-                            "until": round(first_at + TOPIC_OVERLAP_SECONDS, 2),
-                            "content": {"text": phrase, "color": "red"}, "size": 120,
-                        })
-                        break
-            else:
+            scene_start = starts[scene["index"]] - seq_start
+            if scene_start + scene["duration"] <= blank_start or scene_start >= blank_end:
                 continue
-            break
-        else:
-            phrase = short_phrase(str(run[0]["narration"]))
-            if 4 <= len(phrase) <= MAX_TEXT_CHARS:
-                elements.append({
-                    "id": f"b{len(elements) + 1}", "kind": "text", "scene": run[0]["index"], "topic": 0, "anchor": "",
-                    "slot": "center", "replaces": None, "anim": "rise", "at": OPENING_LATEST_SECONDS,
-                    "until": round(first_at + TOPIC_OVERLAP_SECONDS, 2),
-                    "content": {"text": phrase, "color": "red"}, "size": 120,
-                })
-    # 중간 빈 구간: 앞 요소를 이어 둔다.
-    for _ in range(len(elements) + 1):
-        cursor, changed = 0.0, False
-        for start, end in intervals():
-            if start - cursor > MAX_BLANK_SECONDS and cursor > 0:
-                for element in elements:
-                    if abs(element["until"] - cursor) < 1e-6:
-                        element["until"] = round(start + TOPIC_OVERLAP_SECONDS, 2)
-                        changed = True
-            cursor = max(cursor, end)
-        if cursor < duration - MAX_BLANK_SECONDS:
-            for element in elements:
-                if abs(element["until"] - cursor) < 1e-6:
-                    element["until"] = round(duration, 2)
-                    changed = True
-        if not changed:
-            break
-    return sorted(elements, key=lambda e: e["at"])
+            found = candidate(scene)
+            if not found:
+                continue
+            found["at"] = round(max(found["at"], blank_start), 2)
+            if found["at"] < blank_end - 0.5 and (best is None or found["at"] < best["at"]):
+                best = found
+        if not best:
+            sweep = blank_end            # 이 빈 구간에는 채울 것이 없다 — 다음 빈 구간으로
+            continue
+        best["topic"] = 0
+        best["until"] = round(min(blank_end + TOPIC_OVERLAP_SECONDS, best["at"] + 6.0), 2)
+        added.append(best)
+        sweep = best["at"]
+    for number, element in enumerate(added, start=1):
+        element["id"] = f"b{len(elements) + number}"
+    return sorted(elements + added, key=lambda e: e["at"])
 
 
 def sequence_signature(run: list[dict]) -> str:
@@ -807,7 +852,7 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
         designed = resolve_lifetimes(_fallback_elements(run, plan), duration, merge_short=False)
     if not designed:
         return None
-    designed = _cover_blanks(designed, run, plan, duration)
+    designed = _fill_blanks(_expire_stale_topics(designed, run, plan), run, plan, duration)
     return {
         "id": 0, "version": SEQUENCE_VERSION, "scenes": [s["index"] for s in run], "start": round(seq_start, 2),
         # 장면별 시퀀스 시간축 시작점: 장면 클립은 이 구간만 잘라 낸다
@@ -815,6 +860,38 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
         "duration": duration, "end": round(seq_start + duration, 2), "source": source,
         "signature": sequence_signature(run), "elements": designed,
     }
+
+
+SYNC_EARLY_SECONDS = 0.3     # 말하기보다 이만큼 이상 먼저 뜨면 싱크 불일치
+SYNC_LATE_SECONDS = 2.5      # 말한 뒤 이만큼 이상 늦게 뜨면 싱크 불일치(템플릿 안에서 일부러 늦추는 요소는 이보다 짧다)
+
+
+def audit_sequence_sync(plan: dict) -> dict:
+    """시퀀스 요소가 그 구절을 말하는 순간에 맞게 뜨는지 사후 점검한다(2026-10-18 운영자 피드백: 미국 채권 시장이 너무 일찍 뜬다).
+
+    자막 줄 시각으로 구절을 찾을 수 있는 요소만 비교한다. 결과는 계획서에 남겨 새 주제의 Job에서도 확인할 수 있게 한다."""
+    scenes = {s["index"]: s for s in plan.get("scenes", [])}
+    starts = _scene_starts(plan)
+    checked, flagged = 0, []
+    for seq in plan.get("sequences", []):
+        run = [scenes[i] for i in seq.get("scenes", []) if i in scenes]
+        if not run:
+            continue
+        seq_start = starts[run[0]["index"]]
+        for element in seq.get("elements", []):
+            scene, anchor = scenes.get(element.get("scene")), element.get("anchor")
+            if not scene or not anchor or not element.get("topic"):
+                continue
+            spoken = phrase_offset(scene.get("chunks") or [], anchor)
+            if spoken is None:
+                continue
+            checked += 1
+            delta = round(element["at"] - (starts[scene["index"]] - seq_start + spoken), 2)
+            if delta < -SYNC_EARLY_SECONDS or delta > SYNC_LATE_SECONDS:
+                flagged.append({"sequence": seq.get("id"), "element": element.get("id"), "scene": scene["index"],
+                                "anchor": anchor, "delta": delta, "verdict": "early" if delta < 0 else "late"})
+    plan["sync_audit"] = {"checked": checked, "out_of_sync": flagged}
+    return plan["sync_audit"]
 
 
 def attach_sequences(plan: dict, *, llm_call=None, workers: int = 4) -> dict:
@@ -844,6 +921,7 @@ def attach_sequences(plan: dict, *, llm_call=None, workers: int = 4) -> dict:
         else:
             scene.pop("sequence_id", None)
     plan["sequences"] = sequences
+    audit_sequence_sync(plan)
     return plan
 
 

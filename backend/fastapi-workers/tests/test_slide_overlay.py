@@ -458,3 +458,15 @@ def test_stat_chart_shrinks_long_value_labels_so_neighbouring_labels_do_not_over
     for k in range(1, len(items)):
         edge = left + k * slot
         assert not any(yellow(image.getpixel((edge + dx, y))) for y in band for dx in (-3, 0, 3))
+
+
+def test_chart_with_an_empty_title_is_kept_not_dropped():
+    """제목 검수가 근거 없는 제목을 빈 문자열로 바꿔도 그래프 자체는 남아야 한다(2026-10-18: 빈 제목 때문에 칠판이 통째로 비었다)."""
+    plan = validate_overlay_plan(
+        [{"index": 3, "type": "stat_chart", "title": "", "items": [
+            {"label": "코스피", "value_text": "7.6퍼센트"},
+            {"label": "S&P500", "value_text": "1.1퍼센트"},
+        ]}],
+        BRIEFS,
+    )
+    assert plan[3]["type"] == "stat_chart" and plan[3]["title"] == ""

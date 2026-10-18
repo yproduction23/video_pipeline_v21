@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+from app.services.slide_logos import logo_labels, logo_sprite, resolve_logo, spoken_form
 from app.services.slide_streak import STREAK_MAX_DAYS, STREAK_MIN_DAYS, streak_layers
 from app.services.slide_timing import duplicates_subtitle
 
@@ -73,6 +74,8 @@ _PLAN_SYSTEM_PROMPT = (
     '- "flow": 개념이 A에서 B로 이어지는 흐름(원인→결과, 자산→현금)을 말할 때. {"nodes": [{"label": 8자 이내(숫자 금지), "icon": 아이콘 이름}] 2~3개}\n'
     '- "streak": 내레이션이 "N일(거래일·주·개월) 연속"을 말할 때 — 달력에 날짜 칸 N개가 나오고 X가 차례로 쳐지는 그림. '
     '{"count": 내레이션에 글자 그대로 있는 구절(예: "8거래일"), 2~14}. 이런 표현이 있으면 key_text 대신 반드시 쓴다.\n'
+    '- "logo_row": 내레이션이 아래 목록의 상장사 이름을 말할 때(특히 삼성전자·SK하이닉스처럼 회사를 나열하거나 한 회사가 주인공일 때) 그 회사 로고가 말하는 순간마다 하나씩 뜬다. '
+    '{"companies": [내레이션에 글자 그대로 있는 회사 이름 1~4개]}. 가능한 회사: ' + ", ".join(logo_labels()) + "\n"
     '- "article_card": 장면 정보에 article이 있고, 그 보도 인용이 신뢰를 더해주는 장면에서만. 추가 필드 없음.\n\n'
     "공통 선택 필드:\n"
     '- "explain": true/false — 이 장면은 배경 영상보다 설명(인포그래픽) 자체가 중심이다. true면 스톡/AI 배경을 '
@@ -233,7 +236,7 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
             title = str(entry.get("title") or "").strip()[:18]
             items = [str(i).strip() for i in (entry.get("items") or []) if str(i).strip()]
             items = [i for i in items if len(i) <= 24 and _in_narration(i, narration)][:4]
-            if len(items) >= 2 and _title_is_grounded(title, narration):
+            if len(items) >= 2 and (not title or _title_is_grounded(title, narration)):  # 제목 검수에서 뺀 경우(빈 제목)도 허용
                 plan[index] = {"type": "bullet_list", "title": title, "items": items, "explain": explain}
         elif kind == "stat_chart":
             title = str(entry.get("title") or "").strip()[:24]
@@ -246,7 +249,7 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
                 parsed = _parse_value(value_text)
                 if label and parsed and _in_narration(value_text, numeric_ground):
                     items.append({"label": label, "value_text": value_text, "value": parsed[0], "unit": parsed[1]})
-            if len(items) >= 2 and _title_is_grounded(title, numeric_ground):
+            if len(items) >= 2 and (not title or _title_is_grounded(title, numeric_ground)):  # 빈 제목 허용(2026-10-18)
                 plan[index] = {"type": "stat_chart", "title": title, "items": items, "explain": explain}
             elif brief.get("has_numeric_series"):
                 plan[index] = {"type": "stat_chart", "title": title, "items": [], "use_article_series": True,
@@ -282,6 +285,16 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
                     nodes.append({"label": label, "icon": node_icon if node_icon in ICON_NAMES else None})
             if len(nodes) >= 2:
                 plan[index] = {"type": "flow", "nodes": nodes, "explain": explain}
+        elif kind == "logo_row":
+            # 회사 로고: 이름·별칭이 로고 목록과 정확히 일치하고 내레이션에 글자 그대로 있는 회사만(말하는 순간 뜨도록 말한 표기를 함께 둔다).
+            found: list[dict] = []
+            for company in entry.get("companies") or []:
+                spoken = spoken_form(company, narration)
+                label = resolve_logo(company)
+                if label and spoken and all(item["name"] != label for item in found):
+                    found.append({"name": label, "phrase": spoken})
+            if found:
+                plan[index] = {"type": "logo_row", "logos": found[:4], "explain": False}
         elif kind == "streak":
             # 연속 일수 달력: 일수 문구는 내레이션에 글자 그대로 있어야 하고 2~14일만 그린다.
             phrase = str(entry.get("count") or "").strip()
@@ -763,6 +776,44 @@ def render_compare_numbers_layers(
         return paths
     except Exception:
         logger.exception("비교 수치 오버레이 렌더링 실패")
+        return None
+
+
+LOGO_ROW_GAP = 90
+
+
+def render_logo_row_layers(*, logos: list[dict], output_path: str, canvas: tuple[int, int] = CANVAS) -> list[str] | None:
+    """회사 로고 줄: 로고마다 한 층(말하는 순서대로 하나씩 나타난다). 줄 전체가 가운데에 오도록 자리를 먼저 정한다."""
+    try:
+        sprites = [logo_sprite(item["name"], height=300) for item in logos]
+        if not sprites or any(s is None for s in sprites):
+            return None
+        width, height = canvas
+        total = sum(s.width for s in sprites) + LOGO_ROW_GAP * (len(sprites) - 1)
+        scale = min(1.0, (width * 0.82) / max(total, 1))
+        if scale < 1.0:
+            sprites = [s.resize((max(int(s.width * scale), 1), max(int(s.height * scale), 1)), Image.LANCZOS) for s in sprites]
+            total = sum(s.width for s in sprites) + int(LOGO_ROW_GAP * scale) * (len(sprites) - 1)
+        x = (width - total) // 2
+        center_y = int(height * 0.42)
+        paths: list[str] = []
+        for k, sprite in enumerate(sprites):
+            layer = Image.new("RGBA", canvas, (0, 0, 0, 0))
+            panel = ImageDraw.Draw(layer)
+            pad = 36
+            panel.rounded_rectangle(
+                (x - pad, center_y - sprite.height // 2 - pad, x + sprite.width + pad, center_y + sprite.height // 2 + pad),
+                radius=40, fill=(12, 16, 24, 150),
+            )
+            layer.alpha_composite(sprite, (x, center_y - sprite.height // 2))
+            path = output_path if k == 0 else _layer_path(output_path, k)
+            if not _save(layer, path):
+                return None
+            paths.append(path)
+            x += sprite.width + int(LOGO_ROW_GAP * scale)
+        return paths
+    except Exception:
+        logger.exception("회사 로고 줄 렌더링 실패")
         return None
 
 

@@ -23,6 +23,7 @@ const TYPE_LABEL = {
   slide_compare_numbers: '수치 비교',
   slide_flow: '흐름도',
   slide_streak: '연속 일수 달력',
+  slide_logo_row: '회사 로고',
   slide_motion_part: '움직임 그래픽',
 }
 
@@ -286,7 +287,7 @@ const BACKGROUND_TONE = {
 const OVERLAY_LABEL = {
   key_text: '강조 텍스트', big_number: '큰 숫자', compare_numbers: '수치 비교', flow: '흐름도',
   bullet_list: '목록', stat_chart: '수치 그래프', equation: '계산식', article_card: '기사 카드',
-  streak: '연속 일수 달력', motion_part: '연상 그래픽',
+  streak: '연속 일수 달력', motion_part: '연상 그래픽', logo_row: '회사 로고',
 }
 const MOTION_PART_LABEL = {
   move: '이동', gauge: '게이지', balance: '저울', spread: '확산(도미노)', support: '받침', pile: '쌓임',
@@ -337,6 +338,9 @@ function overlayLines(overlay) {
       break
     case 'article_card':
       lines.push('기사 카드(보도 인용)')
+      break
+    case 'logo_row':
+      lines.push(`회사 로고 ${(overlay.logos || []).map((item) => item.name).join(' · ')} (말하는 순간마다 하나씩)`)
       break
     case 'streak':
       lines.push(`연속 일수 달력 “${overlay.phrase || overlay.count}” (날짜 칸마다 X가 차례로)`)

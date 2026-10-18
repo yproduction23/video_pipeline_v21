@@ -174,3 +174,16 @@ def test_new_part_params_are_validated_against_the_narration_and_the_motif_libra
     assert validate_part("mood", {"motif": "경광등", "label": "공포 분위기"}, narration) == {"motif": "경광등", "label": "공포 분위기"}
     assert validate_part("mood", {"motif": "없는 소재"}, narration) is None
     assert validate_part("move", {"item": "달러 지폐 더미", "source_motif": "은행 건물", "arrival": "burst"}, narration)["arrival"] == "burst"
+
+
+def test_counter_counts_up_from_zero_and_ends_on_the_original_value():
+    """2026-10-18 운영자 피드백: 숫자가 차르르 올라가는 연출. 올라가는 도중의 숫자는 연출일 뿐, 마지막에는 원문 값 그대로다."""
+    from app.services.slide_motion_parts import is_countable
+    from app.services.slide_sequence import _number_text
+
+    assert is_countable("7.6%") and is_countable("4조 5천억 원") and not is_countable("급락")
+    assert _number_text("12,345명", 0.0).startswith("0") and _number_text("12,345명", 1.0) == "12,345명"
+    start, middle, end = (part_sprite("counter", {"value": "12,345명", "label": "순매도"}, p) for p in (0.0, 0.5, 1.0))
+    assert start.size == middle.size == end.size            # 숫자가 변해도 그림 크기가 흔들리지 않는다
+    assert _opaque_pixels(start) < _opaque_pixels(end)      # 0에서 시작해 점점 또렷해진다
+    assert middle.tobytes() != end.tobytes()

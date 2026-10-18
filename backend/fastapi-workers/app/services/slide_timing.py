@@ -77,3 +77,48 @@ def overlay_start_offset(chunks: list[dict], phrase: object, duration: float) ->
     if spoken is None:
         return DEFAULT_OVERLAY_OFFSET
     return min(max(spoken - 0.15, 0.2), max(float(duration) - 1.0, 0.2))
+
+
+def sentence_end_offset(narration: str, chunks: list[dict], duration: float, anchor: object) -> float:
+    """구절이 속한 문장이 끝나는 시각(장면 시작 기준 초). 문장 끝은 . ? ! 이고, 자막 줄 시각이 있으면 그 문장의 마지막 줄이 끝나는 시각을 쓴다.
+
+    2026-10-18 운영자 피드백: 이야기가 다음으로 넘어간 뒤에도 앞 그래픽이 남아 있다. 그래픽은 그 구절이 속한 문장이 끝나면(여유 조금) 물러나야 한다."""
+    text = str(narration or "")
+    target = str(anchor or "")
+    position = text.find(target) if target else -1
+    if position < 0:
+        compact_text, compact_target = compact(text), compact(target)
+        found = compact_text.find(compact_target) if compact_target else -1
+        if found < 0:
+            return float(duration)
+        # 공백 없는 위치를 원문 위치로 되돌린다.
+        seen = 0
+        for index, char in enumerate(text):
+            if compact(char):
+                if seen == found:
+                    position = index
+                    break
+                seen += 1
+        if position < 0:
+            return float(duration)
+    end = len(text)
+    for index in range(position, len(text)):
+        if text[index] in ".?!":
+            end = index
+            break
+    tail = compact(text[max(position, end - 8):end])
+    if chunks and tail:
+        joined, spans = "", []
+        for chunk in chunks:
+            piece = compact(chunk.get("text"))
+            if piece:
+                spans.append((len(joined), len(joined) + len(piece), float(chunk["end"])))
+                joined += piece
+        found = joined.rfind(tail)
+        if found >= 0:
+            last_char = found + len(tail) - 1
+            for begin, finish, chunk_end in spans:
+                if begin <= last_char < finish:
+                    return round(min(chunk_end, float(duration)), 2)
+    ratio = end / max(len(text), 1)
+    return round(min(ratio * float(duration), float(duration)), 2)

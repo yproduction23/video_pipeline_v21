@@ -100,7 +100,13 @@ def _fake_composer(monkeypatch, seen=None):
     for name in ("render_news_clip_overlay", "render_stat_overlay", "render_key_text_overlay",
                  "render_bullet_overlay"):
         monkeypatch.setattr(f"app.workers.slides_worker.{name}", write_overlay(name))
+    def fake_part(*, output_path, part, params, **kw):
+        seen.setdefault("parts", []).append({"part": part, "params": params, **kw})
+        Path(output_path).write_bytes(b"fake-part-mp4")
+        return True
+
     monkeypatch.setattr("app.workers.slides_worker.compose_animated_overlay", fake_compose)
+    monkeypatch.setattr("app.workers.slides_worker.compose_motion_part", fake_part)
     monkeypatch.setattr("app.workers.slides_worker._extract_first_frame_at", fake_frame)
     return seen
 
@@ -1173,9 +1179,10 @@ def test_carried_overlay_is_shown_from_the_first_frame_without_an_entrance(monke
     result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
 
     composed = seen["composed"]
-    assert len(composed) == 2
-    assert composed[0]["start_offset"] > 0                      # 처음 장면은 말하는 순간에 맞춰 등장
-    assert composed[1]["start_offset"] == 0 and composed[1]["motion"] == "none"
+    assert len(composed) == 1                                   # 이어받는 장면만 정지 숫자로 합성한다
+    assert composed[0]["start_offset"] == 0 and composed[0]["motion"] == "none"
+    first = seen["parts"][0]                                    # 처음 장면은 0에서 올라가는 카운트업(말하는 순간에 맞춰 시작)
+    assert first["part"] == "counter" and first["params"]["value"] == "5.3%" and first["fade_out"] is False
 
 
 def test_disclaimer_pause_marks_the_scene_for_a_narration_pause_instead_of_overlaying_the_card(monkeypatch, tmp_path):

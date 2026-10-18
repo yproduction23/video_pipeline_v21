@@ -335,7 +335,7 @@ def plan_violations(plan: dict) -> dict:
     }
 
 
-CARRY_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "bullet_list", "flow", "equation"}
+CARRY_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "equation"}  # 목록·흐름은 이어 붙이지 않는다(2026-10-18: "정리" 목록이 다시 나옴)
 
 
 def apply_metaphor_cues(scenes: list[dict]) -> None:

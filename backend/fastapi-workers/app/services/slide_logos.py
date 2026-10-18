@@ -118,3 +118,22 @@ def logo_sprite(name: str, directory: Path | str | None = None, height: int = CA
     canvas = Image.new("RGBA", (logo.width + pad * 2, logo.height + pad * 2), (0, 0, 0, 0))
     canvas.alpha_composite(logo, (pad, pad))
     return _with_rim(canvas)
+
+
+def spoken_form(name: object, narration: str, directory: Path | str | None = None) -> str | None:
+    """회사(이름·별칭)가 내레이션에 글자 그대로 나오면 그 표기를 돌려준다(없으면 None) — 로고가 뜰 시각을 정하는 기준.
+
+    별칭 중 가장 긴 것부터 확인해 "SK하이닉스"가 "SK"로 잘못 잡히지 않게 한다."""
+    label = resolve_logo(name, directory)
+    if not label:
+        return None
+    library = _library(str(directory or LOGO_DIR))
+    forms = [alias for alias, target in library["aliases"].items() if target == label]
+    squashed = "".join(str(narration or "").split()).lower()
+    for form in sorted(forms, key=len, reverse=True):
+        if form and "".join(form.split()) in squashed:
+            # 원문 표기 그대로 돌려준다(대소문자 포함).
+            start = squashed.find("".join(form.split()))
+            compact_original = "".join(str(narration).split())
+            return compact_original[start:start + len("".join(form.split()))]
+    return None

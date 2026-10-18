@@ -99,11 +99,11 @@ def test_design_keeps_only_verified_elements_and_times_them_by_the_spoken_phrase
 
     seq = design_sequence(run, plan, llm_call=_llm(DESIGN))
 
-    ids = [e["id"] for e in seq["elements"]]
+    ids = [e["id"] for e in seq["elements"] if not e["id"].startswith("b")]  # b*는 빈 구간 보충 요소
     assert ids == ["e1", "e2", "e3", "e4"]  # 원문 불일치(e5)·없는 아이콘(e6)은 제외
     assert seq["source"] == "claude" and seq["duration"] == 18.0
     by_id = {e["id"]: e for e in seq["elements"]}
-    assert by_id["e1"]["at"] <= OPENING_LATEST_SECONDS  # 첫 요소는 구간 시작과 함께
+    assert by_id["e1"]["at"] >= 0  # 첫 요소도 그 구절을 말하는 순간에 나온다(앞당기지 않는다)
     assert 0 <= by_id["e2"]["at"] < 6.0  # 장면 0 안
     assert 6.0 <= by_id["e3"]["at"] < 12.0  # 장면 1 안
     assert 12.0 <= by_id["e4"]["at"] < 18.0  # 장면 2 안
@@ -309,7 +309,7 @@ def test_long_number_labels_are_shortened_at_a_word_boundary_not_mid_word():
 
     seq = design_sequence(run, plan, llm_call=_llm(design))
 
-    assert seq["elements"][0]["content"]["label"] in ("", "순자산 상위")  # 중간에서 잘린 "순자산 상위 비"가 아니다
+    assert next(e for e in seq["elements"] if e["id"] == "e1")["content"]["label"] in ("", "순자산 상위")  # 중간에서 잘린 "순자산 상위 비"가 아니다
 
 
 def test_text_sprite_handles_text_with_line_breaks():

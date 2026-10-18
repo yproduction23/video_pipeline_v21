@@ -73,7 +73,7 @@ def test_compare_pair_puts_two_same_structure_columns_on_one_row_with_the_operat
     assert symbols[0]["at"] < _by_kind(seq, "icon")[1]["at"] + 1  # 두 번째 항목이 나올 때 기호도 함께
     for first in seq["elements"]:
         for second in seq["elements"]:
-            if first is not second and first["topic"] == second["topic"]:  # 같은 시간에 함께 보이는 요소끼리만
+            if first is not second and first["topic"] == second["topic"] and first["topic"] > 0:  # 같은 시간에 함께 보이는 요소끼리만
                 assert not _overlap(first, second)
 
 
@@ -136,12 +136,12 @@ def test_topics_are_laid_out_by_the_template_and_not_moved_by_the_free_placement
 
     seq = _design([first, second])
 
-    assert {e["topic"] for e in seq["elements"]} == {1, 2}
+    assert {e["topic"] for e in seq["elements"] if e["topic"] > 0} == {1, 2}  # 0은 빈 구간 보충 요소
     pair_icons = [e for e in seq["elements"] if e["topic"] == 1 and e["kind"] == "icon"]
     assert sorted(e["pos"][0] for e in pair_icons) == [560, 1360]
     topic_one_until = {e["until"] for e in seq["elements"] if e["topic"] == 1}
     topic_two_start = min(e["at"] for e in seq["elements"] if e["topic"] == 2)
-    assert topic_one_until == {round(topic_two_start + 0.12, 2)}  # 주제가 바뀔 때 한꺼번에 사라지고(잠깐 교차) 바로 이어진다
+    assert len(topic_one_until) == 1 and max(topic_one_until) <= round(topic_two_start + 0.12, 2)  # 한꺼번에 사라지고, 다음 주제 뒤까지 남지 않는다
 
 
 def _design_with_judge(topics, ok):

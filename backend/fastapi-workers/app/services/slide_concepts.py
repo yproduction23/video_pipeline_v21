@@ -219,7 +219,7 @@ _PART_OF_TOOL = {
     "motif_spread": "spread", "motif_support": "support", "motif_pile": "pile",
 }
 # 숫자·계산이 핵심인 후편집, 기사 카드, 달력은 연출 결과로 덮어쓰지 않는다(숫자가 화면의 중심이다).
-_KEEP_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "equation", "article_card", "streak", "bullet_list", "flow"}
+_KEEP_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "equation", "article_card", "streak", "bullet_list", "flow", "logo_row"}
 
 
 # 연상 그림은 적게·다양하게·천천히(2026-10-18 운영자 피드백: 너무 빠르고 조잡하다, 같은 장면이 자주 나온다).
