@@ -174,3 +174,80 @@ def test_a_number_the_previous_scene_already_showed_is_not_repeated_by_the_seque
     seq = design_sequence(run, plan, llm_call=_approving({"topics": [topic]}))
 
     assert not [e for e in (seq or {"elements": []})["elements"] if e["kind"] == "number"]
+
+
+def test_concept_candidates_on_scenes_with_red_key_text_are_picked_first():
+    from app.services.slide_concepts import apply_concepts
+
+    plan = _scenes_plan_for_priority()
+    concepts = {"concepts": [
+        {"index": 0, "evokes": "x", "tool": "motif_chart", "tool_ready": True, "motifs": [], "importance": 2,
+         "params": {"direction": "fall", "label": "외국인이"}},
+        {"index": 1, "evokes": "x", "tool": "motif_chart", "tool_ready": True, "motifs": [], "importance": 2,
+         "params": {"direction": "fall", "label": "외국인이"}},
+    ], "missing": []}
+
+    updated = apply_concepts(plan, concepts)
+
+    assert (updated["scenes"][1]["overlay"] or {}).get("type") == "motion_part"      # 같은 중요도면 빨간 글 장면이 먼저
+    assert (updated["scenes"][0]["overlay"] or {}).get("type") != "motion_part"      # 같은 설명이라 60초 안 반복은 막힌다
+
+
+def _scenes_plan_for_priority():
+    from app.services.slide_edit_plan import assemble_plan
+
+    briefs = {i: {"narration": f"외국인이 팔았고 자금이 빠져나갔습니다 {i}.", "duration": 4.0} for i in range(2)}
+    entries = [{"index": 0, "background": "stock", "stock_queries": ["q"], "overlay": None},
+               {"index": 1, "background": "stock", "stock_queries": ["q"], "overlay": {"type": "key_text", "text": "외국인이 팔았고"}}]
+    return assemble_plan(briefs, entries, job_id=1)
+
+
+def test_red_headline_is_limited_per_sequence_and_the_role_hint_reaches_the_design_prompt():
+    """2026-10-18 운영자 합의: 빨간 글은 구간당 1개까지, 장면의 역할([역할: ...])이 설계 입력에 실린다."""
+    plan = _plan()
+    plan["visual_concepts"] = {"concepts": [{"index": 0, "role": "claim", "tool": "none", "evokes": ""},
+                                            {"index": 1, "role": "action", "tool": "motif_move", "evokes": "자금이 빠져나가는 상자"}]}
+    prompts = []
+
+    def llm(system, messages, max_tokens):
+        if "아이콘 검수자" in system:
+            return json.dumps({"ok": []})
+        prompts.append(messages[0]["content"])
+        topics = [{"template": "headline_sub", "scene": 0, "anchor": "외국인 이탈과", "headline": "외국인 이탈과"},
+                  {"template": "headline_sub", "scene": 1, "anchor": "완충재 감소", "headline": "완충재 감소"}]
+        return json.dumps({"topics": topics}, ensure_ascii=False)
+
+    seq = design_sequence(board_runs(plan)[0], plan, llm_call=llm)
+
+    assert "[역할: claim]" in prompts[0] and "[역할: action / 떠올릴 그림: 자금이 빠져나가는 상자]" in prompts[0]
+    red_topics = {e["topic"] for e in seq["elements"] if e["topic"] > 0 and e["kind"] == "text" and e["content"].get("color") == "red"}
+    assert len(red_topics) <= 1
+
+
+def test_a_sequence_too_close_to_the_previous_red_text_is_redesigned_without_red_text():
+    from app.services.slide_sequence import RED_TEXT_MIN_GAP_SECONDS, attach_sequences
+
+    plan = _plan()
+    plan["scenes"][1]["background"] = "stock"                      # 구간 둘: 장면 0, 장면 2
+    calls = []
+
+    def llm(system, messages, max_tokens):
+        if "아이콘 검수자" in system:
+            import re
+            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. 아이콘=", messages[0]["content"], re.M)]})
+        text = messages[0]["content"]
+        calls.append("빨간 글 강조(headline_sub)를 쓰지 않는다" in text)
+        scene = 0 if "외국인 이탈과" in text and "삼성전자와" not in text else 2
+        anchor = "외국인 이탈과" if scene == 0 else "삼성전자와"
+        if "빨간 글 강조(headline_sub)를 쓰지 않는다" in text:
+            topic = {"template": "pictogram", "scene": scene, "anchor": anchor, "icon": "chip", "label": anchor}
+        else:
+            topic = {"template": "headline_sub", "scene": scene, "anchor": anchor, "headline": anchor}
+        return json.dumps({"topics": [topic]}, ensure_ascii=False)
+
+    attach_sequences(plan, llm_call=llm)
+
+    assert RED_TEXT_MIN_GAP_SECONDS == 20.0
+    assert any(calls)                                               # 두 번째 구간은 빨간 글 없이 다시 설계됐다
+    second = [q for q in plan["sequences"] if 2 in q["scenes"]][0]
+    assert not [e for e in second["elements"] if e["topic"] > 0 and e["kind"] == "text" and e["content"].get("color") == "red"]

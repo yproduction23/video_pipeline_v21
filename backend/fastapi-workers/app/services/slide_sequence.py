@@ -73,6 +73,8 @@ MAX_TOPIC_SECONDS = 11.0             # 한 주제가 이보다 길게 정지해 
 FIXED_TOPIC_MIN_SECONDS = 2.5        # 템플릿 주제는 합치지 않으므로 이보다 짧으면 버린다
 MAX_ELEMENTS_PER_TEMPLATE = 8
 MIN_ELEMENT_SECONDS = 1.5            # 주제가 끝나기 전 이만큼도 안 남으면 새 요소를 만들지 않는다
+RED_TOPICS_PER_SEQUENCE = 1          # 구간(회색 배경이 이어지는 구간)당 빨간 글 강조 주제 수(레퍼런스: 2분에 2~3개)
+RED_TEXT_MIN_GAP_SECONDS = 20.0      # 앞 빨간 글 강조와 이만큼 떨어져야 다음 빨간 글을 쓴다
 TOPIC_OVERLAP_SECONDS = 0.12         # 주제 전환 때 앞 주제 요소를 남겨 두는 시간(화면이 비는 깜빡임 방지)
 MIN_UPDATE_SECONDS = 1.5             # 같은 종류 숫자를 제자리에서 바꿀 때 앞 값이 머무는 최소 시간
 MAX_ELEMENTS_PER_TOPIC = 5
@@ -110,7 +112,10 @@ _SEQUENCE_SYSTEM = (
     "7. 같은 단위의 숫자 2~4개를 비교하면(현재 vs 과거, A사 vs B사, 기간별 수치) 아이콘 비교(compare_pair)보다 막대(bars)를 우선한다 — "
     "레퍼런스 영상의 가장 대표적인 카드다. 이유·조건·종류를 2~4개 나열하면(\"첫째, 둘째\", \"A와 B와 C\") list를 우선한다. "
     "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n"
-    "8. 자막을 빨간 글씨로 되풀이하는 headline_sub는 마지막 수단이다(구간당 최대 1개, 자막과 다른 '주제 제목'일 때만). 말하는 대상이 눈에 그려지는 명사(사람·건물·돈·은행·"
+    "8. 화면은 자막이 못 전하는 것을 더해야 한다. 장면 줄에 [역할]이 있으면 따른다: number→큰 숫자·막대·비교 행, action(행위·변화·압력·연쇄)→그림(pictogram·아이콘 있는 flow), "
+    "object(회사·기관·사물 소개)→로고·소재 그림+짧은 라벨, list(진짜 나열)→목록, claim(주장·결론·질문)→자막과 다른 짧은 제목 글(headline_sub), "
+    "link(연결·분위기)→아무것도 얹지 않아도 된다. 빨간 글(headline_sub)은 구간당 " + str(RED_TOPICS_PER_SEQUENCE) + "개까지, 앞 빨간 글과 "
+    + str(int(RED_TEXT_MIN_GAP_SECONDS)) + "초 이상 떨어져야 한다. 자막을 빨간 글씨로 되풀이하는 headline_sub는 마지막 수단이다(구간당 최대 1개, 자막과 다른 '주제 제목'일 때만). 말하는 대상이 눈에 그려지는 명사(사람·건물·돈·은행·"
     "반도체·국기·회사)이거나 방향·압력·충격 같은 장면이면 pictogram이나 아이콘이 있는 flow·compare_pair로 보여 준다. 글이 없는 그림(연상)이 글 강조보다 낫다.\n"
     "9. 내레이션이 아래 '회사 로고' 목록에 있는 회사(삼성전자·SK하이닉스 등)를 말하면 그 회사를 가리키는 아이콘 자리에 로고를 쓴다(icon 필드에 로고 이름 그대로). "
     "회사 이름을 나열하는 구절은 list·flow·compare_pair에서 로고로 보여 주고, 그 회사를 말하는 순간(anchor)에 뜨게 한다.\n\n"
@@ -292,13 +297,15 @@ def _normalize_elements(raw_elements: list, run: list[dict], plan: dict) -> list
     return elements
 
 
-def _fallback_elements(run: list[dict], plan: dict) -> list[dict]:
+def _fallback_elements(run: list[dict], plan: dict, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> list[dict]:
     """Claude 설계가 실패하면 장면별 후편집(이미 검증됨)을 장면 시작 시점의 요소로 이어 붙인다."""
     starts = _scene_starts(plan)
     seq_start = starts[run[0]["index"]]
     elements: list[dict] = []
     for scene in run:
         element = _fallback_scene_element(scene, starts, seq_start, f"e{len(elements) + 1}")
+        if element and element["kind"] == "text" and _red_count(elements) >= red_budget:
+            continue                       # 대체 요소도 빨간 글 강조는 구간당 한도까지만
         if element:
             element["topic"] = len(elements) + 1
             elements.append(element)
@@ -618,8 +625,13 @@ def _repeats_recent(expanded: list[dict], recent: set[str]) -> bool:
     return False
 
 
+def _is_red_topic(expanded: list[dict]) -> bool:
+    return any(e["kind"] == "text" and (e.get("content") or {}).get("color") == "red" for e in expanded)
+
+
 def _topics_to_elements(
     raw_topics: list, run: list[dict], plan: dict, llm_call=None, failures: list[str] | None = None,
+    red_budget: int = RED_TOPICS_PER_SEQUENCE,
 ) -> list[dict]:
     """Claude가 정한 주제(템플릿+내용)를 위치가 정해진 요소로 풀어 시간순으로 돌려준다."""
     raw_topics = fill_missing_icons_in_topics(raw_topics, run, llm_call=llm_call)  # 빠진 아이콘 자리에 라이브러리의 맞는 그림을 먼저 붙인다
@@ -647,6 +659,10 @@ def _topics_to_elements(
             continue
         if _repeats_recent(expanded, recent):
             continue                       # 직전 장면 후편집이 이미 보여 준 숫자·문구는 다시 띄우지 않는다
+        if _is_red_topic(expanded):
+            if red_budget <= 0:
+                continue                   # 빨간 글 강조는 구간당 한도까지만(자막 반복 강조가 너무 많다는 운영자 지적, 2026-10-18)
+            red_budget -= 1
         seen.add(core)
         number += 1
         for element in expanded:
@@ -669,7 +685,11 @@ def _longest_gap(elements: list[dict], duration: float) -> float:
     return max(b - a for a, b in zip(points, points[1:]))
 
 
-def _fill_gaps(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
+def _red_count(elements: list[dict]) -> int:
+    return sum(1 for e in elements if e["kind"] == "text" and (e.get("content") or {}).get("color") == "red")
+
+
+def _fill_gaps(elements: list[dict], run: list[dict], plan: dict, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> list[dict]:
     """템플릿 주제가 거절돼 한 화면이 MAX_TOPIC_SECONDS보다 오래 멈추면, 그 사이 장면의 후편집(이미 검증됨)을 새 주제로 보충한다."""
     if not elements:
         return elements
@@ -689,6 +709,8 @@ def _fill_gaps(elements: list[dict], run: list[dict], plan: dict) -> list[dict]:
             continue
         if fallback["kind"] == "text" and len(fallback["content"]["text"]) > MAX_TEXT_CHARS:
             continue  # 자막과 같은 절을 되풀이하는 긴 문구는 보충하지 않는다
+        if fallback["kind"] == "text" and _red_count([*elements, *added]) >= red_budget:
+            continue  # 빨간 글 강조는 구간당 한도까지만(보충 요소도 예외 없다)
         key = str(fallback["content"].get("value") or fallback["content"].get("text") or "")
         shown = " ".join(json.dumps(e["content"], ensure_ascii=False) for e in [*elements, *added])
         if (key and key in shown) or any(
@@ -740,7 +762,7 @@ def _expire_stale_topics(elements: list[dict], run: list[dict], plan: dict) -> l
     return elements
 
 
-def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float) -> list[dict]:
+def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: float, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> list[dict]:
     """회색 칠판이 비는 구간을, 그 구간을 말하는 장면의 후편집(이미 검증됨)이나 원문 핵심 구절로 채운다 — 앞 그래픽을 붙들고 있지 않는다.
 
     2026-10-18 운영자 피드백: 2분 42초·3분 14초에 아무것도 없었고, 반대로 앞 그래픽이 남아 있는 것도 어색했다. 채우는 요소는 그 구절을
@@ -758,7 +780,7 @@ def _fill_blanks(elements: list[dict], run: list[dict], plan: dict, duration: fl
         fallback = _fallback_scene_element(scene, starts, seq_start, "b0")
         if fallback:
             key = str(fallback["content"].get("value") or fallback["content"].get("text") or "")
-            too_long = fallback["kind"] == "text" and len(key) > MAX_TEXT_CHARS
+            too_long = fallback["kind"] == "text" and (len(key) > MAX_TEXT_CHARS or _red_count(everything()) >= red_budget)
             repeated = (key and key in shown) or any(
                 e["kind"] == fallback["kind"] and e["content"] == fallback["content"] for e in everything()
             )
@@ -816,18 +838,39 @@ def sequence_signature(run: list[dict]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | None:
+def _evoke_hints(plan: dict, run: list[dict]) -> dict[int, str]:
+    """연출 단계가 장면마다 정한 '시청자가 떠올릴 그림'(그림이 필요 없다고 한 장면은 제외)."""
+    indexes = {s["index"] for s in run}
+    hints: dict[int, str] = {}
+    for concept in (plan.get("visual_concepts") or {}).get("concepts") or []:
+        if concept.get("index") not in indexes:
+            continue
+        parts = []
+        if concept.get("role"):
+            parts.append(f"역할: {concept['role']}")
+        if concept.get("tool") not in (None, "", "none") and str(concept.get("evokes") or "").strip():
+            parts.append(f"떠올릴 그림: {str(concept['evokes']).strip()[:60]}")
+        if parts:
+            hints[concept["index"]] = " / ".join(parts)
+    return hints
+
+
+def design_sequence(run: list[dict], plan: dict, *, llm_call=None, red_budget: int = RED_TOPICS_PER_SEQUENCE) -> dict | None:
     """한 회색 배경 구간의 시퀀스(요소 타임라인)를 만든다. Claude 설계가 비면 장면별 후편집으로 대체한다."""
     starts = _scene_starts(plan)
     seq_start = starts[run[0]["index"]]
     duration = round(sum(s["duration"] for s in run), 2)
+    evokes = _evoke_hints(plan, run)
     lines = [
         f"{s['index']} (시작 +{starts[s['index']] - seq_start:.1f}초, {s['duration']:.1f}초): {s['narration']}"
         + (f" [자막 줄: {' | '.join(c['text'] for c in s['chunks'])}]" if s.get("chunks") else "")
+        + (f" [{evokes[s['index']]}]" if s["index"] in evokes else "")
         for s in run
     ]
     prompt = (
-        f"회색 배경이 이어지는 구간(총 {duration}초, 장면 {len(run)}개):" + chr(10) + chr(10).join(lines)
+        f"회색 배경이 이어지는 구간(총 {duration}초, 장면 {len(run)}개)"
+        + ("" if red_budget > 0 else " — 이 구간에는 빨간 글 강조(headline_sub)를 쓰지 않는다(앞 빨간 글과 가깝다)")
+        + ":" + chr(10) + chr(10).join(lines)
         + chr(10) + chr(10) + "이 구간의 요소 타임라인을 JSON으로만 반환:"
     )
     designed: list[dict] = []
@@ -840,7 +883,7 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
         match = re.search(r"\{[\s\S]*\}", cleaned)
         data = json.loads(match.group(0) if match else cleaned)
         if data.get("topics"):
-            return _topics_to_elements(data.get("topics") or [], run, plan, llm_call=llm_call, failures=failures)
+            return _topics_to_elements(data.get("topics") or [], run, plan, llm_call=llm_call, failures=failures, red_budget=red_budget)
         return _normalize_elements(data.get("elements") or [], run, plan)  # 이전 형식(자유 배치 요소)도 받는다
 
     try:
@@ -864,12 +907,12 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
                 chr(10) * 2 + "[재설계 요청] 앞 설계는 모두 거절됐다. 글 강조(headline_sub)를 쓰지 말고, 말하는 대상을 그림으로 보여 주는 "
                 "pictogram이나 아이콘이 있는 flow·compare_pair로 다시 설계해라(라벨은 내레이션 구절 그대로 2~12자)."
             )
-        designed = _fill_gaps(designed, run, plan)
+        designed = _fill_gaps(designed, run, plan, red_budget)
     except Exception as exc:
         logger.warning("시퀀스 설계 실패(장면별 후편집으로 대체): %s", exc)
     # 구간의 모든 장면에 움직임이 있어야 한다(요소가 한 장면도 못 채우면 장면별 후편집을 보충한다).
     if not designed:
-        designed = _fallback_elements(run, plan)
+        designed = _fallback_elements(run, plan, red_budget)
         source = "fallback_overlays"
     if not designed:
         return None
@@ -877,10 +920,10 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
     if not designed and source == "claude":
         # 설계가 규칙(주제 길이·겹침)을 통과하지 못해 비면 장면별 후편집으로 대체한다.
         source = "fallback_overlays"
-        designed = resolve_lifetimes(_fallback_elements(run, plan), duration, merge_short=False)
+        designed = resolve_lifetimes(_fallback_elements(run, plan, red_budget), duration, merge_short=False)
     if not designed:
         return None
-    designed = _fill_blanks(_expire_stale_topics(designed, run, plan), run, plan, duration)
+    designed = _fill_blanks(_expire_stale_topics(designed, run, plan), run, plan, duration, red_budget)
     return {
         "id": 0, "version": SEQUENCE_VERSION, "scenes": [s["index"] for s in run], "start": round(seq_start, 2),
         # 장면별 시퀀스 시간축 시작점: 장면 클립은 이 구간만 잘라 낸다
@@ -888,6 +931,30 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
         "duration": duration, "end": round(seq_start + duration, 2), "source": source,
         "signature": sequence_signature(run), "elements": designed,
     }
+
+
+def _red_elements(seq: dict) -> list[dict]:
+    return [e for e in seq["elements"] if e.get("topic") and e["kind"] == "text" and (e.get("content") or {}).get("color") == "red"]
+
+
+def _space_out_red_text(built: list, runs: list[list[dict]], plan: dict, *, llm_call=None) -> list:
+    """앞 빨간 글 강조와 RED_TEXT_MIN_GAP_SECONDS 안에 또 빨간 글이 있는 구간은 빨간 글 없이 다시 설계한다(빨간 글 사이 간격 확보)."""
+    starts = _scene_starts(plan)
+    last_red_end: float | None = None
+    out = list(built)
+    for position, (seq, run) in enumerate(zip(built, runs)):
+        if not seq:
+            continue
+        origin = starts[run[0]["index"]]
+        reds = _red_elements(seq)
+        if reds and last_red_end is not None and origin + min(e["at"] for e in reds) - last_red_end < RED_TEXT_MIN_GAP_SECONDS:
+            redesigned = design_sequence(run, plan, llm_call=llm_call, red_budget=0)
+            if redesigned:
+                out[position] = seq = redesigned
+                reds = _red_elements(seq)
+        if reds:
+            last_red_end = origin + max(e["until"] for e in reds)
+    return out
 
 
 SYNC_EARLY_SECONDS = 0.3     # 말하기보다 이만큼 이상 먼저 뜨면 싱크 불일치
@@ -939,6 +1006,7 @@ def attach_sequences(plan: dict, *, llm_call=None, workers: int = 4) -> dict:
             built = list(pool.map(build, runs))
     else:
         built = [build(run) for run in runs]
+    built = _space_out_red_text(built, runs, plan, llm_call=llm_call)
     sequences = [seq for seq in built if seq]
     for number, seq in enumerate(sequences, start=1):
         seq["id"] = number

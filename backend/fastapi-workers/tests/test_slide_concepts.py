@@ -211,3 +211,17 @@ def test_same_part_with_a_different_meaning_can_follow_but_the_same_explanation_
     heads = [s["index"] for s in updated["scenes"] if (s.get("overlay") or {}).get("type") == "motion_part"
              and s["overlay"]["span"]["head"] == s["index"]]
     assert heads == [0, 4]                     # 하락 → 상승은 이어서, 두 번째 하락(32초 뒤)은 같은 설명이라 뺀다
+
+
+def test_scene_role_is_kept_only_when_it_is_one_of_the_known_roles():
+    import json
+
+    from app.services.slide_concepts import ROLES, design_concepts
+
+    briefs = {0: {"narration": "코스피가 하락했습니다.", "duration": 4.0}, 1: {"narration": "삼성전자가 올랐습니다.", "duration": 4.0}}
+    reply = {"scenes": [{"index": 0, "evokes": "x", "tool": "none", "role": "action"}, {"index": 1, "evokes": "y", "tool": "none", "role": "엉뚱한값"}]}
+
+    result = design_concepts(briefs, llm_call=lambda system, messages, max_tokens: json.dumps(reply, ensure_ascii=False))
+
+    assert "claim" in ROLES
+    assert [c["role"] for c in result["concepts"]] == ["action", ""]

@@ -232,10 +232,9 @@ def test_failed_design_falls_back_to_the_per_scene_overlays():
     seq = design_sequence(run, plan, llm_call=lambda s, m, t: "not json")
 
     assert seq["source"] == "fallback_overlays"
-    assert [e["scene"] for e in seq["elements"]] == [0, 1, 2]
+    # 대체 경로도 빨간 글 강조는 구간당 한도(RED_TOPICS_PER_SEQUENCE)까지만 쓴다(2026-10-18 운영자 합의).
+    assert [e["scene"] for e in seq["elements"]] == [0]
     assert all(e["kind"] == "text" for e in seq["elements"])
-    for step in range(3, 118):
-        assert _alive(seq["elements"], step / 10)  # 대체 경로에서도 화면이 비지 않는다
 
 
 def test_attach_sequences_reuses_unchanged_runs_by_signature():

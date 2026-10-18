@@ -43,6 +43,8 @@ TOOLS: dict[str, dict] = {
     "motif_pile": {"ready": True, "hint": "소재가 쌓이거나 줄어듦(누적, 감소)"},
 }
 
+ROLES = ("number", "action", "object", "list", "claim", "link")  # 문장의 역할(2026-10-18)
+
 _SYSTEM = (
     "너는 한국 경제 해설 유튜브의 연출가다. 대본을 장면 단위로 읽고, 장면마다 '시청자가 그 말을 들으며 머릿속에 떠올릴 그림'을 "
     "먼저 한 줄로 적는다. 그 그림이 곧 화면에 나올 모션그래픽이다.\n\n"
@@ -75,13 +77,16 @@ _SYSTEM = (
     "- '실적이 추정치를 밑돌았다/웃돌았다(하회·상회), 기대에 못 미쳤다' → motif_target(저울은 쓰지 않는다 — 어느 쪽이 무거운지로 읽혀 뜻이 뒤집힌다).\n"
     "- 저울(motif_balance)은 '두 힘 중 어느 쪽이 더 크고 결정적이다'를 말할 때만, heavier는 대본이 더 크다·중요하다고 말한 쪽이다.\n"
     "- '공포·패닉·불안 분위기', '환호·기대감' → motif_mood(해당 분위기 소재). 이런 장면에 글자만 띄우지 않는다.\n\n"
+    "role: 이 문장이 하는 일 — number(수치·비교), action(행위·변화·압력·연쇄), object(회사·기관·사물 소개), list(이유·조건을 진짜 나열), "
+    "claim(주장·결론·질문), link(연결·분위기). 화면은 자막이 못 전하는 것을 더해야 한다: action·object에는 그림, number에는 숫자 카드, "
+    "list에는 목록, claim에만 자막과 다른 짧은 제목 글, link에는 아무것도 얹지 않는 편이 낫다.\n"
     "span_to: 이 그림이 뜻을 계속 갖는 마지막 장면 번호(같은 문장·같은 이야기가 이어지는 동안만. 대본이 다음 이야기로 넘어가면 그 앞 장면까지. 생략하면 그 장면 하나에서 끝난다).\n"
     "반복 금지: 앞 60초 안에 같은 관계·같은 설명을 이미 그림(흐름·이동 등)으로 보여 줬다면 다시 그리지 않는다.\n"
     "importance: 이 그림이 대본 이해에 얼마나 중요한가 1~3(3=이 대본에서 손꼽히게 중요하고 그림이 없으면 이해가 어려운 장면). "
     "중요도가 1인 장면만 none으로 둔다. 2026-10-18 운영자 피드백: 자막을 빨간 글씨로 또 쓰는 강조가 너무 많고 연상 그림이 더 필요하다 — "
     "힘의 방향·압력·충격·유입·유출·증가·감소가 있는 문장('매도 압력이 지수를 끌어내렸다' 등)은 글 강조 대신 그림(motif_move·motif_mood·motif_chart)으로 옮긴다. "
     "다만 한 그림이 끝나기 전에 다음 그림을 겹쳐 띄우지 않는다.\n\n"
-    '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","importance":1~3,"span_to":번호,"motifs":["현재 소재 이름"],'
+    '출력은 JSON만: {"scenes":[{"index":번호,"evokes":"떠올릴 그림 한 줄","tool":"...","importance":1~3,"role":"number|action|object|list|claim|link","span_to":번호,"motifs":["현재 소재 이름"],'
     '"params":{...부품일 때만},"missing":[{"type":"...","name":"...","description":"..."}]}]}'
 )
 
@@ -159,6 +164,7 @@ def design_concepts(briefs: dict[int, dict], *, llm_call=None) -> dict | None:
             "params": item.get("params") if isinstance(item.get("params"), dict) else {},
             "importance": int(item["importance"]) if str(item.get("importance") or "").isdigit() and 1 <= int(item["importance"]) <= 3 else 1,
             "span_to": int(item["span_to"]) if str(item.get("span_to") or "").isdigit() else index,
+            "role": str(item.get("role") or "").strip() if str(item.get("role") or "").strip() in ROLES else "",
         })
     _fix_invalid_params(concepts, briefs, llm_call)
     ordered = sorted(missing.values(), key=lambda m: (-m["count"], m["name"]))
@@ -274,7 +280,9 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
             rejected += 1
             continue
         candidates.append((concept, part, params))
-    candidates.sort(key=lambda c: (-int(c[0].get("importance") or 1), c[0]["index"]))
+    # 우선순위(연상 > 데이터 카드 > 빨간 글): 빨간 글 강조(key_text)가 들어 있는 장면의 그림 후보를 같은 중요도의 다른 후보보다 먼저 뽑는다.
+    candidates.sort(key=lambda c: (-(int(c[0].get("importance") or 1) + (0.5 if (by_index[c[0]["index"]].get("overlay") or {}).get("type") == "key_text" else 0)),
+                                   c[0]["index"]))
 
     chosen: list[dict] = []
     occupied: set[int] = set()
