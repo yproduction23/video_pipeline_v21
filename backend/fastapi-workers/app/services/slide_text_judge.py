@@ -73,9 +73,7 @@ def judge_fragments(items: list[dict], *, llm_call=None) -> dict[int, str]:
 def fix_key_texts_in_plan(plan: dict, *, llm_call=None) -> dict:
     """계획서 장면의 강조 문구(key_text)를 검수해 뜻이 어긋난 문구를 바꾸거나 뺀다.
 
-    뺀 칠판 장면은 같은 장면 내레이션에서 뽑은 대체 구절로 채운다(비워 두지 않는다)."""
-    from app.services.slide_edit_plan import fallback_key_phrase
-
+    뺀 칠판 장면의 빈 구간은 시퀀스 설계가 그 구간을 말하는 순간의 원문 구절로 채운다(`_fill_blanks`)."""
     uses = []
     for scene in plan.get("scenes", []):
         overlay = scene.get("overlay") or {}
@@ -89,14 +87,8 @@ def fix_key_texts_in_plan(plan: dict, *, llm_call=None) -> dict:
         new = verdicts[item["id"]]
         if new:
             scene["overlay"]["text"] = new
-        elif scene["background"] == "board":
-            replacement = fallback_key_phrase(scene["narration"], scene.get("chunks"))
-            if replacement and _compact(replacement) != _compact(item["text"]):
-                scene["overlay"].update(text=replacement, source="fallback_phrase")
-            else:
-                scene["overlay"] = None
         else:
-            scene["overlay"] = None
+            scene["overlay"] = None  # 알맞은 구절이 없으면 쓰지 않는다(판정 없는 문장 전체를 대신 얹으면 자막과 같은 글이 된다)
         changed += 1
     plan["text_judgement"] = {"checked": len(uses), "changed": changed}
     return plan

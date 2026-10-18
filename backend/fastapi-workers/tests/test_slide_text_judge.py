@@ -29,7 +29,7 @@ def test_a_failed_judgement_changes_nothing():
     assert judge_fragments([{"id": 0, "text": "가", "narration": "가나"}], llm_call=broken) == {}
 
 
-def test_plan_key_text_is_replaced_and_a_dropped_board_text_gets_a_narration_phrase():
+def test_plan_key_text_is_replaced_or_dropped_never_swapped_for_an_unjudged_sentence():
     briefs = {0: {"narration": NARRATION, "context": "", "duration": 6.0}, 1: {"narration": NARRATION, "context": "", "duration": 6.0}}
     entries = [{"index": 0, "background": "board", "overlay": {"type": "key_text", "text": "단순 조정이라고"}},
                {"index": 1, "background": "stock", "overlay": {"type": "key_text", "text": "단순 조정이라고"}}]
@@ -38,7 +38,7 @@ def test_plan_key_text_is_replaced_and_a_dropped_board_text_gets_a_narration_phr
     fix_key_texts_in_plan(plan, llm_call=_reply([{"id": 0, "ok": False, "text": "구조적인 변화가"}, {"id": 1, "ok": False, "text": ""}]))
 
     assert plan["scenes"][0]["overlay"]["text"] == "구조적인 변화가"
-    assert plan["scenes"][1]["overlay"] is None                    # 스톡 장면은 문구를 뺀다
+    assert plan["scenes"][1]["overlay"] is None                    # 알맞은 구절이 없으면 뺀다
     assert plan["text_judgement"] == {"checked": 2, "changed": 2}
 
 
