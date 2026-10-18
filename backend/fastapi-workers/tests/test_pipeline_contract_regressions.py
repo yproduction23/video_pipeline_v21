@@ -105,3 +105,22 @@ def test_slide_job_subtitles_use_the_reference_white_box_and_character_jobs_keep
     character_path = tmp_path / "character.ass"
     LongformWorker()._generate_ass(chunks, str(character_path), scenes=[{"generation_method": "character"}])
     assert ",1,5,2,2,70,70,58,1" in character_path.read_text(encoding="utf-8-sig")
+
+
+def test_subtitle_cues_do_not_blink_off_for_a_frame_between_adjacent_lines(tmp_path, monkeypatch):
+    """2026-10-18 피드백("1프레임 이상한 화면"): 자막 줄 사이 0.03초 틈에서 자막이 한 프레임 사라졌다 — 짧은 틈은 앞 줄을 다음 줄 시작까지 잇는다(글자·시작 시각은 그대로)."""
+    monkeypatch.setitem(runtime_config._state, "subtitle_theme", "economy")
+    path = tmp_path / "gap.ass"
+    chunks = [
+        {"text": "첫 줄", "start": 0.0, "duration": 1.0},
+        {"text": "둘째 줄", "start": 1.0333, "duration": 1.0},      # 1프레임 틈
+        {"text": "셋째 줄", "start": 3.0, "duration": 1.0},          # 1초 틈(그대로 비운다)
+    ]
+
+    LongformWorker()._generate_ass(chunks, str(path), scenes=[])
+
+    lines = [line for line in path.read_text(encoding="utf-8-sig").splitlines() if line.startswith("Dialogue")]
+    ends = [line.split(",")[2] for line in lines]
+    starts = [line.split(",")[1] for line in lines]
+    assert ends[0] == starts[1]                  # 짧은 틈은 이어 붙인다
+    assert ends[1] != starts[2]                  # 긴 틈은 그대로(자막이 없는 구간)

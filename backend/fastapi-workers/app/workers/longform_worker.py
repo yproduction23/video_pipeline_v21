@@ -94,6 +94,7 @@ def _run_subprocess(cmd: str, job_id: int) -> int:
         unregister_process(job_id, p)
 
 NANUM_BOLD = r"C:\Windows\Fonts\malgunbd.ttf" if os.name == "nt" else "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf"
+SUBTITLE_BLINK_GAP_SECONDS = 0.25  # 이보다 짧은 줄 사이 틈은 이어 붙인다
 SLIDE_SUBTITLE_FONT_SIZE = 56  # 슬라이드형 흰 박스 자막 글자 크기(px, 1080p)
 NANUM_REGULAR = r"C:\Windows\Fonts\malgun.ttf" if os.name == "nt" else "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
 
@@ -1196,14 +1197,18 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             return f"{h}:{m:02d}:{sec:05.2f}"
 
         lines = [header]
-        for chunk in chunks:
+        spoken = [c for c in chunks if str(c.get("text", "")).strip()]
+        for number, chunk in enumerate(spoken):
             text = chunk.get("text", "").strip()
-            if not text:
-                continue
 
             start_sec = max(0.0, chunk.get("start", 0.0))
             dur = chunk.get("duration", 3.0)
             end_sec = start_sec + dur  # End time relative to original start
+            # 줄 사이 틈이 0.25초 미만이면 앞 줄을 다음 줄 시작까지 잇는다(자막이 한 프레임 사라져 깜빡이는 것을 막는다, 2026-10-18).
+            if number + 1 < len(spoken):
+                next_start = max(0.0, spoken[number + 1].get("start", 0.0))
+                if 0.0 < next_start - end_sec < SUBTITLE_BLINK_GAP_SECONDS:
+                    end_sec = next_start
 
             display = self._trim_to_limit(text)
 
