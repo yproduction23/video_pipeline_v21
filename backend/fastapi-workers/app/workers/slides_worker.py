@@ -39,6 +39,7 @@ from app import runtime_config
 from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
+from app.services.slide_timing import phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
 from app.services.slide_sequence import render_sequence_clip
@@ -74,6 +75,7 @@ DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
 MAX_CONSECUTIVE_KLING = 2
 # Kling 후작업의 동시 요청 수: 요청 1건이 수 분 걸려 직렬이면 너무 느리고, 너무 많으면 공급자 대기열에서 시간 초과가 난다.
 KLING_UPGRADE_MAX_WORKERS = 3
+DEFAULT_OVERLAY_OFFSET = 0.35  # 자막 줄 시각이 없을 때 후편집이 장면 시작 뒤 나오는 시각(초)
 
 # 배경 층 병렬 생성 동시 작업 수. Kling을 켜면 연속 규칙 때문에 순차 처리한다.
 SLIDE_MAX_WORKERS = max(1, int(os.getenv("SLIDE_MAX_WORKERS", "6")))
@@ -340,6 +342,16 @@ class SlidesWorker:
 
         briefs: dict[int, dict] = {}
         all_narrations = [narration_of(scene) for scene in scenes_meta]
+        # 자막 줄(TTS 청크) 시각: 후편집 등장 시각 맞춤과 자막 중복 글자 검사에 쓴다.
+        try:
+            tts_data = json.loads(tts_meta_json) if isinstance(tts_meta_json, str) else (tts_meta_json or {})
+            tts_chunks = list((tts_data or {}).get("chunks") or [])
+        except (TypeError, ValueError):
+            tts_chunks = []
+        for scene in scenes_meta:
+            scene["caption_chunks_rel"] = scene_chunks(
+                tts_chunks, scene.get("caption_chunk_contract"), float(scene.get("start_seconds") or 0.0),
+            )
         # 계획서는 일부 장면만 다시 만드는 실행에서도 전체 흐름을 기준으로 하므로 모든 장면의 브리프를 만든다.
         for index, scene in enumerate(scenes_meta):
             # 수치 오버레이 검증용: 같은 흐름에서 직전 두 장면이 이미 말한 내용(원문 그대로).
@@ -347,6 +359,7 @@ class SlidesWorker:
             brief = {
                 "narration": narration_of(scene), "context": context,
                 "duration": scene_duration_seconds(scene, float(runtime_config.value("scene_duration_sec"))),
+                "chunks": scene.get("caption_chunks_rel") or [],
             }
             capture = scene.get("article_capture")
             if capture:
@@ -398,6 +411,11 @@ class SlidesWorker:
             plan_failed = False
             plan_scenes = {s["index"]: s for s in edit_plan["scenes"]}
             overlay_plan = {i: s["overlay"] for i, s in plan_scenes.items() if s.get("overlay")}
+            for i, s in plan_scenes.items():
+                source = plan_scenes.get(s.get("carry_from"))
+                if source and source.get("overlay") and not s.get("overlay"):
+                    # 앞 장면의 데이터 그래픽을 이어 받는다(처음부터 떠 있고 등장 연출 없음).
+                    overlay_plan[i] = {**source["overlay"], "carry": True}
             base_plans = plan_scenes
             sequences_by_scene = {
                 index: seq for seq in edit_plan.get("sequences", []) for index in seq["scenes"]
@@ -611,7 +629,7 @@ class SlidesWorker:
                     if not overlay_plan:
                         overlay_plan = {
                             "type": "key_text", "text": base_plan.get("fallback_key_text")
-                            or fallback_key_phrase(narration),
+                            or fallback_key_phrase(narration, scene.get("caption_chunks_rel")),
                             "icon": None, "explain": True, "source": "fallback_phrase",
                         }
                     rendered = True
@@ -769,6 +787,16 @@ class SlidesWorker:
         kind = overlay_plan["type"]
         overlay_png = job_dir / f"scene_{index:03d}_overlay.png"
         spec: dict = {"type": kind, "source": "claude_overlay_plan"}
+        # 그 구절을 말하는 자막 줄에 맞춰 등장한다(말이 시작되기 약간 전). 시각 정보가 없으면 기존 0.35초.
+        carry = bool(overlay_plan.get("carry"))
+        spoken = None if carry else phrase_offset(scene.get("caption_chunks_rel") or [], self._overlay_phrase(overlay_plan))
+        base_offset = 0.0 if carry else (
+            DEFAULT_OVERLAY_OFFSET if spoken is None else min(max(spoken - 0.15, 0.2), max(duration - 1.0, 0.2))
+        )
+        spec["start_offset"] = base_offset
+        carry_kwargs = {"fade_in_seconds": 0.05, "motion": "none"} if carry else {}
+        if carry:
+            spec["carried"] = True
         # 영상 위에 얹는 데이터 카드·목록은 배경을 어둡게 눌러 읽히게 한다(레퍼런스 분석, 스톡 장면의 41%).
         dim_base = kind != "article_card" and out.get("visual_type") in {
             "slide_stock_video", "slide_ai_background", "slide_kling_video",
@@ -805,13 +833,13 @@ class SlidesWorker:
                 raise RuntimeError(f"{kind} 렌더링 실패")
             self._credit_source(layers[0], overlay_plan, capture, spec)
             # 요소가 내레이션 흐름대로 하나씩 나타난다: 레이어마다 시작 시점을 늦춘다.
-            step = 0.9 if len(layers) > 1 else 0.0
+            step = 0.9 if len(layers) > 1 and not carry else 0.0
             last_start = max(duration - 1.0, 0.35)
             for k, layer in enumerate(layers):
                 self._compose_into_clip(
                     index=index, duration=duration, job_dir=job_dir, out=out,
                     overlay_png=Path(layer), suffix=f"composed{k}",
-                    start_offset=min(0.35 + k * step, last_start),
+                    start_offset=min(base_offset + k * step, last_start), **carry_kwargs,
                     dim_base=dim_base and k == 0,  # 이후 층은 이미 눌린 클립 위에 쌓인다
                 )
             spec["overlay_png"] = [str(layer) for layer in layers]
@@ -873,10 +901,35 @@ class SlidesWorker:
             raise RuntimeError(f"알 수 없는 오버레이 종류: {kind}")
 
         self._compose_into_clip(index=index, duration=duration, job_dir=job_dir, out=out,
-                                overlay_png=overlay_png, suffix="composed", dim_base=dim_base)
+                                overlay_png=overlay_png, suffix="composed", dim_base=dim_base,
+                                start_offset=base_offset, **carry_kwargs)
         spec["overlay_png"] = str(overlay_png)
         out["slide_layers"]["overlays"].append(spec)
         out["overlay_type"] = kind
+
+    @staticmethod
+    def _overlay_phrase(overlay_plan: dict) -> str:
+        """후편집이 보여 주는 대표 구절(내레이션에서 그대로 가져온 글자) — 등장 시각을 정하는 기준."""
+        kind = overlay_plan.get("type")
+        if kind == "key_text":
+            return str(overlay_plan.get("text") or "")
+        if kind == "big_number":
+            return str(overlay_plan.get("value") or "")
+        if kind == "compare_numbers":
+            return str(overlay_plan.get("headline") or "")
+        if kind == "flow":
+            nodes = overlay_plan.get("nodes") or []
+            return str(nodes[0].get("label") or "") if nodes else ""
+        if kind == "bullet_list":
+            items = overlay_plan.get("items") or []
+            return str(items[0]) if items else ""
+        if kind == "stat_chart":
+            items = overlay_plan.get("items") or []
+            return str(items[0].get("value_text") or "") if items else ""
+        if kind == "equation":
+            left = overlay_plan.get("left") or []
+            return str(left[0]) if left else ""
+        return ""
 
     @staticmethod
     def _credit_source(png_path: str, overlay_plan: dict, capture: dict, spec: dict, grounded: bool = False) -> None:
@@ -916,6 +969,15 @@ class SlidesWorker:
         card_png = job_dir / f"scene_{index:03d}_banner.png"
         if not render_disclaimer_card(output_path=str(card_png)):
             raise RuntimeError("고지 카드 렌더링 실패")
+        pause_seconds = float(runtime_config.value("slide_disclaimer_pause_seconds") or 0.0)
+        if pause_seconds > 0:
+            # 2026-10-17 운영자 요청: 카드가 나오는 동안 내레이션도 멈춘다. 장면에는 합성하지 않고, 롱폼 조립이 음성에 무음을 끼우고
+            # 이후 자막·장면을 그만큼 밀며 카드 클립을 이 장면 앞에 넣는다.
+            out["pause_before"] = {"seconds": pause_seconds, "card_png": str(card_png)}
+            out["slide_layers"]["overlays"].append({"type": "disclaimer_card", "overlay_png": str(card_png), "pause_seconds": pause_seconds})
+            out["disclaimer_banner"] = True
+            out["sfx_events"] = [{"name": "title_hit", "at": round(float(out.get("start") or 0.0), 3)}]
+            return
         schedule = schedule or {
             "start_offset": 0.0, "hold_seconds": DISCLAIMER_CARD_SECONDS,
             "fade_in_seconds": 0.06, "fade_out_seconds": 0.12, "hold_to_end": False,

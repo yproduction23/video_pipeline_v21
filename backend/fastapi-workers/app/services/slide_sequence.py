@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 from app.services.slide_logos import PREFIX as LOGO_PREFIX, logo_prompt_hint, logo_sprite, resolve_logo
+from app.services.slide_timing import phrase_offset
 from app.services.slide_motifs import PREFIX as MOTIF_PREFIX, motif_prompt_hint, motif_sprite, resolve_motif
 from app.services.slide_templates import expand_topic
 from app.services.slide_overlay import (
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 CANVAS = (1920, 1080)
 FPS = 30
-SEQUENCE_VERSION = "slide-sequence-v3"
+SEQUENCE_VERSION = "slide-sequence-v4"
 RED = EMPHASIS_RED
 GRAY_TEXT = (190, 192, 198)
 WHITE = (255, 255, 255)
@@ -98,7 +99,8 @@ _SEQUENCE_SYSTEM = (
     "4. 같은 템플릿 안의 항목은 항상 같은 구조여야 한다(둘 다 아이콘+글, 또는 둘 다 숫자+글, 또는 둘 다 글).\n"
     "5. 아이콘은 그 순간 말하는 대상을 직접 그린 것만 쓴다(예: '반도체'→chip, '외국인'→foreigner). 뜻이 정확히 맞지 않으면 "
     "아이콘 없이 글만 쓴다. 같은 아이콘을 구간에서 두 번 쓰지 않는다. 장식용 아이콘은 쓰지 않는다.\n"
-    "6. 글은 핵심어(2~3단어)만. 자막 문장을 그대로 되풀이하지 않는다.\n"
+    "6. 글은 핵심어(2~3단어)만. 각 장면의 [자막 줄]에 이미 보이는 말을 그대로 되풀이하지 않는다 — 글자가 자막 한 줄의 70% 이상이면 "
+    "거절된다. 자막이 말하지 않는 정보(대상 이름·수치·단위·결과 라벨)를 보여 준다.\n"
     "7. 같은 단위의 숫자 2~4개를 비교하면(현재 vs 과거, A사 vs B사, 기간별 수치) 아이콘 비교(compare_pair)보다 막대(bars)를 우선한다 — "
     "레퍼런스 영상의 가장 대표적인 카드다. 이유·조건·종류를 2~4개 나열하면(\"첫째, 둘째\", \"A와 B와 C\") list를 우선한다. "
     "compare_pair는 서로 다른 두 대상을 결합·대비할 때(숫자 비교가 아닐 때)만 쓴다. 구간마다 최소 한 주제는 bars·list·rows 중 하나로 만들 수 있는지 먼저 살핀다.\n\n"
@@ -166,7 +168,11 @@ def _scene_starts(plan: dict) -> dict[int, float]:
 
 
 def _anchor_time(scene: dict, scene_start: float, anchor: str) -> float:
-    """장면 내레이션에서 구절 위치 비율로 등장 시각을 정한다(문자 수 비례 근사, 장면 범위로 한정)."""
+    """구절을 말하는 순간을 등장 시각으로 한다. 자막 줄(TTS 청크) 시각이 있으면 그 줄에서, 없으면 장면 안 글자 비율로 근사한다."""
+    spoken = phrase_offset(scene.get("chunks") or [], anchor) if anchor else None
+    if spoken is not None:
+        # 말이 시작되기 직전에 등장해 읽을 시간을 조금 준다(장면 범위로 한정).
+        return round(scene_start + min(max(spoken - 0.1, 0.1), max(scene["duration"] - 0.6, 0.15)), 2)
     narration = scene["narration"]
     position = narration.find(anchor) if anchor else -1
     if position < 0:
@@ -204,7 +210,7 @@ def _validate_content(kind: str, content: dict, scene_index: int, scenes: dict[i
     if kind == "text":
         raw = {"type": "key_text", "index": scene_index, "text": content.get("text")}
     validated = validate_overlay_plan(
-        [raw], {scene_index: {"narration": scene["narration"], "context": context}},
+        [raw], {scene_index: {"narration": scene["narration"], "context": context, "chunks": scene.get("chunks") or []}},
     ).get(scene_index)
     if not validated:
         return None
@@ -663,7 +669,9 @@ def design_sequence(run: list[dict], plan: dict, *, llm_call=None) -> dict | Non
     seq_start = starts[run[0]["index"]]
     duration = round(sum(s["duration"] for s in run), 2)
     lines = [
-        f"{s['index']} (시작 +{starts[s['index']] - seq_start:.1f}초, {s['duration']:.1f}초): {s['narration']}" for s in run
+        f"{s['index']} (시작 +{starts[s['index']] - seq_start:.1f}초, {s['duration']:.1f}초): {s['narration']}"
+        + (f" [자막 줄: {' | '.join(c['text'] for c in s['chunks'])}]" if s.get("chunks") else "")
+        for s in run
     ]
     prompt = (
         f"회색 배경이 이어지는 구간(총 {duration}초, 장면 {len(run)}개):" + chr(10) + chr(10).join(lines)

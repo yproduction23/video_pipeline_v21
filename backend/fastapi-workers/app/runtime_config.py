@@ -114,6 +114,7 @@ _state = {
     "intro_motion_enabled": _cfg.INTRO_MOTION_ENABLED,
     "slide_kling_enabled": _cfg.SLIDE_KLING_ENABLED,
     "slide_stock_miss_ai_max": _cfg.SLIDE_STOCK_MISS_AI_MAX,
+    "slide_disclaimer_pause_seconds": _cfg.SLIDE_DISCLAIMER_PAUSE_SECONDS,
     "intro_motion_test_mode": _cfg.INTRO_MOTION_TEST_MODE,
     "max_image_hold_seconds": _cfg.MAX_IMAGE_HOLD_SECONDS,
     "img_cost_flash_1k_usd": _cfg.IMG_COST_FLASH_1K_USD,

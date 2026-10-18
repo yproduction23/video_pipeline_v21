@@ -249,6 +249,8 @@ def test_disclaimer_is_a_one_second_full_screen_card_with_a_sound_effect_on_the_
 
     monkeypatch.setattr("app.workers.slides_worker.render_disclaimer_card", fake_card)
     monkeypatch.setattr(SlidesWorker, "_disclaimer_scene_index", _REAL_DISCLAIMER_INDEX)
+    # 정지 없이 내레이션이 흐르는 채로 카드를 얹는 방식(slide_disclaimer_pause_seconds=0)
+    monkeypatch.setitem(__import__("app.runtime_config", fromlist=["_state"])._state, "slide_disclaimer_pause_seconds", 0)
 
     result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
 
@@ -1081,3 +1083,124 @@ def test_scene_falls_to_the_ai_background_when_every_candidate_repeats_a_used_cl
     assert first["visual_type"] == "slide_stock_video" and first["pixabay_id"] == 9
     assert second["visual_type"] == "slide_ai_background"
     assert second["stock_miss_reason"] == "near_duplicate_of_used_clip"
+
+
+# ── 싱크(2026-10-17): 후편집은 그 구절을 말하는 자막 줄에 맞춰 나온다 ──
+
+def _timed_scene(narration):
+    return {
+        "content": narration, "start_seconds": 10.0, "end_seconds": 14.0,
+        "caption_chunk_contract": {"chunk_start_index": 0, "chunk_end_index": 1},
+    }
+
+
+def _timed_tts():
+    import json
+
+    return json.dumps({"chunks": [
+        {"index": 0, "text": "외국인은 8거래일 연속", "start": 10.0, "end": 12.0},
+        {"index": 1, "text": "코스피를 팔았습니다", "start": 12.0, "end": 14.0},
+    ]})
+
+
+def test_scene_overlay_appears_when_its_phrase_is_spoken_not_at_scene_start(monkeypatch, tmp_path):
+    worker = SlidesWorker()
+    scene = _timed_scene("외국인은 8거래일 연속 코스피를 팔았습니다.")
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    seen = _fake_composer(monkeypatch)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.plan_slide_overlays",
+        lambda briefs, **kw: {0: {"type": "key_text", "text": "코스피를 팔았", "icon": None, "explain": False}},
+    )
+
+    result = worker.generate(job_id=1, tts_meta_json=_timed_tts(), script_meta_json="{}")
+
+    offset = seen["composed"][0]["start_offset"]
+    assert 1.6 <= offset <= 2.2        # 둘째 줄(2.0초)이 시작될 때, 약간 앞서 나온다
+    assert result["scenes"][0]["slide_layers"]["overlays"][0]["start_offset"] == offset
+
+
+def test_scene_overlay_without_timing_data_keeps_the_default_offset(monkeypatch, tmp_path):
+    worker = SlidesWorker()
+    scene = {"content": "코스피를 팔았습니다.", "start_seconds": 0, "end_seconds": 4}
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    _stub_base_layer(monkeypatch, tmp_path)
+    seen = _fake_composer(monkeypatch)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.plan_slide_overlays",
+        lambda briefs, **kw: {0: {"type": "key_text", "text": "코스피를 팔았", "icon": None, "explain": False}},
+    )
+
+    worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    assert seen["composed"][0]["start_offset"] == 0.35
+
+
+def test_carried_overlay_is_shown_from_the_first_frame_without_an_entrance(monkeypatch, tmp_path):
+    """앞 장면의 데이터 후편집을 이어 받는 장면: 같은 모양이 처음부터 떠 있어 컷을 넘어도 끊기지 않는다."""
+    worker = SlidesWorker()
+    scenes = [
+        {"content": "5.3퍼센트 올랐습니다.", "start_seconds": 0, "end_seconds": 4},
+        {"content": "그 뒤로 시장은 조용했습니다.", "start_seconds": 4, "end_seconds": 8},
+    ]
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared(scenes))
+    _stub_base_layer(monkeypatch, tmp_path, stock=True)
+    monkeypatch.setattr("app.workers.slides_worker.SLIDE_MAX_WORKERS", 1)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.search_candidates",
+        lambda query, **kw: [{"pixabay_id": 9 + len(query) % 7 * 0 + i, "download_url": f"https://e/v{i}.mp4", "tags": "t"} for i in (9, 10)],
+    )
+    monkeypatch.setattr("app.workers.slides_worker.select_best_candidate", lambda n, c, **kw: 0)
+    seen = _fake_composer(monkeypatch)
+    big = {"type": "big_number", "value": "5.3%", "label": "", "icon": None, "explain": False}
+    monkeypatch.setattr(
+        "app.workers.slides_worker.build_edit_plan",
+        lambda *a, **k: {
+            "version": "slide-edit-plan-v4", "job_id": 1, "input_hash": "x", "scene_count": 2, "total_seconds": 8.0,
+            "summary": {}, "segments": [], "sequences": [],
+            "scenes": [
+                {"index": 0, "background": "stock", "stock_queries": ["q"], "overlay": big, "duration": 4.0, "narration": scenes[0]["content"]},
+                {"index": 1, "background": "stock", "stock_queries": ["q"], "overlay": None, "carry_from": 0, "duration": 4.0, "narration": scenes[1]["content"]},
+            ],
+        },
+    )
+    monkeypatch.setattr("app.workers.slides_worker.plan_matches", lambda plan, briefs: False)  # 위 가짜 계획서를 쓰게 한다
+    monkeypatch.setattr("app.workers.slides_worker.load_plan", lambda *a, **k: None)
+    monkeypatch.setattr("app.workers.slides_worker.save_plan", lambda *a, **k: None)
+    monkeypatch.setattr("app.workers.slides_worker.render_big_number_overlay", lambda **kw: [kw["output_path"]])
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    composed = seen["composed"]
+    assert len(composed) == 2
+    assert composed[0]["start_offset"] > 0                      # 처음 장면은 말하는 순간에 맞춰 등장
+    assert composed[1]["start_offset"] == 0 and composed[1]["motion"] == "none"
+
+
+def test_disclaimer_pause_marks_the_scene_for_a_narration_pause_instead_of_overlaying_the_card(monkeypatch, tmp_path):
+    """기본값(1초): 카드는 장면에 합성하지 않고 pause_before로 남긴다. 롱폼이 음성에 무음을 끼워 카드가 나오는 동안 내레이션이 멈춘다."""
+    worker = SlidesWorker()
+    scenes = [
+        {"content": f"장면 {i}", "start_seconds": i * 4, "end_seconds": i * 4 + 4,
+         "section": "intro" if i < 3 else "background"}
+        for i in range(5)
+    ]
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared(scenes))
+    _stub_base_layer(monkeypatch, tmp_path)
+    seen = _fake_composer(monkeypatch)
+    monkeypatch.setattr(
+        "app.workers.slides_worker.render_disclaimer_card",
+        lambda *, output_path, **kw: Path(output_path).write_bytes(b"card") or True,
+    )
+    monkeypatch.setattr(SlidesWorker, "_disclaimer_scene_index", _REAL_DISCLAIMER_INDEX)
+    monkeypatch.setitem(__import__("app.runtime_config", fromlist=["_state"])._state, "slide_disclaimer_pause_seconds", 1.0)
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    scene = result["scenes"][3]
+    assert scene["pause_before"]["seconds"] == 1.0 and scene["pause_before"]["card_png"].endswith("_banner.png")
+    assert scene["disclaimer_banner"] is True
+    assert scene["sfx_events"] == [{"name": "title_hit", "at": 12.0}]
+    assert seen.get("composed", []) == []                  # 장면 위에는 합성하지 않는다
+    assert [s["index"] for s in result["scenes"] if s.get("pause_before")] == [3]

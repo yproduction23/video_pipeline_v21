@@ -144,7 +144,7 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
         board = background == "board"
         overlay = validated.get(index)
         if board and not overlay:
-            overlay = {"type": "key_text", "text": fallback_key_phrase(scene["narration"]), "icon": None,
+            overlay = {"type": "key_text", "text": fallback_key_phrase(scene["narration"], scene.get("chunks")), "icon": None,
                        "source": "fallback_phrase"}
         if overlay:
             overlay = dict(overlay)
@@ -158,7 +158,7 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
         )
         scene["revised" if source == "operator" else "auto_repaired"] = True
         if background == "stock":
-            scene["fallback_key_text"] = fallback_key_phrase(scene["narration"])
+            scene["fallback_key_text"] = fallback_key_phrase(scene["narration"], scene.get("chunks"))
         else:
             scene.pop("fallback_key_text", None)
 
@@ -184,7 +184,7 @@ def replan_scenes(plan: dict, items: list[dict], *, llm_call=None, source: str =
             if scene.get("overlay"):
                 scene["overlay"]["explain"] = True
             else:
-                scene["overlay"] = {"type": "key_text", "text": fallback_key_phrase(scene["narration"]),
+                scene["overlay"] = {"type": "key_text", "text": fallback_key_phrase(scene["narration"], scene.get("chunks")),
                                     "icon": None, "explain": True, "source": "fallback_phrase"}
             demoted.append(scene["index"])
 

@@ -361,3 +361,63 @@ def test_plan_marks_overlays_on_stock_as_on_footage_so_clause_length_text_is_dro
 
     assert plan["scenes"][0]["overlay"] is None
     assert plan["scenes"][1]["overlay"]["text"] == "코어위브의 주가가 급락했습니다"
+
+
+def test_plan_scenes_keep_the_caption_chunks_and_sequence_anchors_use_them():
+    """계획서 장면에 자막 줄 시각이 보존되고, 시퀀스 등장 시각은 구절이 속한 줄에서 정해진다."""
+    from app.services.slide_sequence import _anchor_time
+
+    scene = {"narration": "외국인은 8거래일 연속 코스피를 팔았습니다.", "duration": 4.0,
+             "chunks": [{"text": "외국인은 8거래일 연속", "start": 0.0, "end": 1.5},
+                        {"text": "코스피를 팔았습니다", "start": 1.5, "end": 4.0}]}
+    ratio_only = {k: v for k, v in scene.items() if k != "chunks"}
+
+    assert 11.3 <= _anchor_time(scene, 10.0, "코스피를") <= 11.6               # 둘째 줄 시작(1.5초) 직전
+    assert _anchor_time(scene, 10.0, "코스피를") != _anchor_time(ratio_only, 10.0, "코스피를")
+
+
+def test_fallback_key_phrase_avoids_repeating_the_subtitle_line():
+    """대체 구절이 자막 줄 그대로면 같은 말이 두 번 보인다 — 줄의 앞부분 핵심어로 줄인다(원문 글자 그대로)."""
+    from app.services.slide_edit_plan import fallback_key_phrase
+
+    narration = "긴급 진단에 나섰습니다."
+    chunks = [{"text": "긴급 진단에 나섰습니다.", "start": 0.0, "end": 2.0}]
+
+    assert fallback_key_phrase(narration) == "긴급 진단에 나섰습니다"                 # 자막 정보가 없으면 기존 동작
+    short = fallback_key_phrase(narration, chunks)
+    assert short != "긴급 진단에 나섰습니다" and 4 <= len(short) < len("긴급 진단에 나섰습니다")
+    assert short in narration                                                          # 원문 일부 그대로
+
+
+# ── 그래픽 지속(2026-10-17): 데이터 후편집은 다음 스톡 장면까지 이어서 보여 준다 ──
+
+def _carry_plan(overlays, backgrounds):
+    briefs = {i: {"narration": f"장면 {i} 내레이션입니다 숫자 5.3퍼센트.", "duration": 4.0} for i in range(len(overlays))}
+    entries = [
+        {"index": i, "background": backgrounds[i], "stock_queries": ["q"] if backgrounds[i] == "stock" else [],
+         "overlay": overlays[i]}
+        for i in range(len(overlays))
+    ]
+    return assemble_plan(briefs, entries, job_id=1)
+
+
+def test_data_overlay_is_carried_into_the_next_bare_stock_scene_only():
+    big = {"type": "big_number", "value": "5.3퍼센트", "label": ""}
+    plan = _carry_plan([big, None, None], ["stock", "stock", "stock"])
+
+    by_index = {s["index"]: s for s in plan["scenes"]}
+    assert by_index[1].get("carry_from") == 0          # 바로 다음 맨 스톡 장면이 이어 받는다
+    assert "carry_from" not in by_index[2]             # 최대 한 장면까지만(너무 오래 정지해 있지 않게)
+    assert "carry_from" not in by_index[0]
+
+
+def test_key_text_and_scenes_with_their_own_overlay_are_not_carried():
+    key = {"type": "key_text", "text": "내레이션입니다 숫자"}
+    big = {"type": "big_number", "value": "5.3퍼센트", "label": ""}
+
+    plan = _carry_plan([key, None], ["stock", "stock"])
+    assert "carry_from" not in plan["scenes"][1]
+    plan = _carry_plan([big, key], ["stock", "stock"])
+    assert "carry_from" not in plan["scenes"][1]
+    plan = _carry_plan([big, None], ["stock", "board"])   # 회색 배경은 시퀀스가 화면을 맡는다
+    assert "carry_from" not in plan["scenes"][1]

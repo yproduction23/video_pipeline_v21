@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from app.services.slide_timing import duplicates_subtitle
+
 import json
 import logging
 import os
@@ -222,7 +224,7 @@ def validate_overlay_plan(raw_overlays: list, briefs: dict[int, dict]) -> dict[i
         if kind == "key_text":
             text = str(entry.get("text") or "").strip()
             # 영상 위 문구는 자막을 되풀이하지 않도록 14자 이내 핵심어만(2026-10-16), 칠판 위 문구는 28자까지.
-            if 4 <= len(text) <= (KEY_TEXT_ON_FOOTAGE_MAX if entry.get("on_footage") else 28)                     and _in_narration(text, narration):
+            if 4 <= len(text) <= (KEY_TEXT_ON_FOOTAGE_MAX if entry.get("on_footage") else 28)                     and _in_narration(text, narration) and not duplicates_subtitle(text, brief.get("chunks") or []):
                 plan[index] = {"type": "key_text", "text": text, "icon": icon, "explain": explain}
         elif kind == "bullet_list":
             title = str(entry.get("title") or "").strip()[:18]

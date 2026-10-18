@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+from app.services.slide_timing import duplicates_subtitle
+
 import hashlib
 import json
 import logging
@@ -78,6 +80,8 @@ _SYSTEM_PROMPT = (
     "- board 장면은 반드시 overlay를 가진다. stock 장면도 문장의 숫자·핵심 주장·목록·비교를 overlay로 얹는다(스톡 장면의 "
     "60~75%). 모든 스톡 장면에 붙이지는 않는다. 후편집 없이 영상과 자막만 나오는 스톡이 연속 3장면(약 12초)을 넘지 않게 한다. 기사 증거([article: …])가 "
     "붙은 장면은 article_card를 우선 쓴다.\n"
+    "- [자막 줄]이 주어진 장면에서는 key_text가 자막 한 줄의 70% 이상을 그대로 옮기면 거절된다(같은 말이 두 번 보인다). "
+    "자막 줄의 일부 핵심어만 쓴다.\n"
     "- key_text는 자막 문장을 그대로 되풀이하지 말고 핵심어만 뽑는다: 스톡·사진 위는 14자 이내(예: \"주가가 급락\"), "
     "회색 배경 위는 28자 이내.\n"
     "- 후편집이 붙는 장면은 전체의 약 55~60%다(모든 장면에 붙이지 않는다). 연속 3장면 이상 같은 종류의 overlay를 "
@@ -110,15 +114,25 @@ def plan_input_hash(briefs: dict[int, dict]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def fallback_key_phrase(narration: str) -> str:
-    """오버레이가 검증을 통과하지 못한 칠판 장면용 — 원문에서 그대로 떼어 낸 4~28자 구절."""
+def fallback_key_phrase(narration: str, chunks: list[dict] | None = None) -> str:
+    """오버레이가 검증을 통과하지 못한 칠판 장면용 — 원문에서 그대로 떼어 낸 4~28자 구절.
+
+    자막 줄(chunks)이 있고 구절이 그 줄을 그대로 되풀이하면, 같은 줄의 앞쪽 단어 2~3개(원문 그대로)로 줄인다."""
     text = re.sub(r"\s+", " ", str(narration or "")).strip()
     clauses = [c.strip(" ,.!?\"'") for c in re.split(r"[.!?,]|\s—\s", text) if c.strip()]
     candidates = [c for c in clauses if 4 <= len(c) <= 28]
     if candidates:
-        return max(candidates, key=lambda c: (bool(re.search(r"\d", c)), len(c)))
-    head = text[:28].rsplit(" ", 1)[0] if len(text) > 28 else text
-    return head.strip(" ,.!?") or text[:28]
+        phrase = max(candidates, key=lambda c: (bool(re.search(r"\d", c)), len(c)))
+    else:
+        head = text[:28].rsplit(" ", 1)[0] if len(text) > 28 else text
+        phrase = head.strip(" ,.!?") or text[:28]
+    if chunks and duplicates_subtitle(phrase, chunks):
+        words = phrase.split(" ")
+        for count in (3, 2):
+            shorter = " ".join(words[:count])
+            if len(words) > count and len(shorter) >= 4 and not duplicates_subtitle(shorter, chunks):
+                return shorter
+    return phrase
 
 
 def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
@@ -154,7 +168,8 @@ def build_edit_plan(
         article = ""
         if brief.get("has_article"):
             article = f" [article: {brief.get('article_brief', '')}{' / 수치계열 있음' if brief.get('has_numeric_series') else ''}]"
-        lines.append(f"{index} ({float(brief.get('duration') or 0):.1f}초): {brief.get('narration', '')}{article}")
+        subtitle = f" [자막 줄: {' | '.join(c['text'] for c in brief['chunks'])}]" if brief.get("chunks") else ""
+        lines.append(f"{index} ({float(brief.get('duration') or 0):.1f}초): {brief.get('narration', '')}{subtitle}{article}")
     prompt = "승인 내레이션 목록(번호 (길이): 문장):\n" + "\n".join(lines) + "\n\nJSON만 반환:"
     try:
         raw = _call_llm(_SYSTEM_PROMPT, prompt, llm_call=llm_call)
@@ -225,7 +240,7 @@ def assemble_plan(
         overlay = validated.get(index)
         board = scene["background"] == "board"
         if board and not overlay:
-            phrase = fallback_key_phrase(brief.get("narration", ""))
+            phrase = fallback_key_phrase(brief.get("narration", ""), brief.get("chunks"))
             overlay = {"type": "key_text", "text": phrase, "icon": None, "explain": True, "source": "fallback_phrase"}
         if overlay:
             overlay = dict(overlay)
@@ -233,9 +248,11 @@ def assemble_plan(
         scene["overlay"] = overlay
         # 스톡을 못 찾으면 사진 대신 칠판으로 내려가므로 그때 쓸 구절을 미리 둔다(결정론적).
         if scene["background"] == "stock":
-            scene["fallback_key_text"] = fallback_key_phrase(brief.get("narration", ""))
+            scene["fallback_key_text"] = fallback_key_phrase(brief.get("narration", ""), brief.get("chunks"))
         scene["duration"] = round(float(brief.get("duration") or 0), 2)
         scene["narration"] = brief.get("narration", "")
+        # 자막 줄(TTS 청크) 시각: 모션그래픽 등장 시각을 말하는 순간에 맞추고, 자막과 같은 글자를 걸러 내는 데 쓴다.
+        scene["chunks"] = list(brief.get("chunks") or [])
 
     plan = {
         "version": PLAN_VERSION,
@@ -317,9 +334,32 @@ def plan_violations(plan: dict) -> dict:
     }
 
 
+CARRY_OVERLAY_TYPES = {"big_number", "stat_chart", "compare_numbers", "bullet_list", "flow", "equation"}
+
+
+def mark_carry_overlays(scenes: list[dict]) -> None:
+    """그래픽 지속(2026-10-17 운영자 피드백: 모션그래픽이 너무 빨리 지나간다, 레퍼런스는 한 그래픽을 자막 여러 줄 동안 둔다).
+
+    데이터 후편집(숫자·그래프·목록·흐름·계산식)이 있는 스톡·사진 장면 바로 다음 장면이 후편집 없는 스톡·사진이면, 그 장면이
+    같은 그래픽을 이어 받는다(carry_from). 이어 받는 건 한 장면까지다. 짧은 강조 문구·기사 카드·회색 배경은 이어 가지 않는다."""
+    by_index = {s["index"]: s for s in scenes}
+    for scene in scenes:
+        scene.pop("carry_from", None)
+    for scene in scenes:
+        overlay = scene.get("overlay")
+        following = by_index.get(scene["index"] + 1)
+        if (
+            overlay and overlay.get("type") in CARRY_OVERLAY_TYPES and scene["background"] in {"stock", "photo"}
+            and following and following["background"] in {"stock", "photo"} and not following.get("overlay")
+            and following.get("carry_from") is None
+        ):
+            following["carry_from"] = scene["index"]
+
+
 def refresh_plan(plan: dict, demoted: list[int] | None = None) -> None:
     """장면 목록에서 구간·요약·총 길이를 다시 계산한다(전체 계획과 부분 재계획 공통)."""
     scenes = plan["scenes"]
+    mark_carry_overlays(scenes)
     highlight_end_index = plan.get("highlight_end_index")
     segments: list[dict] = []
     for scene in scenes:

@@ -426,3 +426,15 @@ def test_source_credit_is_drawn_bottom_left_and_empty_publisher_is_ignored(tmp_p
     assert box is not None
     assert box[0] < 120 and box[2] < 700          # 왼쪽 가장자리에 붙어 있다
     assert box[1] > 800                           # 화면 아래쪽
+
+
+def test_key_text_that_repeats_a_subtitle_line_is_rejected_but_keywords_pass():
+    """자막과 강조 텍스트가 같은 말이면(운영자 피드백) 거절하고, 자막 줄의 일부 핵심어는 통과한다."""
+    chunks = [{"text": "긴급 진단에 나섰습니다.", "start": 0.0, "end": 2.0}]
+    briefs = {1: {"narration": "긴급 진단에 나섰습니다.", "chunks": chunks}}
+
+    repeated = validate_overlay_plan([{"index": 1, "type": "key_text", "text": "긴급 진단에 나섰습니다"}], briefs)
+    keyword = validate_overlay_plan([{"index": 1, "type": "key_text", "text": "긴급 진단"}], briefs)
+
+    assert repeated == {}
+    assert keyword[1]["text"] == "긴급 진단"

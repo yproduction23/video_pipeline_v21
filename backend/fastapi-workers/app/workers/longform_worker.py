@@ -545,6 +545,24 @@ class LongformWorker:
         if not clip_paths:
             raise RuntimeError("씬 클립이 하나도 생성되지 않았습니다.")
 
+        # 고지 카드 정지(2026-10-17): 카드가 나오는 동안 내레이션도 멈춘다. 음성에 무음을 끼우고, 이후 자막 줄을 밀고,
+        # 카드 클립을 해당 장면 앞에 넣는다. 자막 글자와 장면 클립은 그대로다. 실패하면 조용히 넘기지 않고 중단한다.
+        scene_pauses = plan_scene_pauses(scenes)
+        if scene_pauses:
+            paused_audio = str(temp_dir / "narration_paused.wav")
+            pause_clips = [str(temp_dir / f"pause_{p['position']}.mp4") for p in scene_pauses]
+            if not all(build_pause_clip(p["card_png"], p["seconds"], clip) for p, clip in zip(scene_pauses, pause_clips)):
+                raise RuntimeError("고지 카드 정지 클립을 만들지 못했습니다.")
+            if not insert_audio_pauses(audio_path, scene_pauses, paused_audio):
+                raise RuntimeError("내레이션에 정지 구간을 넣지 못했습니다.")
+            for offset, (pause, clip) in enumerate(zip(scene_pauses, pause_clips)):
+                clip_paths.insert(pause["position"] + offset, clip)
+            added = sum(p["seconds"] for p in scene_pauses)
+            audio_path = paused_audio
+            chunks = shift_chunks_for_pauses(chunks, scene_pauses)
+            total_duration = float(total_duration or 0.0) + added
+            logger.info("고지 카드 정지 %.2f초 삽입(장면 위치 %s)", added, [p["position"] for p in scene_pauses])
+
         # ── 3. concat ─────────────────────────────────────────────────
         # 안전 우선: Fal 클립과 정지 이미지 클립은 타임베이스/비트레이트가
         # 미세하게 달라 -c copy가 exit 0을 반환해도 깨진 파일을 만들 수 있음.
@@ -2239,6 +2257,88 @@ def _apply_editorial_overlays(scene: dict, clip_path: str, temp_dir: Path, index
     if isinstance(scene.get("editorial_overlay_plan"), dict):
         return True
     return _apply_speech_bubble_overlay(scene, clip_path, temp_dir, index, duration, job_id)
+
+
+def plan_scene_pauses(scenes: list[dict]) -> list[dict]:
+    """장면이 요청한 정지 구간(pause_before)을 조립 순서대로 모은다.
+
+    2026-10-17 운영자 요청: 고지 카드가 나올 때 TTS가 계속 나오면 어색하다 — 카드가 나오는 동안 내레이션도 멈춘다.
+    position은 그 장면 클립의 순서이고, at은 정지가 시작되는 시각(장면 시작)이다."""
+    pauses: list[dict] = []
+    for position, scene in enumerate(scenes):
+        request = scene.get("pause_before")
+        if not isinstance(request, dict):
+            continue
+        seconds = float(request.get("seconds") or 0.0)
+        if seconds > 0 and request.get("card_png"):
+            pauses.append({
+                "position": position, "at": round(float(scene.get("start_time") or scene.get("start") or 0.0), 3),
+                "seconds": round(seconds, 3), "card_png": str(request["card_png"]),
+            })
+    return pauses
+
+
+def shift_chunks_for_pauses(chunks: list[dict], pauses: list[dict]) -> list[dict]:
+    """정지 시점부터의 자막 줄을 정지 길이만큼 뒤로 민다(글자는 그대로, 원본 목록은 건드리지 않는다)."""
+    shifted: list[dict] = []
+    for chunk in chunks:
+        start = float(chunk.get("start") or 0.0)
+        push = sum(p["seconds"] for p in pauses if start >= p["at"] - 0.001)
+        copy = dict(chunk)
+        if push:
+            copy["start"] = round(start + push, 6)
+            if "end" in copy:
+                copy["end"] = round(float(copy["end"]) + push, 6)
+        shifted.append(copy)
+    return shifted
+
+
+def insert_audio_pauses(audio_path: str, pauses: list[dict], output_path: str) -> bool:
+    """내레이션 오디오의 정지 시각마다 무음을 끼운다(소리는 그대로, 길이만 늘어난다)."""
+    if not pauses:
+        return False
+    ordered = sorted(pauses, key=lambda p: p["at"])
+    pieces, filters = [], []
+    previous = 0.0
+    labels = []
+    for number, pause in enumerate(ordered):
+        filters.append(f"[base{number}]atrim=start={previous:.3f}:end={pause['at']:.3f},asetpts=PTS-STARTPTS[seg{number}]")
+        filters.append(f"anullsrc=r=44100:cl=stereo,atrim=0:{pause['seconds']:.3f},asetpts=PTS-STARTPTS[gap{number}]")
+        labels += [f"[seg{number}]", f"[gap{number}]"]
+        previous = pause["at"]
+    tail = len(ordered)
+    filters.append(f"[base{tail}]atrim=start={previous:.3f},asetpts=PTS-STARTPTS[seg{tail}]")
+    labels.append(f"[seg{tail}]")
+    count = len(ordered) + 1
+    split = "".join(f"[base{n}]" for n in range(count))
+    graph = (
+        f"[0:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit={count}{split};"
+        + ";".join(filters) + ";" + "".join(labels) + f"concat=n={len(labels)}:v=0:a=1[out]"
+    )
+    cmd = ["ffmpeg", "-y", "-nostdin", "-i", audio_path, "-filter_complex", graph, "-map", "[out]",
+           "-ar", "44100", "-ac", "2", output_path, "-loglevel", "error"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except Exception:
+        logger.exception("내레이션 정지 구간 삽입 실패")
+        return False
+    if result.returncode != 0:
+        logger.error("내레이션 정지 구간 삽입 실패: %s", result.stderr[-300:])
+        return False
+    return Path(output_path).is_file() and Path(output_path).stat().st_size > 1000
+
+
+def build_pause_clip(card_png: str, seconds: float, output_path: str) -> bool:
+    """정지 구간에 보여 줄 카드 정지 화면 클립(다른 장면 클립과 같은 코덱·해상도·프레임레이트)."""
+    cmd = ["ffmpeg", "-y", "-nostdin", "-loop", "1", "-framerate", "30", "-t", f"{seconds:.3f}", "-i", card_png,
+           "-vf", "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+           "-r", "30", "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-an", output_path, "-loglevel", "error"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except Exception:
+        logger.exception("정지 카드 클립 생성 실패")
+        return False
+    return result.returncode == 0 and Path(output_path).is_file() and Path(output_path).stat().st_size > 1000
 
 
 def _is_slide_job(scenes: list[dict]) -> bool:
