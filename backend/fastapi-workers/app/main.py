@@ -329,6 +329,10 @@ def slide_edit_plan_replan(job_id: int, request: SlidePlanReplanRequest):
     if not updated:
         raise HTTPException(status_code=502, detail="계획서 부분 재계획에 실패했습니다. 기존 계획서는 그대로입니다.")
     save_plan(updated, DATA_DIR)
+    # 다시 계획한 장면은 다음 씬별 생성에서 옛 배경을 재사용하지 않게 그 장면의 배경 재사용 기록만 지운다.
+    from app.services.slide_edit_replan import drop_scene_base_caches
+
+    drop_scene_base_caches(DATA_DIR / "jobs" / str(job_id) / "slides", [item.index for item in request.items])
     return {"job_id": job_id, "plan": updated}
 
 

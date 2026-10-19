@@ -125,3 +125,15 @@ def test_failed_replan_of_changed_scene_falls_back_instead_of_keeping_a_stale_sc
     texts[3] = "이 구조가 오래 갈지는 의문입니다."
 
     assert preserve_existing_plan(_previous(), _briefs(texts), llm_call=lambda s, m, t: "not json") is None
+
+
+def test_replanned_scene_drops_only_its_own_base_cache(tmp_path):
+    """다시 계획한 장면이 다음 씬별 생성에서 옛 배경을 재사용하지 않게 그 장면의 기록만 지운다."""
+    from app.services.slide_edit_replan import drop_scene_base_caches
+
+    for name in ("scene_004_stock_cache.json", "scene_004_ai_cache.json", "scene_005_stock_cache.json", "scene_004_stock.mp4"):
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+
+    assert drop_scene_base_caches(tmp_path, [4, 9]) == [4]
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["scene_004_stock.mp4", "scene_005_stock_cache.json"]

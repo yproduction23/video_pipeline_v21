@@ -452,3 +452,21 @@ def build_edit_plan_with_repair(
     plan = drop_fake_lists_in_plan(plan, llm_call=llm_call)  # 한 문장을 쪼갠 가짜 목록(1·2)은 뺀다
     # 회색 배경 구간마다 장면 경계를 넘어 이어지는 모션 시퀀스를 설계한다(실패해도 장면별 후편집으로 대체).
     return attach_sequences(plan, llm_call=llm_call)
+
+
+def drop_scene_base_caches(job_dir, indices) -> list[int]:
+    """운영자가 다시 계획한 장면의 배경 재사용 기록(scene_NNN_*_cache.json)을 지운다. 지운 장면 번호를 돌려준다.
+
+    배경 재사용은 내레이션만 보고 판단하므로, 같은 대본에 검색어·배경 종류만 바꿔 다시 계획해도 다음 씬별 생성이 옛 영상을 그대로 쓴다.
+    다시 계획은 "이 장면을 새로 만든다"는 뜻이므로 그 장면의 기록만 지운다(다른 장면의 재사용은 그대로)."""
+    from pathlib import Path
+
+    dropped: list[int] = []
+    for index in sorted({int(i) for i in indices}):
+        removed = False
+        for path in Path(job_dir).glob(f"scene_{index:03d}_*_cache.json"):
+            path.unlink(missing_ok=True)
+            removed = True
+        if removed:
+            dropped.append(index)
+    return dropped
