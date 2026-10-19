@@ -71,9 +71,7 @@ export default function SlideProgressPanel({ jobId, running }) {
 
   // 정리 UI: 실패·경고 장면만 골라 다시 만든다. 보류(needs_review) 장면은 재시도 상한을
   // 사람이 승인해야 열리므로 승인 호출을 먼저 시도한다(해당 없으면 무시).
-  const problemIndexes = scenes
-    .filter(s => s.status === 'failed' || (s.status === 'done' && ((s.flags || []).length > 0 || s.error)))
-    .map(s => s.index)
+  const problemIndexes = scenes.filter(needsAction).map(s => s.index)
 
   // 돋보기: 완성된 장면(영상이 있으면 영상, 아니면 이미지)을 원본 크기로 크게 본다.
   const openViewer = async (scene) => {
@@ -138,7 +136,7 @@ export default function SlideProgressPanel({ jobId, running }) {
   const preparing = data.status === 'preparing'
 
   // 확정(자동 검수 통과) 위, 검토 필요 아래, 아직 만드는 중인 장면은 맨 아래.
-  const isReview = (s) => s.status === 'failed' || (s.status === 'done' && ((s.flags || []).length > 0 || s.error))
+  const isReview = needsAction
   const sections = [
     { key: 'confirmed', title: '확정 씬', tone: 'text-emerald-700', hint: '자동 검수를 통과한 장면',
       items: scenes.filter(s => s.status === 'done' && !isReview(s)) },
@@ -150,7 +148,8 @@ export default function SlideProgressPanel({ jobId, running }) {
 
   const renderScene = (scene) => {
     const failed = scene.status === 'failed'
-    const flagged = (scene.flags || []).length > 0 || scene.error
+    const flagged = needsAction(scene)
+    const notes = (scene.flags || []).map(flagText)
     return (
       <div key={scene.index}
         className={`rounded-lg border p-1.5 text-[11px] bg-white ${failed ? 'border-rose-400' : flagged ? 'border-amber-400' : 'border-slate-200'}`}>
@@ -182,9 +181,13 @@ export default function SlideProgressPanel({ jobId, running }) {
             <Film size={10} />Kling으로 바꾸기
           </button>
         )}
+        {!flagged && notes.length > 0 && scene.status === 'done' && (
+          <p className="mt-0.5 text-[10px] leading-snug text-slate-400 line-clamp-2" title={notes.join(' / ')}>{notes[0]}</p>
+        )}
         {(failed || flagged) && scene.status !== 'pending' && (
           <div className="mt-1 space-y-1">
             {scene.error && <p className="text-rose-600 leading-snug line-clamp-2">{scene.error}</p>}
+            {!scene.error && notes.length > 0 && <p className="text-amber-700 leading-snug line-clamp-3" title={notes.join(' / ')}>{notes.filter(n => !n.startsWith('스톡')).concat(notes.filter(n => n.startsWith('스톡')))[0]}</p>}
             <button type="button" disabled={regenerating || data.status === 'running' || preparing}
               onClick={() => regenerate([scene.index])}
               className="inline-flex items-center gap-1 rounded border border-amber-400 px-1.5 py-0.5 font-bold text-amber-700 disabled:opacity-50">
@@ -284,6 +287,24 @@ const BACKGROUND_TONE = {
   stock: 'bg-sky-100 text-sky-800 border-sky-300',
   photo: 'bg-amber-100 text-amber-800 border-amber-300',
 }
+// 조치가 필요한 경고(다시 생성 대상)와 안내용 경고(자동으로 대체돼 정상 진행)를 나눈다.
+// 2026-10-19 운영자 요청: 수정할 때 고칠 장면만 다시 만든다 — 스톡이 없어 자동 대체된 장면까지 문제로 잡으면 좋았던 장면이 바뀐다.
+const ACTION_FLAGS = ['board_without_graphic', 'slide_generation_failed', 'overlay_failed_base_only', 'banner_failed', 'article_card_without_capture']
+const FLAG_TEXT = {
+  board_without_graphic: '빈 칠판: 스톡·AI 배경·그림 설계가 모두 실패했어요',
+  slide_generation_failed: '장면 생성에 실패했어요',
+  overlay_failed_base_only: '그래픽 합성에 실패해 배경만 있어요',
+  banner_failed: '고지 배너 합성에 실패했어요',
+  article_card_without_capture: '기사 캡처가 없어 기사 카드를 못 만들었어요',
+}
+const flagText = (flag) => {
+  if (FLAG_TEXT[flag]) return FLAG_TEXT[flag]
+  if (String(flag).startsWith('stock_miss_ai:')) return '스톡이 없어 AI 배경으로 대체'
+  if (String(flag).startsWith('stock_miss:')) return '스톡이 맞지 않아 자동 대체(' + String(flag).split(':')[1].replace('foreign_landmark', '외국 랜드마크').replace('candidates_rejected_by_selection', '후보 부적합').replace('frame_unusable', '화면 불량').replace('download_failed', '다운로드 실패') + ')'
+  return String(flag)
+}
+const needsAction = (s) => s.status === 'failed' || (s.status === 'done' && (s.error || (s.flags || []).some(f => ACTION_FLAGS.includes(f))))
+
 const OVERLAY_LABEL = {
   key_text: '강조 텍스트', big_number: '큰 숫자', compare_numbers: '수치 비교', flow: '흐름도',
   bullet_list: '목록', stat_chart: '수치 그래프', equation: '계산식', article_card: '기사 카드',
