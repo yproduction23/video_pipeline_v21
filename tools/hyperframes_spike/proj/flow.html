@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko" data-composition-variables='[{"id": "l1", "type": "string", "label": "l1", "default": "금리 상승"}, {"id": "l2", "type": "string", "label": "l2", "default": "안전자산"}, {"id": "l3", "type": "string", "label": "l3", "default": "수익률 상승"}, {"id": "i1", "type": "string", "label": "i1", "default": "chart_up"}, {"id": "i2", "type": "string", "label": "i2", "default": "shield"}, {"id": "i3", "type": "string", "label": "i3", "default": "percent"}, {"id": "t1", "type": "number", "label": "t1", "default": 0.4}, {"id": "t2", "type": "number", "label": "t2", "default": 1.7}, {"id": "t3", "type": "number", "label": "t3", "default": 3.0}]'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: transparent; }
+      #root { position: relative; width: 1920px; height: 1080px; font-family: "Noto Sans CJK KR", "Noto Sans KR", sans-serif; }
+      /* 흐름도: 노드는 같은 폭의 3칸, 화살표는 칸 사이 정중앙(아이콘 높이)에 놓아 항상 대칭이다. */
+      #flow { position: absolute; left: 160px; right: 160px; top: 300px; display: grid; grid-template-columns: 1fr 120px 1fr 120px 1fr; align-items: center; }
+      .node { display: flex; flex-direction: column; align-items: center; gap: 28px; opacity: 0; }
+      .node img { width: 280px; height: 280px; filter: drop-shadow(0 6px 10px rgba(0,0,0,.45)); }
+      .node .label { font-size: 64px; font-weight: 900; color: #fff; text-shadow: 0 3px 8px rgba(0,0,0,.7); white-space: nowrap; }
+      .arrow { display: flex; align-items: center; justify-content: center; height: 280px; opacity: 0; }
+      .arrow svg { width: 100px; height: 60px; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="flow" data-start="0" data-duration="6" data-width="1920" data-height="1080">
+      <div id="flow" class="clip" data-start="0" data-duration="6"></div>
+    </div>
+    <script>
+      // 값(라벨·아이콘·등장 시각)은 계획서가 정한 변수로 받는다. 결정론적이라 같은 값이면 같은 영상이 나온다.
+      const vars = window.__hyperframes.getVariables();
+      const flow = document.getElementById("flow");
+      const tl = gsap.timeline({ paused: true });
+      [1, 2, 3].map((k) => ({ label: vars['l' + k], icon: vars['i' + k], at: vars['t' + k] })).forEach((n, i) => {
+        if (i > 0) {
+          const a = document.createElement("div");
+          a.className = "arrow";
+          a.innerHTML = '<svg viewBox="0 0 100 60"><path d="M6 30 H78 M58 8 L86 30 L58 52" fill="none" stroke="#FFB81C" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          flow.appendChild(a);
+          tl.fromTo(a, { opacity: 0, x: -24 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out" }, n.at - 0.45);
+        }
+        const d = document.createElement("div");
+        d.className = "node";
+        d.innerHTML = '<img src="icons/' + n.icon + '.svg" /><div class="label">' + n.label + "</div>";
+        flow.appendChild(d);
+        tl.fromTo(d, { opacity: 0, y: 40, scale: 0.85 }, { opacity: 1, y: 0, scale: 1, duration: 0.6, ease: "back.out(1.6)" }, n.at);
+      });
+      tl.to("#flow", { opacity: 0, duration: 0.5, ease: "power1.in" }, 5.4);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["flow"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

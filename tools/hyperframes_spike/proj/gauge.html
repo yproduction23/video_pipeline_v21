@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko" data-composition-variables='[{"id": "left", "type": "string", "label": "left", "default": "미국 장기금리"}, {"id": "right", "type": "string", "label": "right", "default": "신흥국 자금 이탈 압력"}, {"id": "from", "type": "number", "label": "from", "default": 0.86}, {"id": "to", "type": "number", "label": "to", "default": 0.34}]'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: transparent; }
+      #root { position: relative; width: 1920px; height: 1080px; font-family: "Noto Sans CJK KR", "Noto Sans KR", sans-serif; }
+      .cap { position: absolute; font-size: 56px; font-weight: 900; color: #fff; text-shadow: 0 3px 8px rgba(0,0,0,.75); text-align: center; width: 560px; opacity: 0; }
+      #capL { left: 160px; top: 700px; } #capR { left: 1200px; top: 700px; }
+      svg#g { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+    </style>
+  </head>
+  <body>
+    <!-- "금리가 꺾이면 신흥국 자금 이탈 압력이 줄어든다": 왼쪽 금리 게이지가 내려오는 동안 오른쪽으로 향하는 자금 화살표도 가늘어지고 흐려진다.
+         (이전 온도계는 앞 절반만 그려 "금리가 내려간다"로만 읽혔다.) -->
+    <div id="root" data-composition-id="gauge" data-start="0" data-duration="5.2" data-width="1920" data-height="1080">
+      <svg id="g" class="clip" data-start="0" data-duration="5.2" viewBox="0 0 1920 1080">
+        <g id="gauge" opacity="0">
+          <rect x="300" y="200" width="120" height="440" rx="60" fill="#F5F5F5" stroke="#1B1D22" stroke-width="8"/>
+          <clipPath id="tube"><rect x="300" y="200" width="120" height="440" rx="60"/></clipPath>
+          <rect id="mercury" x="300" y="200" width="120" height="440" fill="#FFB81C" clip-path="url(#tube)"/>
+          <circle cx="360" cy="660" r="86" fill="#FFB81C" stroke="#1B1D22" stroke-width="8"/>
+          <g stroke="#1B1D22" stroke-width="7" stroke-linecap="round"><path d="M446 260 h38 M446 330 h38 M446 400 h38 M446 470 h38 M446 540 h38"/></g>
+        </g>
+        <g id="arrows" opacity="0">
+          <g id="a1"><path d="M620 340 H1160" stroke="#FFB81C" stroke-width="34" stroke-linecap="round"/><path d="M1120 290 L1190 340 L1120 390" fill="none" stroke="#FFB81C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></g>
+          <g id="a2"><path d="M620 450 H1160" stroke="#FFB81C" stroke-width="34" stroke-linecap="round"/><path d="M1120 400 L1190 450 L1120 500" fill="none" stroke="#FFB81C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></g>
+          <g id="a3"><path d="M620 560 H1160" stroke="#FFB81C" stroke-width="34" stroke-linecap="round"/><path d="M1120 510 L1190 560 L1120 610" fill="none" stroke="#FFB81C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/></g>
+        </g>
+        <g id="box" opacity="0"><rect x="1230" y="250" width="420" height="320" rx="32" fill="rgba(20,22,28,.72)" stroke="#F5F5F5" stroke-width="8"/>
+          <path d="M1440 300 l-96 70 v120 h56 v-60 h80 v60 h56 v-120 z" fill="#F5F5F5" stroke="#1B1D22" stroke-width="6" stroke-linejoin="round"/></g>
+      </svg>
+      <div id="capL" class="cap clip" data-start="0" data-duration="5.2"></div>
+      <div id="capR" class="cap clip" data-start="0" data-duration="5.2"></div>
+    </div>
+    <script>
+      const v = (window.__hyperframes && window.__hyperframes.getVariables && window.__hyperframes.getVariables()) ||
+        JSON.parse(document.getElementById("root").getAttribute("data-composition-variables"));
+      document.getElementById("capL").textContent = v.left;
+      document.getElementById("capR").textContent = v.right;
+      const gTop = 200, gH = 440;
+      const setLevel = (x) => { const y = gTop + gH * (1 - x); document.getElementById("mercury").setAttribute("y", y); };
+      const state = { level: v.from };
+      setLevel(state.level);
+      const tl = gsap.timeline({ paused: true });
+      tl.to(["#gauge", "#box", "#arrows"], { opacity: 1, duration: 0.5 }, 0.2);
+      tl.to("#capL", { opacity: 1, duration: 0.4 }, 0.5);
+      tl.to("#capR", { opacity: 1, duration: 0.4 }, 0.9);
+      // 금리 게이지가 꺾여 내려오고(1.4~3.6초), 같은 시간에 자금 화살표가 가늘어지며 흐려진다.
+      tl.to(state, { level: v.to, duration: 2.2, ease: "power2.inOut", onUpdate: () => setLevel(state.level) }, 1.4);
+      tl.to("#a1", { opacity: 0.12, duration: 2.2, ease: "power2.inOut" }, 1.4);
+      tl.to("#a2", { opacity: 0.3, duration: 2.2, ease: "power2.inOut" }, 1.4);
+      tl.to("#a3", { opacity: 0.55, duration: 2.2, ease: "power2.inOut" }, 1.4);
+      tl.to("#arrows", { scaleY: 0.55, transformOrigin: "900px 450px", duration: 2.2, ease: "power2.inOut" }, 1.4);
+      tl.to(["#gauge", "#box", "#arrows", "#capL", "#capR"], { opacity: 0, duration: 0.5 }, 4.6);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["gauge"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

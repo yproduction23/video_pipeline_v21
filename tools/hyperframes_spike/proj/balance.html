@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko" data-composition-variables='[{"id": "left", "type": "string", "label": "left", "default": "추정치"}, {"id": "right", "type": "string", "label": "right", "default": "실적"}, {"id": "chip", "type": "string", "label": "chip", "default": "소폭 하회"}, {"id": "tilt", "type": "number", "label": "tilt", "default": 9}]'>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: transparent; }
+      #root { position: relative; width: 1920px; height: 1080px; font-family: "Noto Sans CJK KR", "Noto Sans KR", sans-serif; }
+      svg#scale { position: absolute; left: 560px; top: 150px; width: 800px; height: 620px; overflow: visible; opacity: 0; }
+      .tag { fill: #fff; font-size: 50px; font-weight: 900; text-anchor: middle; paint-order: stroke; stroke: rgba(0,0,0,.65); stroke-width: 8px; }
+      #chip { position: absolute; left: 0; right: 0; top: 800px; text-align: center; opacity: 0; }
+      #chip span { display: inline-block; background: #FFB81C; color: #1b1d22; font-size: 64px; font-weight: 900; padding: 8px 40px; border-radius: 18px; box-shadow: 0 6px 14px rgba(0,0,0,.5); }
+    </style>
+  </head>
+  <body>
+    <!-- 저울: 추정치(왼쪽)보다 실적(오른쪽)이 조금 낮다 → 말하는 순간(약 2.2초)에 기울어 "소폭 하회"가 나온다. 전체 길이 3.4초(짧은 장면에서도 끝까지 보인다). -->
+    <div id="root" data-composition-id="balance" data-start="0" data-duration="3.4" data-width="1920" data-height="1080">
+      <svg id="scale" class="clip" data-start="0" data-duration="3.4" viewBox="0 0 800 620">
+        <g id="base"><rect x="360" y="470" width="80" height="26" rx="8" fill="#F5F5F5" stroke="#1B1D22" stroke-width="6"/>
+          <path d="M400 130 V470" stroke="#1B1D22" stroke-width="26" stroke-linecap="round"/><path d="M400 130 V470" stroke="#F5F5F5" stroke-width="12" stroke-linecap="round"/>
+          <circle cx="400" cy="124" r="26" fill="#FFB81C" stroke="#1B1D22" stroke-width="6"/></g>
+        <g id="beam" style="transform-origin: 400px 124px">
+          <path d="M70 124 H730" stroke="#1B1D22" stroke-width="26" stroke-linecap="round"/><path d="M70 124 H730" stroke="#F5F5F5" stroke-width="12" stroke-linecap="round"/>
+          <g id="panL"><path d="M70 124 L10 330 H130 Z" fill="none" stroke="#F5F5F5" stroke-width="5"/><rect x="-10" y="326" width="160" height="22" rx="11" fill="#F5F5F5" stroke="#1B1D22" stroke-width="5"/><text class="tag" x="70" y="276"></text></g>
+          <g id="panR"><path d="M730 124 L670 330 H790 Z" fill="none" stroke="#F5F5F5" stroke-width="5"/><rect x="650" y="326" width="160" height="22" rx="11" fill="#FFB81C" stroke="#1B1D22" stroke-width="5"/><text class="tag" x="730" y="276"></text></g>
+        </g>
+      </svg>
+      <div id="chip" class="clip" data-start="0" data-duration="3.4"><span></span></div>
+    </div>
+    <script>
+      const v = (window.__hyperframes && window.__hyperframes.getVariables && window.__hyperframes.getVariables()) ||
+        JSON.parse(document.getElementById("root").getAttribute("data-composition-variables"));
+      document.querySelector("#panL .tag").textContent = v.left;
+      document.querySelector("#panR .tag").textContent = v.right;
+      document.querySelector("#chip span").textContent = v.chip;
+      const tl = gsap.timeline({ paused: true });
+      tl.to("#scale", { opacity: 1, duration: 0.35 }, 0);
+      // 팬이 매달린 채 수평을 유지하도록 보 회전의 반대로 팬을 돌린다.
+      tl.to("#beam", { rotation: v.tilt, duration: 1.1, ease: "power2.inOut" }, 1.5);
+      tl.to("#panL", { rotation: -v.tilt, transformOrigin: "70px 124px", duration: 1.1, ease: "power2.inOut" }, 1.5);
+      tl.to("#panR", { rotation: -v.tilt, transformOrigin: "730px 124px", duration: 1.1, ease: "power2.inOut" }, 1.5);
+      tl.fromTo("#chip", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "back.out(1.7)" }, 2.3);
+      tl.to(["#scale", "#chip"], { opacity: 0, duration: 0.3 }, 3.1);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["balance"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>
