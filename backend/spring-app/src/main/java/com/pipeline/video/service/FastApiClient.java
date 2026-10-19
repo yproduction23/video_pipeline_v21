@@ -1186,6 +1186,35 @@ public class FastApiClient {
     }
 
     @SuppressWarnings("unchecked")
+    public Map<String, Object> listIcons() {
+        Map<String, Object> response = restTemplate.getForObject(fastApiUrl + "/workers/icons", Map.class);
+        return response == null ? Map.of("icons", java.util.List.of()) : response;
+    }
+
+    public ResponseEntity<byte[]> getIconImage(String name) {
+        try {
+            return restTemplate.exchange(fastApiUrl + "/workers/icons/" + name + "/image", HttpMethod.GET, null, byte[].class);
+        } catch (Exception e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> uploadIcon(String label, String hint, String fileBase64) throws IOException {
+        Map<String, Object> body = new HashMap<>();
+        body.put("label", label);
+        body.put("hint", hint);
+        body.put("file_base64", fileBase64);
+        return objectMapper.readValue(postJson(fastApiUrl + "/workers/icons/upload", body), Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> deleteIcon(String name) throws IOException {
+        return objectMapper.readValue(
+                postJson(fastApiUrl + "/workers/icons/delete", new HashMap<>(Map.of("name", name))), Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
     public Map<String, Object> getWorkerCostLedger(Long jobId) {
         try {
             Map<String, Object> response = restTemplate.getForObject(

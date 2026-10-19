@@ -246,6 +246,53 @@ def motif_review(slug: str, request: MotifReviewRequest):
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+class IconUploadRequest(BaseModel):
+    label: str
+    hint: str
+    file_base64: str
+
+
+class IconDeleteRequest(BaseModel):
+    name: str
+
+
+@app.get("/workers/icons")
+def icon_list():
+    from app.services.slide_icon_admin import list_icons
+
+    return {"icons": list_icons()}
+
+
+@app.get("/workers/icons/{name}/image")
+def icon_image_file(name: str):
+    from app.services.slide_icon_admin import image_file
+
+    found = image_file(name)
+    if not found:
+        raise HTTPException(status_code=404, detail="아이콘 이미지가 없습니다.")
+    return FileResponse(str(found[0]), media_type=found[1])
+
+
+@app.post("/workers/icons/upload")
+def icon_upload(request: IconUploadRequest):
+    from app.services.slide_icon_admin import IconAdminError, add_uploaded
+
+    try:
+        return add_uploaded(request.label, request.hint, request.file_base64)
+    except IconAdminError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/workers/icons/delete")
+def icon_delete(request: IconDeleteRequest):
+    from app.services.slide_icon_admin import IconAdminError, delete_icon
+
+    try:
+        return delete_icon(request.name)
+    except IconAdminError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @app.get("/workers/slides/plan/{job_id}")
 def slide_edit_plan(job_id: int):
     """슬라이드형 편집 계획서(배경·후편집·구간·비용 추정). 아직 없으면 plan=null."""

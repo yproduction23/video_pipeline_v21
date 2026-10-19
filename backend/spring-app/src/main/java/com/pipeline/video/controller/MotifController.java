@@ -68,6 +68,44 @@ public class MotifController {
         }
     }
 
+    // ── 아이콘 라이브러리(같은 어드민 화면, 2026-10-19 운영자 요청) ──
+
+    @GetMapping("/icons")
+    public Map<String, Object> listIcons() {
+        return fastApiClient.listIcons();
+    }
+
+    @GetMapping("/icons/{name}/image")
+    public ResponseEntity<byte[]> iconImage(@PathVariable String name) {
+        ResponseEntity<byte[]> response = fastApiClient.getIconImage(name);
+        if (response.getBody() == null) {
+            return ResponseEntity.notFound().build();
+        }
+        MediaType type = response.getHeaders().getContentType() != null ? response.getHeaders().getContentType() : MediaType.IMAGE_PNG;
+        return ResponseEntity.ok().contentType(type).body(response.getBody());
+    }
+
+    @PostMapping("/icons/upload")
+    public ResponseEntity<?> uploadIcon(@RequestBody Map<String, Object> request) {
+        try {
+            return ResponseEntity.ok(fastApiClient.uploadIcon(
+                    String.valueOf(request.getOrDefault("label", "")),
+                    String.valueOf(request.getOrDefault("hint", "")),
+                    String.valueOf(request.getOrDefault("fileBase64", ""))));
+        } catch (Exception e) {
+            return failure(e);
+        }
+    }
+
+    @PostMapping("/icons/{name}/delete")
+    public ResponseEntity<?> deleteIcon(@PathVariable String name) {
+        try {
+            return ResponseEntity.ok(fastApiClient.deleteIcon(name));
+        } catch (Exception e) {
+            return failure(e);
+        }
+    }
+
     private ResponseEntity<Map<String, String>> failure(Exception e) {
         String message = e.getMessage() == null ? "요청에 실패했습니다." : e.getMessage();
         int start = message.indexOf("\"detail\":\"");

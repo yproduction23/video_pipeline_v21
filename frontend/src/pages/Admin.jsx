@@ -11,7 +11,7 @@ import JobFilterBar from '../components/JobFilterBar'
 import Pagination from '../components/Pagination'
 import StatusBadge from '../components/StatusBadge'
 import ReferenceChannelManager from '../components/admin/ReferenceChannelManager'
-import MotifLibrary from '../components/admin/MotifLibrary'
+import VisualLibrary from '../components/admin/VisualLibrary'
 import apiClient from '../api/client'
 import { NATURE_OPTIONS } from '../lib/contentNature'
 import { formatAutonomy, formatCategory, isCompleted } from '../constants/jobStatus'
@@ -399,7 +399,7 @@ export default function Admin() {
             { id: 'channels', label: '채널 프로필 관리', icon: Shield },
             { id: 'people', label: '실사 인물 에셋 관리', icon: Users },
             { id: 'reference-channels', label: '레퍼런스 채널', icon: ExternalLink },
-            { id: 'motifs', label: '연상 소재 라이브러리', icon: Sparkles },
+            { id: 'motifs', label: '연상 소재·아이콘', icon: Sparkles },
           ].map(tab => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
@@ -810,7 +810,7 @@ export default function Admin() {
         {activeTab === 'reference-channels' && <ReferenceChannelManager />}
 
         {/* TAB 6: 연상 소재 라이브러리 */}
-        {activeTab === 'motifs' && <MotifLibrary />}
+        {activeTab === 'motifs' && <VisualLibrary />}
       </div>
     </Layout>
   )

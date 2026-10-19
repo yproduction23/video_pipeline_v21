@@ -16,7 +16,7 @@ ALLOWED_COLORS = {"#f5f5f5", "#ffb81c", "#1b1d22", "#9aa0a6", "none"}
 
 def _library_names():
     rows = json.loads((SVG_ICON_DIR / "library.json").read_text(encoding="utf-8"))
-    return [row["name"] for row in rows]
+    return [row["name"] for row in rows if not (row.get("source") or {}).get("manual")]   # 기본 세트만(직접 올린 아이콘은 스타일 계약 검사 대상이 아니다)
 
 
 def test_every_library_entry_has_an_svg_and_a_hint_and_is_selectable():

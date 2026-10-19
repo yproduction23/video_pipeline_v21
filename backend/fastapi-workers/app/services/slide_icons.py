@@ -41,20 +41,43 @@ _CACHE_DIR = Path(tempfile.gettempdir()) / "slide_icon_cache"
 _cache_lock = threading.Lock()
 
 
-def _load_library() -> dict[str, str]:
+def icon_file_name(row: dict) -> str:
+    """항목의 이미지 파일명. 기본 세트는 <이름>.svg, 어드민에서 올린 PNG 아이콘은 file 필드를 따른다."""
+    return str(row.get("file") or f"{row['name']}.svg")
+
+
+def _load_rows() -> list[dict]:
     try:
         rows = json.loads((SVG_ICON_DIR / "library.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}
-    return {
-        str(row["name"]): str(row.get("hint") or row["name"])
-        for row in rows if (SVG_ICON_DIR / f"{row['name']}.svg").is_file()
-    }
+        return []
+    return [row for row in rows if isinstance(row, dict) and row.get("name") and (SVG_ICON_DIR / icon_file_name(row)).is_file()]
 
 
-_LIBRARY = _load_library()
-ICON_NAMES = tuple(dict.fromkeys([*_LIBRARY, *_LEGACY_NAMES]))
-ICON_HINTS = {**_LEGACY_HINTS, **_LIBRARY}
+_FILES: dict[str, str] = {}
+_LIBRARY: dict[str, str] = {}
+# ICON_NAMES·ICON_HINTS는 여러 모듈이 import해 쓰므로 같은 객체를 제자리에서 갱신한다(reload_library).
+ICON_NAMES: list[str] = []
+ICON_HINTS: dict[str, str] = {}
+
+
+def reload_library() -> None:
+    """library.json을 다시 읽어 이름·설명·파일 표를 갱신하고 변환 캐시를 비운다(어드민에서 아이콘을 추가·삭제한 직후 호출)."""
+    rows = _load_rows()
+    with _cache_lock:
+        _FILES.clear()
+        _FILES.update({str(row["name"]): icon_file_name(row) for row in rows})
+        _LIBRARY.clear()
+        _LIBRARY.update({str(row["name"]): str(row.get("hint") or row["name"]) for row in rows})
+        ICON_NAMES[:] = list(dict.fromkeys([*_LIBRARY, *_LEGACY_NAMES]))
+        ICON_HINTS.clear()
+        ICON_HINTS.update({**_LEGACY_HINTS, **_LIBRARY})
+        if _CACHE_DIR.is_dir():
+            for stale in _CACHE_DIR.glob("*.png"):
+                stale.unlink(missing_ok=True)
+
+
+reload_library()
 
 
 def icon_image(name: str, size: int) -> Image.Image | None:
@@ -67,14 +90,26 @@ def icon_image(name: str, size: int) -> Image.Image | None:
             if not path.is_file():
                 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
                 temp = path.with_suffix(".tmp.png")
-                result = subprocess.run(
-                    ["ffmpeg", "-y", "-i", str(SVG_ICON_DIR / f"{name}.svg"),
-                     "-vf", f"scale={size}:{size}:flags=lanczos", "-pix_fmt", "rgba", "-frames:v", "1",
-                     str(temp), "-loglevel", "error"],
-                    capture_output=True, timeout=60,
-                )
-                if result.returncode != 0 or not temp.is_file():
-                    return None
+                source = SVG_ICON_DIR / _FILES.get(name, f"{name}.svg")
+                if source.suffix.lower() == ".png":
+                    # 직접 올린 PNG 아이콘: 비율을 유지한 채 정사각 캔버스 가운데에 맞춘다.
+                    try:
+                        sprite = Image.open(source).convert("RGBA")
+                        sprite.thumbnail((size, size), Image.LANCZOS)
+                        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+                        canvas.alpha_composite(sprite, ((size - sprite.width) // 2, (size - sprite.height) // 2))
+                        canvas.save(temp)
+                    except OSError:
+                        return None
+                else:
+                    result = subprocess.run(
+                        ["ffmpeg", "-y", "-i", str(source),
+                         "-vf", f"scale={size}:{size}:flags=lanczos", "-pix_fmt", "rgba", "-frames:v", "1",
+                         str(temp), "-loglevel", "error"],
+                        capture_output=True, timeout=60,
+                    )
+                    if result.returncode != 0 or not temp.is_file():
+                        return None
                 os.replace(temp, path)
     try:
         return Image.open(path).convert("RGBA")
