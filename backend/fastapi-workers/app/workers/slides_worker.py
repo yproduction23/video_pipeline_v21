@@ -44,7 +44,9 @@ from app.services.slide_kling import generate_slide_kling_clip
 from app.services.slide_motion_parts import compose_motion_part, is_countable, part_phrase
 from app.services.slide_timing import apply_tts_windows, overlay_read_seconds, part_timing, phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
-from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan, carry_locked_scenes
+from app.services.slide_edit_replan import (
+    build_edit_plan_with_repair as build_edit_plan, carry_locked_scenes, preserve_existing_plan,
+)
 from app.services.slide_landmark_judge import looks_foreign_cached
 from app.utils.claude_ledger import bind_job, carry_job
 from app.services.slide_sequence import attach_sequences, audit_sequence_sync, design_sequence, render_sequence_clip
@@ -333,6 +335,7 @@ class SlidesWorker:
         scene_indices: list[int] | None = None,
         plan_only: bool = False,
         kling_upgrade: bool = False,
+        full_rebuild: bool = False,
         **_ignored_character_kwargs,
     ) -> dict:
         """**_ignored_character_kwargs: character_image_path/style/poses_dir,
@@ -461,14 +464,20 @@ class SlidesWorker:
         # 계획서만 만드는 요청은 명시적인 (재)생성이므로 항상 새로 만든다(재사용은 실행에만 적용한다).
         if plan_only or not plan_matches(edit_plan, briefs):
             previous_plan = edit_plan
-            edit_plan = build_edit_plan(
-                briefs, job_id=job_id,
-                highlight_end_index=(highlight_end - 1) if highlight_end else None,
-            )
+            highlight_index = (highlight_end - 1) if highlight_end else None
+            # 2026-10-19 운영자 결정: 이미 계획서가 있으면 전체를 다시 만들지 않고 달라진 장면만 새로 계획한다(full_rebuild만 전체 재생성).
+            # 신규 Job·과거 Job 재개·AUTO/GUIDED/MANUAL·계획서만 만들기/씬별 생성 실행이 모두 이 한 곳을 지난다.
+            edit_plan = None if full_rebuild else preserve_existing_plan(previous_plan, briefs, highlight_end_index=highlight_index)
             if edit_plan:
+                plan_replaced_after_review = plan_replaced_after_review and bool((edit_plan.get("preserved") or {}).get("replanned"))
+                logger.info("기존 계획서 유지: 유지 %s개, 새로 계획 %s개",
+                            len(edit_plan["preserved"]["kept"]), len(edit_plan["preserved"]["replanned"]))
+            else:
+                edit_plan = build_edit_plan(briefs, job_id=job_id, highlight_end_index=highlight_index)
                 # 잠근 장면은 다시 만들지 않고 이전 결정을 그대로 옮긴다(좋았던 부분이 재생성하면서 바뀌지 않게).
-                if carry_locked_scenes(edit_plan, previous_plan):
+                if edit_plan and carry_locked_scenes(edit_plan, previous_plan):
                     edit_plan = attach_sequences(edit_plan)   # 옮긴 뒤 구간 서명이 같은 시퀀스는 재사용하고 바뀐 구간만 다시 설계한다
+            if edit_plan:
                 edit_plan["timeline"] = {"source": timeline_source, "total_seconds": round(sum(b["duration"] for b in briefs.values()), 2)}
                 audit_sequence_sync(edit_plan)           # 타임라인 출처를 기록한 뒤 다시 점검한다
                 save_plan(edit_plan, DATA_DIR)
@@ -489,6 +498,7 @@ class SlidesWorker:
                         "version": edit_plan["version"], "input_hash": edit_plan["input_hash"],
                         "scene_count": edit_plan["scene_count"], "summary": edit_plan["summary"],
                         "segments": edit_plan["segments"],
+                        "preserved": edit_plan.get("preserved"),
                     }
                     if edit_plan else None
                 ),

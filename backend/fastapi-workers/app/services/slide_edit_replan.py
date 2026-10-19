@@ -24,6 +24,7 @@ from app.services.slide_edit_plan import (
     MAX_PHOTO_SCENE_RATIO,
     MAX_STOCK_OVERLAY_RATIO,
     OVERLAY_RATIO_RANGE,
+    PLAN_VERSION,
     TARGET_STOCK_OVERLAY_RATIO,
     MIN_FOOTAGE_RATIO,
     MIN_MEAN_BG_RUN_SECONDS,
@@ -33,6 +34,7 @@ from app.services.slide_edit_plan import (
     _clean_queries,
     build_edit_plan,
     fallback_key_phrase,
+    plan_input_hash,
     refresh_plan,
 )
 from app.services.slide_overlay import validate_overlay_plan
@@ -358,6 +360,56 @@ def carry_locked_scenes(plan: dict, previous: dict | None) -> list[int]:
     if carried:
         plan["locked_scenes"] = carried
     return carried
+
+
+MAX_CHANGED_SCENE_RATIO = 0.4      # 대본이 이보다 많이 바뀌면 부분 갱신이 의미 없으므로 전체를 새로 만든다
+
+
+def preserve_existing_plan(
+    previous: dict | None, briefs: dict[int, dict], *, highlight_end_index: int | None = None, llm_call=None,
+) -> dict | None:
+    """이미 있는 계획서를 기본으로 유지하고 달라진 장면만 다시 계획한다. 유지할 수 없으면 None(호출한 쪽이 전체를 새로 만든다).
+
+    2026-10-19 운영자 요청: "계획서도 전체를 다시 만드는 게 아니라 해당 부분만 만들어야 한다" — 좋았던 부분이 다시 만들면서 이상하게 바뀌었다.
+    - 내레이션이 그대로인 장면: 배경·검색어·후편집·연상 부품 결정을 그대로 두고 길이·자막 줄 시각만 새 값으로 바꾼다(Claude 호출 없음).
+    - 내레이션이 바뀐 장면, 길이가 달라진 회색 구간: 그 장면·구간만 새로 계획·설계한다(구간 시퀀스는 서명이 같으면 재사용).
+    - 계획서 버전(PLAN_VERSION)이 다르거나 장면 번호가 맞지 않거나 바뀐 장면이 많으면 유지하지 않는다.
+    새 연출 규칙을 모든 장면에 적용하고 싶으면 호출 쪽에서 full_rebuild로 전체를 새로 만든다(폐기한 전략: 매번 전체 재생성 — 비용과 변동 때문)."""
+    if not previous or previous.get("version") != PLAN_VERSION:
+        return None
+    old = {s["index"]: s for s in previous.get("scenes", [])}
+    if not old or set(old) != set(briefs):
+        return None
+    changed = [i for i in sorted(briefs) if old[i].get("narration") != briefs[i].get("narration", "")]
+    if len(changed) > MAX_CHANGED_SCENE_RATIO * len(briefs):
+        return None
+    plan = json.loads(json.dumps(previous))
+    for scene in plan["scenes"]:
+        brief = briefs[scene["index"]]
+        scene["duration"] = round(float(brief.get("duration") or 0), 2)
+        scene["narration"] = brief.get("narration", "")
+        scene["chunks"] = list(brief.get("chunks") or [])
+    plan["input_hash"] = plan_input_hash(briefs)
+    plan["highlight_end_index"] = highlight_end_index
+    if changed:
+        replanned = replan_scenes(
+            plan, [{"index": i, "note": "대본이 바뀐 장면 — 새 내레이션에 맞게"} for i in changed], llm_call=llm_call, source="auto",
+        )
+        if not replanned:
+            return None
+        plan = replanned
+        # 새로 계획한 장면만 아이콘·제목·문구 검수를 다시 한다(유지한 장면은 검수 결과를 그대로 둔다).
+        subset = {**plan, "scenes": [s for s in plan["scenes"] if s["index"] in set(changed)], "sequences": []}
+        for stage in (fill_missing_icons_in_plan, strip_unjudged_icons_from_plan, fix_titles_in_plan, fix_key_texts_in_plan, drop_fake_lists_in_plan):
+            subset = stage(subset, llm_call=llm_call)
+        by_index = {s["index"]: s for s in subset["scenes"]}
+        plan["scenes"] = [by_index.get(s["index"], s) for s in plan["scenes"]]
+    refresh_plan(plan)
+    plan["preserved"] = {
+        "kept": [i for i in sorted(briefs) if i not in set(changed)], "replanned": changed,
+        "from_created_at": previous.get("created_at"), "built_at": time.time(),
+    }
+    return attach_sequences(plan, llm_call=llm_call)
 
 
 def build_edit_plan_with_repair(

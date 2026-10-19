@@ -1039,7 +1039,14 @@ def attach_sequences(plan: dict, *, llm_call=None, workers: int = 4) -> dict:
         signature = sequence_signature(run)
         reused = previous.get(signature)
         if reused:
-            return json.loads(json.dumps(reused))
+            copy = json.loads(json.dumps(reused))
+            # 앞 장면 길이가 바뀌어도 이 구간의 시작 시각은 달라질 수 있으므로 시간축 기준점은 현재 계획서에서 다시 구한다.
+            starts = _scene_starts(plan)
+            seq_start = starts[run[0]["index"]]
+            copy["start"] = round(seq_start, 2)
+            copy["end"] = round(seq_start + copy["duration"], 2)
+            copy["offsets"] = {str(s["index"]): round(starts[s["index"]] - seq_start, 3) for s in run}
+            return copy
         return design_sequence(run, plan, llm_call=llm_call)
 
     if len(runs) > 1:

@@ -79,6 +79,12 @@ public class ImagesService {
      */
     @Transactional(readOnly = true)
     public ImagesGenerateResponse buildEditPlan(Long jobId) {
+        return buildEditPlan(jobId, false);
+    }
+
+    @Transactional(readOnly = true)
+    /** fullRebuild=false(기본)면 기존 계획서를 유지하고 달라진 장면만 새로 계획한다. true면 전체를 새로 만든다. */
+    public ImagesGenerateResponse buildEditPlan(Long jobId, boolean fullRebuild) {
         VideoJob job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new RuntimeException("Job not found: " + jobId));
         if (job.getVisualMode() != VisualMode.SLIDE) {
@@ -91,7 +97,7 @@ public class ImagesService {
         }
         log.info("편집 계획서 생성 시작(이미지 생성 없음): jobId={}", jobId);
         return fastApiClient.planSlideEdit(
-                jobId, loadAssetMeta(jobId, AssetType.TTS_AUDIO), loadAssetMeta(jobId, AssetType.SCRIPT));
+                jobId, loadAssetMeta(jobId, AssetType.TTS_AUDIO), loadAssetMeta(jobId, AssetType.SCRIPT), fullRebuild);
     }
 
     /**

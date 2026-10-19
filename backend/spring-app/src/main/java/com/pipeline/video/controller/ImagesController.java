@@ -45,8 +45,12 @@ public class ImagesController {
 
     /** 편집 계획서만 만든다. 이미지·영상은 만들지 않는다(비용 없음). */
     @PostMapping("/plan")
-    public ResponseEntity<ImagesGenerateResponse> buildEditPlan(@PathVariable Long jobId) {
-        return ResponseEntity.ok(imagesService.buildEditPlan(jobId));
+    public ResponseEntity<ImagesGenerateResponse> buildEditPlan(
+            @PathVariable Long jobId,
+            @RequestBody(required = false) Map<String, Object> request) {
+        // 기본은 기존 계획서를 유지하고 달라진 장면만 새로 계획한다. fullRebuild=true일 때만 전체를 새로 만든다(2026-10-19 운영자 결정).
+        boolean fullRebuild = request != null && Boolean.TRUE.equals(request.get("fullRebuild"));
+        return ResponseEntity.ok(imagesService.buildEditPlan(jobId, fullRebuild));
     }
 
     /** 문제로 표시한 장면만 수정 지시를 반영해 다시 계획한다(이미지는 만들지 않는다). */

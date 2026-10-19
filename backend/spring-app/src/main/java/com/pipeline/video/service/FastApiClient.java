@@ -1081,6 +1081,11 @@ public class FastApiClient {
      * 슬라이드형 편집 계획서만 만든다(plan_only). 이미지·영상은 만들지 않으므로 공급자 비용이 나가지 않는다.
      */
     public ImagesGenerateResponse planSlideEdit(Long jobId, String ttsMetaJson, String scriptMetaJson) {
+        return planSlideEdit(jobId, ttsMetaJson, scriptMetaJson, false);
+    }
+
+    /** fullRebuild가 true면 기존 계획서를 유지하지 않고 전체를 새로 만든다(기본은 달라진 장면만 새로 계획). */
+    public ImagesGenerateResponse planSlideEdit(Long jobId, String ttsMetaJson, String scriptMetaJson, boolean fullRebuild) {
         try {
             Map<String, Object> bodyMap = new HashMap<>();
             bodyMap.put("job_id", jobId);
@@ -1088,6 +1093,7 @@ public class FastApiClient {
             bodyMap.put("script_meta", scriptMetaJson);
             bodyMap.put("visual_mode", "SLIDE");
             bodyMap.put("plan_only", true);
+            bodyMap.put("full_rebuild", fullRebuild);
             return objectMapper.readValue(
                     postJson(fastApiUrl + "/workers/images/generate", bodyMap),
                     ImagesGenerateResponse.class);

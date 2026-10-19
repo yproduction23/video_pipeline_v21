@@ -449,3 +449,17 @@ def test_bars_with_long_value_labels_are_not_clipped_and_do_not_touch_the_title(
     title_end = max(y for y in range(0, 110) if rows[y])
     first_label = next(y for y in range(title_end + 1, height) if rows[y])
     assert first_label - title_end >= 14                                            # 제목과 값 라벨 사이에 틈이 있다
+
+
+def test_reused_sequence_follows_a_shifted_start_when_the_scene_before_it_changes_length():
+    """계획서 갱신으로 앞 장면 길이만 달라져도(구간 서명은 그대로) 재사용한 시퀀스의 시작 시각·장면 오프셋은 현재 값이어야 한다."""
+    plan = _plan(backgrounds=("stock", "board", "board", "board"), duration=4.0)
+    attach_sequences(plan, llm_call=_llm(DESIGN), workers=1)
+    assert plan["sequences"][0]["start"] == 4.0
+    plan["scenes"][0]["duration"] = 6.5
+
+    attach_sequences(plan, llm_call=lambda s, m, t: (_ for _ in ()).throw(AssertionError("재사용해야 한다")), workers=1)
+
+    seq = plan["sequences"][0]
+    assert seq["start"] == 6.5 and seq["end"] == round(6.5 + seq["duration"], 2)
+    assert seq["offsets"]["1"] == 0.0 and seq["offsets"]["2"] == 4.0

@@ -719,10 +719,17 @@ export default function JobDetail() {
   })
   const slidePlan = slidePlanData?.plan || null
 
-  const handleBuildPlan = async () => {
+  const handleBuildPlan = async (fullRebuild = false) => {
+    // 기존 계획서가 있으면 기본은 달라진 장면만 새로 계획한다. 전체 재생성은 확인을 받고 따로 누른다(2026-10-19 운영자 결정).
+    if (fullRebuild && !window.confirm(`계획서를 처음부터 전부 다시 만들까요?
+좋았던 장면의 배경·연출도 모두 새로 정해져 달라질 수 있고, Claude 비용(약 2천 원)이 들어요.
+일부만 고치려면 취소하고 해당 장면의 다시 계획을 쓰세요.`)) return
     setRunningStep('images-plan')
     try {
-      await jobsApi.buildEditPlan(id)
+      const result = await jobsApi.buildEditPlan(id, fullRebuild)
+      const kept = result?.edit_plan?.preserved
+      if (kept) alert(`계획서를 갱신했어요.
+유지한 장면 ${kept.kept.length}개, 새로 계획한 장면 ${kept.replanned.length}개`)
       qc.invalidateQueries(['slide-plan', id])
     } catch (e) {
       console.error(e)
@@ -1438,10 +1445,18 @@ export default function JobDetail() {
                           </div>
                         )}
                         {step.key === 'images' && isSlideJob && !isAuto && (
-                          <button onClick={handleBuildPlan} disabled={!!runningStep}
+                          <button onClick={() => handleBuildPlan(false)} disabled={!!runningStep}
+                            title={slidePlan ? '이미 만든 계획서는 유지하고, 대본·길이가 달라진 장면만 새로 계획해요' : undefined}
                             className="flex items-center gap-1.5 bg-slate-700 text-white text-sm font-semibold px-4 py-2 rounded-xl hover:opacity-90 disabled:opacity-50 transition">
                             {runningStep === 'images-plan' ? <Loader size={14} className="animate-spin"/> : <Zap size={14}/>}
-                            {slidePlan ? '계획서 다시 만들기' : '편집 계획서 만들기'}
+                            {slidePlan ? '계획서 갱신 (달라진 장면만)' : '편집 계획서 만들기'}
+                          </button>
+                        )}
+                        {step.key === 'images' && isSlideJob && !isAuto && slidePlan && (
+                          <button onClick={() => handleBuildPlan(true)} disabled={!!runningStep}
+                            title="좋았던 장면까지 모두 처음부터 다시 정해요(비용 약 2천 원)"
+                            className="flex items-center gap-1.5 border border-slate-500 text-slate-300 text-sm font-semibold px-3 py-2 rounded-xl hover:opacity-90 disabled:opacity-50 transition">
+                            전체 새로 만들기
                           </button>
                         )}
                         <button onClick={() => handleRun(step)}

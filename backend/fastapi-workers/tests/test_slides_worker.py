@@ -681,6 +681,43 @@ def test_plan_only_always_builds_a_fresh_plan_even_when_the_saved_one_matches(mo
     assert built == [1]
 
 
+def _saved_plan_for(narration):
+    from app.services.slide_edit_plan import assemble_plan
+
+    briefs = {0: {"narration": narration, "context": "", "duration": 4.0, "chunks": []}}
+    return assemble_plan(briefs, [{"index": 0, "background": "stock", "stock_queries": ["office"], "overlay": None}], job_id=1)
+
+
+def test_plan_only_keeps_the_saved_plan_and_only_full_rebuild_replaces_it(monkeypatch, tmp_path):
+    """2026-10-19 운영자 결정: 계획서가 있으면 전체를 다시 만들지 않는다(full_rebuild만 전체 재생성).
+    폐기한 전략: plan_only는 항상 전체 재생성 — 좋았던 장면의 배경·연출이 매번 바뀌고 비용이 들었다."""
+    worker = SlidesWorker()
+    scene = {"content": "문장입니다.", "start_seconds": 0, "end_seconds": 4}
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared([scene]))
+    saved = _saved_plan_for("문장입니다.")
+    stored = []
+    built = []
+    monkeypatch.setattr("app.workers.slides_worker.load_plan", lambda job_id, data_dir: saved)
+    monkeypatch.setattr("app.workers.slides_worker.save_plan", lambda plan, data_dir: stored.append(plan))
+    monkeypatch.setattr("app.services.slide_edit_replan.attach_sequences", lambda plan, **kw: plan)
+
+    def fake_build(briefs, **kw):
+        built.append(1)
+        return {"version": "v", "input_hash": "new", "scene_count": 1, "summary": {}, "segments": [], "scenes": []}
+
+    monkeypatch.setattr("app.workers.slides_worker.build_edit_plan", fake_build)
+
+    result = worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}", plan_only=True)
+
+    assert built == [] and result["status"] == "PLAN_READY"
+    assert result["edit_plan"]["preserved"]["kept"] == [0] and result["edit_plan"]["preserved"]["replanned"] == []
+    assert stored[-1]["scenes"][0]["stock_queries"] == ["office"]
+
+    worker.generate(job_id=1, tts_meta_json=None, script_meta_json="{}", plan_only=True, full_rebuild=True)
+
+    assert built == [1]
+
+
 def _stock_miss_scene(monkeypatch, tmp_path, state, queries=("confused investor looking at documents", "office")):
     worker = SlidesWorker()
     calls = []
