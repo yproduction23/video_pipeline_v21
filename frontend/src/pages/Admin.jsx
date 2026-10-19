@@ -11,6 +11,7 @@ import JobFilterBar from '../components/JobFilterBar'
 import Pagination from '../components/Pagination'
 import StatusBadge from '../components/StatusBadge'
 import ReferenceChannelManager from '../components/admin/ReferenceChannelManager'
+import MotifLibrary from '../components/admin/MotifLibrary'
 import apiClient from '../api/client'
 import { NATURE_OPTIONS } from '../lib/contentNature'
 import { formatAutonomy, formatCategory, isCompleted } from '../constants/jobStatus'
@@ -33,7 +34,7 @@ const GENRE_OPTIONS = [
 export default function Admin() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const [activeTab, setActiveTab] = useState('jobs') // 'jobs' | 'policy' | 'channels' | 'people' | 'reference-channels'
+  const [activeTab, setActiveTab] = useState('jobs') // 'jobs' | 'policy' | 'channels' | 'people' | 'reference-channels' | 'motifs'
   const [adminFilter, setAdminFilter] = useState('ALL')
   const [currentPage, setCurrentPage] = useState(1)
 
@@ -398,6 +399,7 @@ export default function Admin() {
             { id: 'channels', label: '채널 프로필 관리', icon: Shield },
             { id: 'people', label: '실사 인물 에셋 관리', icon: Users },
             { id: 'reference-channels', label: '레퍼런스 채널', icon: ExternalLink },
+            { id: 'motifs', label: '연상 소재 라이브러리', icon: Sparkles },
           ].map(tab => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
@@ -806,6 +808,9 @@ export default function Admin() {
 
         {/* TAB 5: YouTube 레퍼런스 채널 관리 */}
         {activeTab === 'reference-channels' && <ReferenceChannelManager />}
+
+        {/* TAB 6: 연상 소재 라이브러리 */}
+        {activeTab === 'motifs' && <MotifLibrary />}
       </div>
     </Layout>
   )

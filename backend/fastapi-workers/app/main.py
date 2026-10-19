@@ -181,6 +181,71 @@ def slide_generation_progress(job_id: int):
     return read_progress(job_id, DATA_DIR) or {"job_id": job_id, "status": "none", "total": 0, "done": 0, "scenes": []}
 
 
+# ---- 연상 소재 라이브러리 관리(어드민 화면, 2026-10-19 운영자 요청) ----
+
+class MotifGenerateRequest(BaseModel):
+    description: str
+    job_id: int = 0
+
+
+class MotifUploadRequest(BaseModel):
+    label: str
+    aliases: Optional[str] = ""
+    image_base64: str
+
+
+class MotifReviewRequest(BaseModel):
+    action: str            # approve | delete
+
+
+@app.get("/workers/motifs")
+def motif_list():
+    from app.services.slide_motif_admin import list_motifs
+
+    return {"motifs": list_motifs()}
+
+
+@app.get("/workers/motifs/{slug}/image")
+def motif_image(slug: str):
+    from app.services.slide_motif_admin import image_path
+
+    path = image_path(slug)
+    if not path:
+        raise HTTPException(status_code=404, detail="소재 이미지가 없습니다.")
+    return FileResponse(str(path), media_type="image/png")
+
+
+@app.post("/workers/motifs/generate")
+def motif_generate(request: MotifGenerateRequest):
+    """설명으로 소재 한 장을 만든다(유료, Gemini 1장). 비전 검수에 통과해야 등록된다."""
+    from app.services.slide_motif_admin import MotifAdminError, generate_from_description
+
+    try:
+        return generate_from_description(request.description, job_id=request.job_id)
+    except MotifAdminError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/workers/motifs/upload")
+def motif_upload(request: MotifUploadRequest):
+    from app.services.slide_motif_admin import MotifAdminError, add_uploaded
+
+    try:
+        return add_uploaded(request.label, request.aliases, request.image_base64)
+    except MotifAdminError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/workers/motifs/{slug}/review")
+def motif_review(slug: str, request: MotifReviewRequest):
+    from app.services.slide_motif_admin import MotifAdminError, set_review
+
+    try:
+        return set_review(slug, request.action)
+    except MotifAdminError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @app.get("/workers/slides/plan/{job_id}")
 def slide_edit_plan(job_id: int):
     """슬라이드형 편집 계획서(배경·후편집·구간·비용 추정). 아직 없으면 plan=null."""

@@ -1146,6 +1146,45 @@ public class FastApiClient {
         }
     }
 
+    // ---- 연상 소재 라이브러리(어드민 화면, 2026-10-19 운영자 요청) ----
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> listMotifs() {
+        Map<String, Object> response = restTemplate.getForObject(fastApiUrl + "/workers/motifs", Map.class);
+        return response == null ? Map.of("motifs", java.util.List.of()) : response;
+    }
+
+    public ResponseEntity<byte[]> getMotifImage(String slug) {
+        try {
+            return restTemplate.exchange(fastApiUrl + "/workers/motifs/" + slug + "/image", HttpMethod.GET, null, byte[].class);
+        } catch (Exception e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> generateMotif(String description, long jobId) throws IOException {
+        Map<String, Object> body = new HashMap<>();
+        body.put("description", description);
+        body.put("job_id", jobId);
+        return objectMapper.readValue(postJson(fastApiUrl + "/workers/motifs/generate", body), Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> uploadMotif(String label, String aliases, String imageBase64) throws IOException {
+        Map<String, Object> body = new HashMap<>();
+        body.put("label", label);
+        body.put("aliases", aliases == null ? "" : aliases);
+        body.put("image_base64", imageBase64);
+        return objectMapper.readValue(postJson(fastApiUrl + "/workers/motifs/upload", body), Map.class);
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> reviewMotif(String slug, String action) throws IOException {
+        return objectMapper.readValue(
+                postJson(fastApiUrl + "/workers/motifs/" + slug + "/review", new HashMap<>(Map.of("action", action))), Map.class);
+    }
+
     @SuppressWarnings("unchecked")
     public Map<String, Object> getWorkerCostLedger(Long jobId) {
         try {
