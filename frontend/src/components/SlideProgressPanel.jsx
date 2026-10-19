@@ -299,6 +299,7 @@ const FLAG_TEXT = {
 }
 const flagText = (flag) => {
   if (FLAG_TEXT[flag]) return FLAG_TEXT[flag]
+  if (flag === 'continued_neighbour_background') return '스톡·AI가 모두 실패해 이웃 장면의 배경을 이어서 사용'
   if (String(flag).startsWith('stock_miss_ai:')) return '스톡이 없어 AI 배경으로 대체'
   if (String(flag).startsWith('stock_miss:')) return '스톡이 맞지 않아 자동 대체(' + String(flag).split(':')[1].replace('foreign_landmark', '외국 랜드마크').replace('candidates_rejected_by_selection', '후보 부적합').replace('frame_unusable', '화면 불량').replace('download_failed', '다운로드 실패') + ')'
   return String(flag)

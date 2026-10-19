@@ -241,6 +241,70 @@ def _extract_first_frame_at(video_path: str, output_path: str, seconds: float) -
     return result.returncode == 0 and Path(output_path).is_file()
 
 
+CONTINUE_RENDER_TIMEOUT_SECONDS = 180
+CONTINUE_OFFSET_SECONDS = 3.0      # 이웃 장면 영상에서 이 지점부터 이어 간다(앞 장면과 같은 컷이 되풀이돼 보이지 않게)
+
+
+def _neighbour_background(job_dir: Path, index: int, total: int) -> tuple[str, Path] | None:
+    """이어 쓸 이웃 장면의 원본 배경 파일(스톡 영상 또는 AI 배경 그림). 앞 장면 → 뒤 장면 → 그 앞 장면 순으로 찾는다."""
+    for neighbour in (index - 1, index + 1, index - 2, index + 2):
+        if not 0 <= neighbour < total:
+            continue
+        video = job_dir / f"scene_{neighbour:03d}_stock.mp4"
+        if video.is_file():
+            return "video", video
+        still = job_dir / f"scene_{neighbour:03d}_bg.png"
+        if still.is_file():
+            return "image", still
+    return None
+
+
+def _continue_previous_backgrounds(generated: list[dict], job_dir: Path, total: int) -> list[int]:
+    """스톡·AI 배경·그림 설계가 모두 실패해 글 없는 칠판(board_without_graphic)이 된 장면을 이웃 장면의 배경으로 채운다. 채운 장면 번호를 돌려준다.
+
+    2026-10-19 운영자 조건("빈 화면이 없어야 한다")의 최후 안전망: 컷 편집에서 흔한 방식으로 앞 장면의 배경 영상을 이어서(영상은 앞 장면이 끝난 지점부터,
+    그림은 천천히 확대) 보여 준다. 이웃에 쓸 배경이 없으면 그대로 두고 검수 사유로 남긴다. 후편집이 있는 장면에는 쓰지 않는다."""
+    filled: list[int] = []
+    for scene in generated:
+        flags = scene.get("quality_flags") or []
+        if "board_without_graphic" not in flags:
+            continue
+        index = int(scene["index"])
+        found = _neighbour_background(job_dir, index, total)
+        if not found:
+            continue
+        kind, source = found
+        duration = max(float(scene.get("duration") or 0.0), 0.8)
+        clip = job_dir / f"scene_{index:03d}_continue.mp4"
+        scale = "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,fps=30"
+        if kind == "video":
+            # 앞 장면이 쓴 만큼 건너뛴 지점부터 이어 간다(같은 장면이 되풀이되어 보이지 않게). 앞 장면이 없으면 처음부터.
+            offset = CONTINUE_OFFSET_SECONDS
+            cmd = ["ffmpeg", "-y", "-nostdin", "-stream_loop", "-1", "-ss", f"{offset:.2f}", "-i", str(source),
+                   "-vf", scale, "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", str(clip), "-loglevel", "error"]
+        else:
+            frames = int(duration * 30)
+            zoom = f"scale=3840:2160,zoompan=z='min(1+0.0004*on,1.08)':d={frames}:s=1920x1080:fps=30"
+            cmd = ["ffmpeg", "-y", "-nostdin", "-loop", "1", "-i", str(source), "-vf", zoom, "-t", f"{duration:.3f}", "-an",
+                   "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p", str(clip), "-loglevel", "error"]
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=CONTINUE_RENDER_TIMEOUT_SECONDS)
+        except (subprocess.SubprocessError, OSError):
+            continue
+        if result.returncode != 0 or not clip.is_file() or clip.stat().st_size < 1000:
+            continue
+        frame = job_dir / f"scene_{index:03d}_continue_frame.png"
+        if _extract_first_frame_at(str(clip), str(frame), min(1.0, max(duration / 2, 0.4))):
+            scene["image_path"] = str(frame)
+        scene["stock_video_path"] = str(clip)
+        scene["visual_type"] = "slide_stock_video"
+        scene["base_fallback"] = "continue_neighbour_background"
+        scene["quality_flags"] = [f for f in flags if f != "board_without_graphic"] + ["continued_neighbour_background"]
+        scene.setdefault("slide_layers", {})["base"] = {"type": "slide_stock_video", "image_path": scene.get("image_path"), "video_path": str(clip)}
+        filled.append(index)
+    return filled
+
+
 class _NullProgress:
     """계획서만 만드는 실행(plan_only)은 장면 진행 파일을 건드리지 않는다."""
 
@@ -498,6 +562,10 @@ class SlidesWorker:
                         "semantic_review_recommended",
                         *semantic.get("failure_categories", []),
                     ]))
+
+        continued = _continue_previous_backgrounds(generated, job_dir, len(scenes_meta))
+        if continued:
+            logger.info("빈 칠판 장면 %s개를 이웃 장면 배경으로 이어서 채웠습니다: %s", len(continued), continued)
 
         review_reasons = (
             ["확인한 편집 계획서와 입력(내레이션·장면 길이)이 달라 계획서를 새로 만들어 실행했습니다 — 계획서를 다시 확인해 주세요."]

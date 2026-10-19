@@ -547,7 +547,7 @@ _JUDGE_SYSTEM = (
 
 
 def _label_candidates(topic: dict) -> list[str]:
-    values: list[object] = [topic.get(key) for key in ("title", "caption", "headline", "sub")]
+    values: list[object] = [topic.get(key) for key in ("title", "caption", "headline", "sub", "label")]   # label: pictogram의 짧은 라벨
     for side in ("a", "b"):
         if isinstance(topic.get(side), dict):
             values.append(topic[side].get("label"))

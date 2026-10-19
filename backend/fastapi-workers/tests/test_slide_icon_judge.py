@@ -89,3 +89,30 @@ def test_missing_flow_icons_are_filled_from_the_library_only_when_every_node_get
     assert all("icon" not in n for n in partial[0]["nodes"])                 # 일부만이면 모두 글자로 둔다
 
     assert suggest_icons([{"id": 0, "label": "x", "narration": "y"}], llm_call=reply([{"id": 0, "icon": "없는그림"}])) == {}   # 라이브러리에 없는 이름은 버린다
+
+
+def test_pictogram_flow_and_pair_icons_are_judged_with_the_relaxed_standard_but_number_cards_stay_strict():
+    """2026-10-19 운영자 결정: 그림 판정이 너무 엄격해 연상이 안 늘었다 — 그림·흐름·비교 항목은 널리 쓰는 비유까지 허용하고, 숫자 카드의 아이콘은 엄격하게 둔다."""
+    import json
+
+    from app.services.slide_icon_judge import strip_unjudged_icons_from_topics
+
+    seen = []
+
+    def llm(system, messages, max_tokens):
+        seen.append(messages[0]["content"])
+        return json.dumps({"ok": []})
+
+    run = [{"index": 0, "narration": "위험회피 심리가 시장 전반으로 빠르게 퍼졌습니다."}]
+    topics = [
+        {"template": "pictogram", "scene": 0, "icon": "motif:도미노", "label": "시장 전반으로"},
+        {"template": "title_number", "scene": 0, "icon": "bell", "number": {"value": "5.3%", "label": "금리"}},
+        {"template": "flow", "scene": 0, "nodes": [{"label": "위험회피", "icon": "motif:도미노"}, {"label": "시장 전반", "icon": "motif:불꽃"}]},
+    ]
+
+    strip_unjudged_icons_from_topics(topics, run, llm_call=llm)
+
+    lines = seen[0].splitlines()
+    assert "[기준: 완화] 아이콘=motif:도미노" in lines[0]                                   # pictogram
+    assert "[기준: 엄격] 아이콘=bell" in lines[1]                                           # 숫자 카드
+    assert all("[기준: 완화]" in line for line in lines[2:4])                               # 흐름 노드

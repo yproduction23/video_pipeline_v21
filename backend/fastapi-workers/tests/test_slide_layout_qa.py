@@ -37,7 +37,7 @@ def _approving(payload):
 
     def call(system, messages, max_tokens):
         if "아이콘 검수자" in system:
-            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. 아이콘=", messages[0]["content"], re.M)]})
+            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. (?:\[기준: \w+\] )?아이콘=", messages[0]["content"], re.M)]})
         return json.dumps(payload, ensure_ascii=False)
 
     return call
@@ -245,7 +245,7 @@ def test_a_sequence_too_close_to_the_previous_red_text_is_redesigned_without_red
     def llm(system, messages, max_tokens):
         if "아이콘 검수자" in system:
             import re
-            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. 아이콘=", messages[0]["content"], re.M)]})
+            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. (?:\[기준: \w+\] )?아이콘=", messages[0]["content"], re.M)]})
         text = messages[0]["content"]
         calls.append("빨간 글 강조(headline_sub)를 쓰지 않는다" in text)
         scene = 0 if "외국인 이탈과" in text and "삼성전자와" not in text else 2

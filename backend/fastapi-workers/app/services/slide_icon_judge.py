@@ -22,6 +22,9 @@ _JUDGE_SYSTEM = (
     "아이콘이 지금 말하는 대상을 직접 그린 그림이면 ok다(예: '반도체 업종'→chip, '은행'→bank, '하락'→chart_down). "
     "상징·장식·막연한 연상(예: '구조적 취약점'→톱니바퀴, '금리 5.3%'→벨, '진단'→돋보기)이거나 뜻이 약간이라도 어긋나면 거절한다. "
     "확신이 없으면 거절한다.\n"
+    "항목마다 [기준: 엄격|완화]가 붙는다. 엄격은 위 기준 그대로다. 완화(그림·흐름도·비교 항목, 2026-10-19 운영자 결정: 그림이 대부분 탈락해 연상이 늘지 않았다)는 "
+    "그림이 라벨의 대상을 직접 그렸거나, 경제 해설에서 널리 쓰는 비유이면 ok다(도미노=연쇄·확산, 방패=안전·방어, 먹구름=불안·공포, 폭탄=충격, "
+    "저울=비교·균형, 아래 화살표=압력·하락, 불꽃=과열). 다만 뜻이 반대로 읽히거나(상승↔하락, 매수↔매도) 가리키는 대상이 다르면 완화여도 거절한다.\n"
     '출력은 JSON만: {"ok": [통과한 항목 번호, ...]}'
 )
 
@@ -48,7 +51,7 @@ def judge_icons(items: list[dict], *, llm_call=None) -> set[int]:
     if not items:
         return set()
     lines = [
-        f'{item["id"]}. 아이콘={item["icon"]}({_hint(item["icon"])}) / 글="{item["text"]}" / 내레이션="{item["narration"]}"'
+        f'{item["id"]}. [기준: {"완화" if item.get("relaxed") else "엄격"}] 아이콘={item["icon"]}({_hint(item["icon"])}) / 글="{item["text"]}" / 내레이션="{item["narration"]}"'
         for item in items
     ]
     try:
@@ -70,6 +73,7 @@ def _is_judged(icon: object) -> bool:
 def strip_unjudged_icons_from_plan(plan: dict, *, llm_call=None) -> dict:
     """계획서 장면 후편집의 아이콘(강조·큰 숫자·비교·계산식·흐름 노드)을 판정하고 어긋난 것은 뺀다. 글은 그대로다."""
     uses: list[tuple[dict, str, str, str]] = []  # (컨테이너, 키, 글, 내레이션)
+    relaxed_nodes: set[int] = set()              # 흐름 노드 그림은 완화 기준으로 판정한다
     for scene in plan.get("scenes", []):
         overlay = scene.get("overlay") or {}
         text = str(overlay.get("text") or overlay.get("label") or overlay.get("headline") or overlay.get("title") or "")
@@ -78,7 +82,9 @@ def strip_unjudged_icons_from_plan(plan: dict, *, llm_call=None) -> dict:
         for node in overlay.get("nodes") or []:
             if _is_judged(node.get("icon")):
                 uses.append((node, "icon", str(node.get("label") or ""), scene["narration"]))
-    items = [{"id": n, "icon": box[key], "text": text, "narration": narration} for n, (box, key, text, narration) in enumerate(uses)]
+                relaxed_nodes.add(id(node))
+    items = [{"id": n, "icon": box[key], "text": text, "narration": narration, "relaxed": id(box) in relaxed_nodes}
+             for n, (box, key, text, narration) in enumerate(uses)]
     approved = judge_icons(items, llm_call=llm_call)
     removed = 0
     for n, (box, key, _text, _narration) in enumerate(uses):
@@ -100,26 +106,32 @@ def strip_unjudged_icons_from_topics(topics: list, run: list[dict], *, llm_call=
     narrations = {s["index"]: s["narration"] for s in run}
     uses: list[tuple[dict, str, str, str]] = []
     flow_groups: list[list[int]] = []
+    relaxed_boxes: set[int] = set()        # 완화 기준으로 판정할 그림(pictogram·흐름 노드·비교 항목)
     for topic in topics or []:
         if not isinstance(topic, dict):
             continue
         narration = narrations.get(topic.get("scene"), " ".join(narrations.values()))
         if _is_judged(topic.get("icon")):
             number = topic.get("number") if isinstance(topic.get("number"), dict) else {}
-            label = str(topic.get("title") or number.get("label") or topic.get("caption") or "")
+            label = str(topic.get("title") or number.get("label") or topic.get("caption") or topic.get("label") or "")
             uses.append((topic, "icon", label, narration))
+            if topic.get("template") == "pictogram":
+                relaxed_boxes.add(id(topic))
         for side in ("a", "b"):
             item = topic.get(side)
             if isinstance(item, dict) and _is_judged(item.get("icon")):
                 uses.append((item, "icon", str(item.get("label") or ""), narration))
+                relaxed_boxes.add(id(item))
         group: list[int] = []
         for node in topic.get("nodes") or []:
             if isinstance(node, dict) and _is_judged(node.get("icon")):
                 group.append(len(uses))
                 uses.append((node, "icon", str(node.get("label") or ""), narration))
+                relaxed_boxes.add(id(node))
         if group:
             flow_groups.append(group)
-    items = [{"id": n, "icon": box[key], "text": text, "narration": narration} for n, (box, key, text, narration) in enumerate(uses)]
+    items = [{"id": n, "icon": box[key], "text": text, "narration": narration, "relaxed": id(box) in relaxed_boxes}
+             for n, (box, key, text, narration) in enumerate(uses)]
     approved = judge_icons(items, llm_call=llm_call)
     for n, (box, key, _text, _narration) in enumerate(uses):
         if n not in approved:

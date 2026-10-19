@@ -19,7 +19,7 @@ def _llm(topics):
     def call(system, messages, max_tokens):
         text = messages[0]["content"]
         if "아이콘 검수자" in system:
-            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. 아이콘=", text, re.M)]})
+            return json.dumps({"ok": [int(i) for i in re.findall(r"^(\d+)\. (?:\[기준: \w+\] )?아이콘=", text, re.M)]})
         if "목록 카드" in system:
             return json.dumps({"results": [{"id": 0, "ok": True}]})
         return json.dumps({"topics": topics}, ensure_ascii=False)

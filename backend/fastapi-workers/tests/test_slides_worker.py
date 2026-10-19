@@ -1283,3 +1283,46 @@ def test_a_stock_scene_that_ends_up_without_any_graphic_is_redesigned_instead_of
 def test_design_board_fallback_returns_none_when_the_plan_or_scene_is_missing():
     assert SlidesWorker._design_board_fallback(3, None) is None
     assert SlidesWorker._design_board_fallback(3, {"scenes": [{"index": 9}]}) is None      # 그 장면이 계획서에 없으면 만들지 않는다
+
+
+def _make_video(path, seconds=4):
+    import subprocess
+
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"testsrc=size=640x360:rate=30:duration={seconds}",
+                    "-pix_fmt", "yuv420p", str(path)], check=True)
+
+
+def test_a_blank_board_scene_continues_the_neighbouring_background_instead_of_staying_empty(tmp_path):
+    """2026-10-19 운영자 조건(빈 화면 금지)의 최후 안전망: 스톡·AI·그림 설계가 모두 실패한 장면은 이웃 장면의 배경을 이어서 보여 준다."""
+    import subprocess
+
+    from app.workers.slides_worker import _continue_previous_backgrounds
+
+    _make_video(tmp_path / "scene_000_stock.mp4")
+    blank = {"index": 1, "duration": 2.8, "visual_type": "slide_board", "quality_flags": ["stock_miss:download_failed", "board_without_graphic"]}
+    normal = {"index": 2, "duration": 3.0, "visual_type": "slide_stock_video", "quality_flags": []}
+
+    filled = _continue_previous_backgrounds([blank, normal], tmp_path, total=3)
+
+    assert filled == [1]
+    assert blank["visual_type"] == "slide_stock_video" and blank["base_fallback"] == "continue_neighbour_background"
+    assert "board_without_graphic" not in blank["quality_flags"] and "continued_neighbour_background" in blank["quality_flags"]
+    probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", blank["stock_video_path"]],
+                           capture_output=True, text=True)
+    assert abs(float(probe.stdout) - 2.8) < 0.2                                  # 장면 길이만큼
+    assert normal["quality_flags"] == []                                         # 정상 장면은 건드리지 않는다
+
+
+def test_a_neighbouring_still_background_is_slowly_zoomed_and_no_neighbour_means_it_stays_flagged(tmp_path):
+    from PIL import Image
+
+    from app.workers.slides_worker import _continue_previous_backgrounds
+
+    Image.new("RGB", (1280, 720), (60, 70, 90)).save(tmp_path / "scene_004_bg.png")
+    from_still = {"index": 5, "duration": 2.0, "visual_type": "slide_board", "quality_flags": ["board_without_graphic"]}
+    alone = {"index": 20, "duration": 2.0, "visual_type": "slide_board", "quality_flags": ["board_without_graphic"]}
+
+    assert _continue_previous_backgrounds([from_still], tmp_path, total=21) == [5]
+    assert from_still["stock_video_path"].endswith("scene_005_continue.mp4")
+    assert _continue_previous_backgrounds([alone], tmp_path, total=21) == []       # 이웃에 배경이 없으면 그대로 두고 검수 사유로 남는다
+    assert "board_without_graphic" in alone["quality_flags"]
