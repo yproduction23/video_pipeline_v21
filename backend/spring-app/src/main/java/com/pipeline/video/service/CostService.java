@@ -210,10 +210,11 @@ public class CostService {
         BigDecimal cap = job.getBudgetCap();
         BigDecimal remaining = cap != null ? cap.subtract(currentTotal) : null;
 
-        // 5. DB의 cost_accumulated 필드를 실제 총 실비용으로 동기화
-        if (job.getCostAccumulated() == null || job.getCostAccumulated().compareTo(currentTotal) != 0) {
-            job.setCostAccumulated(currentTotal);
-            jobRepository.save(job);
+        // 5. DB의 cost_accumulated 필드를 실제 총 실비용으로 동기화한다. 기준은 예산 가드와 같은 calculateTotalCostKrw(원장 전체 합계)이고,
+        //    비용 컬럼만 갱신한다(작업 행 전체를 save하면 그 사이 바뀐 상태를 옛 값으로 덮어쓴다 — 2026-10-19 20번 Job).
+        BigDecimal authoritativeTotal = calculateTotalCostKrw(jobId);
+        if (job.getCostAccumulated() == null || job.getCostAccumulated().compareTo(authoritativeTotal) != 0) {
+            jobRepository.updateCostAccumulated(jobId, authoritativeTotal);
         }
 
         return CostEstimateDto.builder()

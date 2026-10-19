@@ -629,7 +629,8 @@ def load_cost_ledger_summary(job_id: int) -> dict[str, Any]:
         "budget_limit_krw": limit,
         "remaining_krw": max(0, limit - total),
         "budget_overrun_krw": max(0, total - limit),
-        "items": list(reversed(items[-100:])),
+        # 전체 항목을 돌려준다. 마지막 100건만 주면 Spring이 항목 합계로 낸 비용 요약이 total_krw보다 작아져(20번 Job: 5,168원 vs 47,172원) 서로 다른 값이 누적 비용을 번갈아 덮어썼다(2026-10-19).
+        "items": list(reversed(items)),
     }
 
 

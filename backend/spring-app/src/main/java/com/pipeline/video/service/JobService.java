@@ -99,8 +99,7 @@ public class JobService {
     public List<JobResponse> getMyJobs(String username) {
         return jobRepository.findByCreatedByOrderByCreatedAtDesc(username)
                 .stream()
-                .peek(this::syncJobCost)
-                .map(JobResponse::from)
+                .map(this::responseWithSyncedCost)
                 .collect(Collectors.toList());
     }
 
@@ -209,31 +208,36 @@ public class JobService {
 
     public JobResponse getJob(Long id) {
         return jobRepository.findById(id)
-                .map(job -> {
-                    syncJobCost(job);
-                    return JobResponse.from(job);
-                })
+                .map(this::responseWithSyncedCost)
                 .orElseThrow(() -> new RuntimeException("Job not found: " + id));
     }
 
     public List<JobResponse> getAllJobs() {
         return jobRepository.findAll()
                 .stream()
-                .peek(this::syncJobCost)
-                .map(JobResponse::from)
+                .map(this::responseWithSyncedCost)
                 .collect(Collectors.toList());
     }
 
-    private void syncJobCost(VideoJob job) {
+    /**
+     * 조회 응답에 실제 누적 비용을 얹는다. 저장은 비용 컬럼만 갱신한다 — 작업 행 전체를 save하면 그 사이 바뀐 상태를
+     * 옛 값으로 덮어쓴다(2026-10-19 20번 Job: 조립 완료 후 PREVIEW_PENDING이 ASSEMBLING으로 되돌려졌다).
+     * 엔티티는 바꾸지 않고 응답(DTO)에만 값을 넣어, 열려 있는 트랜잭션이 나중에 행 전체를 쓰지 않게 한다.
+     */
+    private JobResponse responseWithSyncedCost(VideoJob job) {
+        JobResponse response = JobResponse.from(job);
         try {
             BigDecimal actualTotal = costService.calculateTotalCostKrw(job.getId());
-            if (actualTotal != null && (job.getCostAccumulated() == null || job.getCostAccumulated().compareTo(actualTotal) != 0)) {
-                job.setCostAccumulated(actualTotal);
-                jobRepository.save(job);
+            if (actualTotal != null) {
+                if (job.getCostAccumulated() == null || job.getCostAccumulated().compareTo(actualTotal) != 0) {
+                    jobRepository.updateCostAccumulated(job.getId(), actualTotal);
+                }
+                response.setCostAccumulated(actualTotal);
             }
         } catch (Exception e) {
             log.warn("Job cost sync failed for jobId={}: {}", job.getId(), e.getMessage());
         }
+        return response;
     }
 
     @Transactional

@@ -227,3 +227,9 @@ Claude 비전으로 프레임을 분류(배경 종류·후편집 종류·배경 
 - 상황: Job 20은 슬라이드형 개발·검증에 반복 사용돼 누적 비용이 ₩50,728(Gemini 이미지 126장 ₩35,256, 슬라이드 Claude 약 ₩11,900, 대본·TTS 약 ₩3,600)이 됐고, 마지막 조립 직후 비용 기록 단계에서 상한 ₩40,000 초과로 막혀 조립본이 등록되지 않았다.
 - 결정: 운영자가 "마지막 조립본으로 수정 범위를 확인하고, 이후 Job 20은 수정하지 않는다"며 Job 20만 `video_job.budget_cap`을 ₩80,000으로 올리도록 지시했다. 전역 상한(`PricingConfig.java` ₩40,000/₩70,000)과 다른 작업의 상한은 바꾸지 않았다.
 - 이유: 한 편 제작비가 아니라 개발 중 반복 실험 비용이 합산된 값이다. 새 작업 한 편의 추정 비용은 약 ₩15,000~27,000(상한 이내)이다.
+
+## 2026-10-19 작업 상태가 조립 완료 후 되돌려진 문제(20번 Job) — 원인과 수정
+- 증상: 조립은 정상 완료(영상·등록·쇼츠 시나리오 저장)됐지만 어드민에 조립 완료가 보이지 않았다. 작업 상태가 PREVIEW_PENDING에서 ASSEMBLING으로 되돌려져 있었다.
+- 원인(공통 계약): ① 워커 비용 원장(`/workers/jobs/{id}/cost-ledger`)이 항목을 마지막 100건만 돌려줘서, Spring의 항목 합계 요약(₩8,724)이 총액(`total_krw` ₩50,728)보다 작았다. Claude 사용 기록이 100건을 넘기면서 드러났다. ② 조회 화면이 작업을 불러올 때마다 도는 비용 동기화(`JobService.syncJobCost`, `CostService.getSummaryDto`)가 서로 다른 합계를 약 10초마다 `jobRepository.save(job)`으로 작업 행 전체에 덮어썼고, 그 사이 바뀐 상태를 옛 값으로 되돌렸다(Postgres 쿼리 로그로 확인: 매 쓰기의 status가 ASSEMBLING, cost_accumulated가 8724와 50728을 번갈아 기록).
+- 수정: 워커 원장은 항목을 모두 돌려준다. 비용 동기화는 `VideoJobRepository.updateCostAccumulated`로 비용 컬럼만 갱신하고, 엔티티는 바꾸지 않으며 응답에만 값을 얹는다. 두 경로 모두 예산 가드와 같은 `calculateTotalCostKrw`를 기준으로 쓴다.
+- 검증: 수정 후 약 40초간 행이 더 쓰이지 않았고, 조립 재실행 뒤 상태가 PREVIEW_PENDING으로 유지됐다. 테스트: `JobServiceCostSyncTest`(Spring), `test_cost_ledger_summary_returns_every_item...`(FastAPI).
