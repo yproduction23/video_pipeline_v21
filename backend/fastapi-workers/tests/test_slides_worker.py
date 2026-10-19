@@ -1423,3 +1423,53 @@ def test_render_reuse_is_skipped_for_single_scene_runs_missing_files_and_code_ch
     monkeypatch.setattr("app.workers.slides_worker._RENDER_CODE_HASH", "changed-render-code")
     SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
     assert sorted(calls) == [0, 1]                             # 합성 코드가 바뀌면 개선이 누락되지 않게 모두 다시 만든다
+
+
+def _planned_scene(tmp_path, *, reuse_base, queries=("street crowd",)):
+    out: dict = {}
+    ok = SlidesWorker()._render_pixabay_scene(
+        index=3, narration="불안한 투자자가 서류를 봅니다.", duration=4.0, job_dir=tmp_path, used_pixabay_ids=set(),
+        out=out, reuse_base=reuse_base, planned_queries=list(queries),
+    )
+    return ok, out
+
+
+def test_known_stock_miss_is_not_searched_again_on_the_next_full_run(monkeypatch, tmp_path):
+    """2026-10-19 원인 분석: 스톡을 못 찾은 장면이 전체 실행마다 검색어를 처음부터 다시 훑어 Claude 영상 판단을 5번씩 불렀다(20번 Job 177건·약 ₩9,400)."""
+    candidate = {"pixabay_id": 6, "download_url": "https://example/v.mp4", "tags": "x"}
+    searched = _stock_search_harness(monkeypatch, tmp_path, {"street crowd": [candidate], "business office": [candidate], "city skyline": [candidate]},
+                                     selector=lambda n, f, **kw: None)
+
+    ok, out = _planned_scene(tmp_path, reuse_base=True)
+    assert ok is False and out["stock_miss_reason"] == "candidates_rejected_by_selection"
+    first_searches = len(searched)
+    assert first_searches > 0
+
+    ok, out = _planned_scene(tmp_path, reuse_base=True)             # 같은 입력의 다음 전체 실행
+    assert ok is False and out["stock_miss_reason"] == "candidates_rejected_by_selection" and out["stock_miss_cached"] is True
+    assert len(searched) == first_searches                          # 다시 검색하지 않았다
+
+    _planned_scene(tmp_path, reuse_base=False)                      # 장면 다시 생성은 새로 탐색한다
+    assert len(searched) > first_searches
+    count = len(searched)
+    _planned_scene(tmp_path, reuse_base=True, queries=("different query",))   # 검색어가 바뀌면 기록은 맞지 않는다
+    assert len(searched) > count
+
+
+def test_transient_misses_and_successes_are_never_recorded_as_known_misses(monkeypatch, tmp_path):
+    candidate = {"pixabay_id": 7, "download_url": "https://example/v.mp4", "tags": "x"}
+    _stock_search_harness(monkeypatch, tmp_path, {"street crowd": [candidate]}, selector=lambda n, f, **kw: 0)
+    from app.providers.real.pixabay_video import PixabayVideoUnavailableError
+
+    def failing_download(url, path):
+        raise PixabayVideoUnavailableError("HTTP 429")
+
+    monkeypatch.setattr("app.workers.slides_worker.download_clip", failing_download)
+    ok, out = _planned_scene(tmp_path, reuse_base=True)
+    assert ok is False and out["stock_miss_reason"] == "download_failed"
+    assert not list(tmp_path.glob("scene_003_stockmiss_cache.json"))   # 일시 오류는 기록하지 않는다
+
+    monkeypatch.setattr("app.workers.slides_worker.download_clip", lambda url, path: Path(path).write_bytes(b"v"))
+    (tmp_path / "scene_003_stockmiss_cache.json").write_text(__import__("json").dumps({"key": "stale", "reason": "foreign_landmark"}), encoding="utf-8")
+    ok, _ = _planned_scene(tmp_path, reuse_base=False)
+    assert ok is True and not list(tmp_path.glob("scene_003_stockmiss_cache.json"))   # 찾으면 옛 기록을 지운다

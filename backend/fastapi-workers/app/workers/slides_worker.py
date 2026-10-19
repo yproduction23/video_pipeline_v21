@@ -19,8 +19,10 @@ app.services.scene_preparation.prepare_job_scenes()를 그대로 재사용한다
 — images_worker.py와 완전히 같은 검증을 거친다.
 
 품질 게이트: 캐릭터 전용 게이트(해부학·얼굴·의상)는 이 모드에 캐릭터가
-없으므로 적용하지 않는다. 장면 의미 정렬(assess_visual_alignment)은
-캐릭터 유무와 무관한 범용 게이트라 그대로 적용한다.
+없으므로 적용하지 않는다. 장면 의미 정렬(assess_visual_alignment)도 적용하지 않는다(2026-10-19 운영자 승인):
+프롬프트가 "2D 코믹 화풍·마스코트·세트"를 요구하는 캐릭터 영상용이라 슬라이드 장면에 6~20점과 "마스코트 부재" 같은
+사유를 매기고(20번 Job 72장 전부), 실행마다 Gemini 호출로 약 20분을 썼다. 슬라이드의 품질 게이트는 배경 검수·외국 랜드마크·
+글자 검수·싱크 점검이 따로 담당한다.
 """
 from __future__ import annotations
 
@@ -286,6 +288,40 @@ def _prime_used_stock_ids(job_dir: Path, narrations: list[str], keep_indexes: se
             if signature is not None and hasattr(used_ids, "signatures"):
                 used_ids.signatures.append(signature)
     return conflicts
+
+
+# 2026-10-19 원인 분석(20번 Job 전체 실행): 스톡을 못 찾은 장면(26개)은 결과가 저장되지 않아 실행마다 검색어 5~6개를 처음부터 다시 훑으며
+# 장면당 Claude 영상 후보 판단(이미지 포함, 호출당 약 ₩53)을 5번씩 불렀다 — 한 번의 전체 실행에서 177건, 약 ₩9,400 중 대부분이었다.
+# 같은 대본·같은 검색어면 결과도 같으므로 미적중 사유를 기록해 다음 전체 실행에서 곧바로 대체 경로로 넘어간다.
+# 일시 오류(다운로드 429)나 다른 장면 상태에 따라 달라지는 사유는 기록하지 않는다. 장면 다시 생성·다시 계획(기록 삭제)은 새로 탐색한다.
+_CACHEABLE_STOCK_MISSES = ("candidates_rejected_by_selection", "no_search_results", "foreign_landmark", "frame_unusable")
+
+
+def _stock_miss_path(job_dir: Path, index: int) -> Path:
+    return job_dir / f"scene_{index:03d}_stockmiss_cache.json"
+
+
+def _stock_miss_key(narration: str, queries: list[str]) -> str:
+    return hashlib.sha256(f"{BASE_CACHE_VERSION}|{narration}|{'|'.join(queries)}".encode("utf-8")).hexdigest()
+
+
+def _read_stock_miss(job_dir: Path, index: int, narration: str, queries: list[str]) -> str | None:
+    try:
+        meta = json.loads(_stock_miss_path(job_dir, index).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(meta, dict) and meta.get("key") == _stock_miss_key(narration, queries) and meta.get("reason") in _CACHEABLE_STOCK_MISSES:
+        return str(meta["reason"])
+    return None
+
+
+def _write_stock_miss(job_dir: Path, index: int, narration: str, queries: list[str], reason: str) -> None:
+    try:
+        _stock_miss_path(job_dir, index).write_text(
+            json.dumps({"key": _stock_miss_key(narration, queries), "reason": reason, "queries": queries}, ensure_ascii=False), encoding="utf-8",
+        )
+    except OSError:
+        logger.warning("슬라이드 장면 %s 스톡 미적중 기록 저장 실패(다음에도 다시 탐색)", index)
 
 
 def _write_base_cache(job_dir: Path, index: int, kind: str, narration: str, **fields) -> None:
@@ -650,7 +686,7 @@ class SlidesWorker:
 
         semantic_quality = assess_visual_alignment(
             generated,
-            enabled=bool(runtime_config.value("visual_qa_enabled")),
+            enabled=False,      # 캐릭터 영상용 검수라 슬라이드에는 적용하지 않는다(모듈 설명 참고)
             max_scenes=int(runtime_config.value("visual_qa_max_scenes")),
         )
         semantic_by_index = {item["index"]: item for item in semantic_quality.get("reviewed", [])}
@@ -1345,6 +1381,29 @@ class SlidesWorker:
             out["image_path"] = str(frame_path)
 
     def _render_pixabay_scene(
+        self, *, index: int, narration: str, duration: float, job_dir: Path,
+        used_pixabay_ids: set[int], out: dict, reuse_base: bool = False,
+        planned_queries: list[str] | None = None,
+    ) -> bool:
+        queries = [str(q) for q in (planned_queries or [])]
+        if reuse_base and queries:
+            known_miss = _read_stock_miss(job_dir, index, narration, queries)
+            if known_miss and not _read_base_cache(job_dir, index, "stock", narration):
+                out["stock_miss_reason"] = known_miss
+                out["stock_miss_cached"] = True       # 같은 입력으로 이미 못 찾은 장면 — 탐색을 되풀이하지 않고 대체 경로로 간다
+                return False
+        found = self._search_pixabay_scene(
+            index=index, narration=narration, duration=duration, job_dir=job_dir, used_pixabay_ids=used_pixabay_ids,
+            out=out, reuse_base=reuse_base, planned_queries=planned_queries,
+        )
+        if queries:
+            if found:
+                _stock_miss_path(job_dir, index).unlink(missing_ok=True)
+            elif out.get("stock_miss_reason") in _CACHEABLE_STOCK_MISSES:
+                _write_stock_miss(job_dir, index, narration, queries, str(out["stock_miss_reason"]))
+        return found
+
+    def _search_pixabay_scene(
         self, *, index: int, narration: str, duration: float, job_dir: Path,
         used_pixabay_ids: set[int], out: dict, reuse_base: bool = False,
         planned_queries: list[str] | None = None,
