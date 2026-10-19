@@ -10,8 +10,11 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
+_CACHE_LOCK = __import__("threading").Lock()
 
 _SYSTEM = (
     "너는 한국 경제 해설 영상의 배경 영상 검수자다. 이미지는 후보 영상의 한 프레임이고, 함께 그 장면의 내레이션이 주어진다. "
@@ -28,7 +31,7 @@ def _default_vision_call(system: str, text: str, images: list[bytes]) -> str:
 
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.standard_b64encode(images[0]).decode()}},
                {"type": "text", "text": text}]
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_landmark_judge", 
         model="claude-sonnet-4-6", max_tokens=200, system=system, messages=[{"role": "user", "content": content}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))
@@ -53,3 +56,31 @@ def looks_foreign(frame_path: str, narration: str, *, vision_call=None) -> tuple
     except Exception as exc:
         logger.warning("외국 랜드마크 검사 실패(막지 않는다): %s", exc)
         return False, f"검사 실패: {exc}"
+
+
+def looks_foreign_cached(cache_path: Path | str, clip_id: object, frame_path: str, narration: str, *, vision_call=None) -> tuple[bool, str]:
+    """같은 스톡 클립(clip_id)의 판정은 작업 폴더 캐시에 남겨 다시 묻지 않는다(재생성·재실행마다 같은 프레임을 비용 들여 또 검사하지 않게).
+
+    판정은 내레이션에 따라 달라질 수 있으므로 캐시 키에 내레이션 지문도 넣는다. 검사 호출이 실패한 결과는 저장하지 않는다."""
+    import hashlib
+    import threading
+
+    key = f"{clip_id}:{hashlib.sha1(narration.encode('utf-8')).hexdigest()[:10]}"
+    path = Path(cache_path)
+    with _CACHE_LOCK:
+        try:
+            cache = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        if key in cache:
+            return bool(cache[key]["foreign"]), str(cache[key].get("reason") or "") + " (캐시)"
+    foreign, reason = looks_foreign(frame_path, narration, vision_call=vision_call)
+    if not reason.startswith("검사 실패"):
+        with _CACHE_LOCK:
+            try:
+                cache = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                cache = {}
+            cache[key] = {"foreign": foreign, "reason": reason}
+            path.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
+    return foreign, reason

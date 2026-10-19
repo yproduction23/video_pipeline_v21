@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
 
 # 스톡 검색용 검색어("stock market crash red screen numbers falling")를 그대로 넘기면 Gemini가
@@ -64,7 +65,7 @@ def _default_vision_call(system: str, text: str, images: list[bytes]) -> str:
 
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.standard_b64encode(images[0]).decode()}},
                {"type": "text", "text": text}]
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_background_gate", 
         model="claude-sonnet-4-6", max_tokens=200, system=system, messages=[{"role": "user", "content": content}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))
@@ -140,6 +141,7 @@ def generate_korean_slide_background(
         character_style_prompt="none",
         style_locked=True,
         suppress_legacy_style_lock=True,
+        allow_account_fallback=False,        # Gemini 계정 오류일 때 Fal.ai로 대체하지 않는다(검수에서 버려지고 비용만 나간다)
         image_provider="gemini",
         gemini_model=model,
         gemini_image_size="2K",

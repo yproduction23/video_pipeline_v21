@@ -47,3 +47,26 @@ def test_a_claim_is_summarised_on_a_white_summary_card_instead():
     cards = [e for e in seq["elements"] if e["kind"] == "list"]
     assert cards and cards[0]["content"]["title"] == "낙폭 확대 원인" and len(cards[0]["content"]["items"]) == 2
     assert not [e for e in seq["elements"] if e["kind"] == "text" and e["content"].get("color") == "red"]
+
+
+def test_locked_scenes_keep_their_previous_decisions_when_the_plan_is_rebuilt():
+    """2026-10-19 운영자 요청: 수정할 때 고칠 부분만 바꾼다 — 좋았던 부분이 다시 만들면서 이상하게 바뀌는 일이 많았다."""
+    from app.services.slide_edit_replan import carry_locked_scenes
+
+    previous = {"scenes": [
+        {"index": 0, "narration": "가", "background": "board", "overlay": {"type": "big_number", "value": "5%"}, "locked": True, "reason": "좋음"},
+        {"index": 1, "narration": "나", "background": "stock", "stock_queries": ["a"], "overlay": None, "locked": True},
+        {"index": 2, "narration": "다", "background": "stock", "overlay": None},
+    ]}
+    fresh = {"scenes": [
+        {"index": 0, "narration": "가", "background": "stock", "overlay": {"type": "key_text", "text": "x"}, "duration": 4.0},
+        {"index": 1, "narration": "바뀐 문장", "background": "board", "overlay": None, "duration": 3.0},   # 내레이션이 달라졌다
+        {"index": 2, "narration": "다", "background": "board", "overlay": None, "duration": 3.0},          # 잠그지 않았다
+    ]}
+
+    carried = carry_locked_scenes(fresh, previous)
+
+    assert carried == [0] and fresh["locked_scenes"] == [0]
+    assert fresh["scenes"][0]["background"] == "board" and fresh["scenes"][0]["overlay"]["value"] == "5%"   # 이전 결정 그대로
+    assert fresh["scenes"][0]["duration"] == 4.0                                                          # 길이는 새 값
+    assert fresh["scenes"][1]["background"] == "board" and fresh["scenes"][2]["background"] == "board"    # 내레이션이 다르거나 잠그지 않은 장면은 새 결과

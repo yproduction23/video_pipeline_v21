@@ -325,10 +325,20 @@ class NanaBananaProvider(ImageProvider):
                 if try_gemini():
                     return output_path
             except ImageRequestHeld as e:
-                if _is_account_level_gemini_error(e) and try_fal():
+                # 슬라이드 배경처럼 호출자가 allow_account_fallback=False를 주면 대체하지 않고 실패를 돌려준다
+                # (2026-10-19: Fal.ai 대체 이미지는 간판 글자가 읽혀 검수에서 거의 다 버려지고 비용만 기록 없이 나갔다).
+                if kwargs.get("allow_account_fallback", True) and _is_account_level_gemini_error(e) and try_fal():
                     logger.warning(
                         f"Gemini 계정 오류({e})로 이 장면만 Fal.ai로 대체 생성: {output_path}"
                     )
+                    audit = kwargs.get("gemini_request_audit")
+                    if audit is not None and getattr(audit, "ledger_path", None):
+                        try:
+                            from app.utils.budget import record_fal_image_fallback
+
+                            record_fal_image_fallback(audit.ledger_path, scene_key=getattr(audit, "scene_key", None))
+                        except Exception:
+                            logger.exception("Fal 대체 이미지 비용 기록 실패")
                     return output_path
                 raise
             raise RuntimeError(

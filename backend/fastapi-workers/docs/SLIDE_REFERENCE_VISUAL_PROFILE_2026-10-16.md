@@ -171,3 +171,13 @@ Claude 비전으로 프레임을 분류(배경 종류·후편집 종류·배경 
 - **부품 라벨 잘림**: 9종 모두 라벨 폭을 재어 가장자리에서 잘리지 않게 했고(`_fit_font_size`), 전 부품 가장자리 검사 테스트를 추가했다(도미노·이동·온도계·저울·받침·기대 대비가 걸렸다).
 - **외국 랜드마크 배제**: 스톡 선택 기준에 이슬람 사원·페트로나스·에펠탑 등 명시.
 - **소재 즉석 생성**(`slide_motif_factory`): 연출 단계의 소재 주문을 작업당 예산(기본 ₩5,000, 상한 ₩10,000)으로 만들고 비전 검수 후 등록(`on_demand`, `review: pending`). 등록하면 연출 단계를 한 번 더 돌린다.
+
+## 2026-10-19 비용 가시화·검증 비용 절감·부분 수정 (운영자 결정)
+
+장부 기준 Gemini 약 ₩20만 중 검증용 잡(9020~9034) 약 ₩54k, 소재 생성(9100) 약 ₩17k. Claude 호출은 24시간 3,500번이었지만 어느 장부에도 기록이 없었고, Gemini 402 때 자동 대체된 Fal.ai 이미지 44장도 기록이 없었다.
+
+- **Claude 사용량 장부**(`app/utils/claude_ledger.py`, `budget.record_claude_usage`): 슬라이드 단계 Claude 호출(13곳)을 `claude_create(purpose=...)`로 모아 작업 원장에 토큰(실측)과 추정 원화(단가 설정 `CLAUDE_INPUT/OUTPUT_USD_PER_MTOK`, 기본 $3/$15는 공식 가격표 미확인 → `cost_status=estimated_unverified_price`)를 남긴다. 영상 총비용 한도 합산에 들어간다. 슬라이드 외 단계(키워드·대본 등)의 Claude 호출은 아직 기록하지 않는다.
+- **Fal.ai 대체 중단**: 슬라이드 AI 배경은 Gemini 계정 오류일 때 Fal.ai로 대체하지 않는다(`allow_account_fallback=False`) — 대체 이미지는 간판 글자로 검수에서 대부분 버려졌다. 다른 흐름의 대체는 유지하되 `record_fal_image_fallback`로 요청 수를 원장에 남긴다(단가 `FAL_FLUX_IMAGE_COST_USD` 미설정이면 금액 0, `price_not_configured`).
+- **판정 캐시**: 외국 랜드마크 검사는 (클립 ID, 내레이션 지문)별로 `landmark_cache.json`에 저장해 같은 클립을 다시 묻지 않는다.
+- **검증용 잡 절감**: `scripts/seed_test_job.py`로 원본 Job의 스톡·AI 배경·판정 캐시와 evidence를 새 잡에 복사한다(계획서·비용 원장은 복사하지 않음).
+- **부분 수정**: 계획서 재생성 때 `locked` 장면은 이전 결정(배경·검색어·후편집)을 그대로 옮기고(`carry_locked_scenes`), 바뀐 구간만 시퀀스를 다시 설계한다. 잠그는 화면(UI)은 아직 없다 — 지금은 계획서 JSON의 `locked`로만 동작한다. 이미 있는 "문제 장면만 다시 계획"(replan)·단일 장면 재생성은 그대로다.

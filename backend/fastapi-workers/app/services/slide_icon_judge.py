@@ -14,6 +14,7 @@ from app.services.slide_icons import ICON_HINTS
 from app.services.slide_logos import PREFIX as LOGO_PREFIX
 from app.services.slide_motifs import PREFIX as MOTIF_PREFIX
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
 
 _JUDGE_SYSTEM = (
@@ -30,7 +31,7 @@ def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
         return llm_call(system, [{"role": "user", "content": prompt}], 2000)
     from anthropic import Anthropic
 
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_icon_judge", 
         model="claude-sonnet-4-6", max_tokens=2000, system=system, messages=[{"role": "user", "content": prompt}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))

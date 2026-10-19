@@ -36,6 +36,7 @@ from app.services.slide_overlay import (
     to_percent_symbol, validate_overlay_plan,
 )
 
+from app.utils.claude_ledger import carry_job, claude_create
 logger = logging.getLogger(__name__)
 
 CANVAS = (1920, 1080)
@@ -160,7 +161,7 @@ def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
 
     from anthropic import Anthropic
 
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_sequence_design", 
         model="claude-sonnet-4-6", max_tokens=5000, system=system,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -1041,7 +1042,7 @@ def attach_sequences(plan: dict, *, llm_call=None, workers: int = 4) -> dict:
 
     if len(runs) > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            built = list(pool.map(build, runs))
+            built = list(pool.map(carry_job(build), runs))
     else:
         built = [build(run) for run in runs]
     built = _space_out_red_text(built, runs, plan, llm_call=llm_call)

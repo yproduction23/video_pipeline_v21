@@ -14,6 +14,7 @@ import re
 
 from app.services.slide_motifs import motif_labels, resolve_motif
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
 
 CONCEPT_VERSION = "slide-concept-v1"
@@ -96,7 +97,7 @@ def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
         return llm_call(system, [{"role": "user", "content": prompt}], 12000)
     from anthropic import Anthropic
 
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_concepts", 
         model="claude-sonnet-4-6", max_tokens=12000, system=system, messages=[{"role": "user", "content": prompt}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))

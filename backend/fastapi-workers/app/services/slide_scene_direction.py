@@ -15,6 +15,7 @@ import logging
 import os
 import re
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
@@ -72,7 +73,7 @@ def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
     api_key = os.environ["ANTHROPIC_API_KEY"]
     from anthropic import Anthropic
 
-    response = Anthropic(api_key=api_key).messages.create(
+    response = claude_create(purpose="slide_scene_direction", 
         model="claude-sonnet-4-6",
         max_tokens=300,
         system=system,
@@ -159,7 +160,7 @@ def _call_vision(system: str, text: str, images: list[bytes | None]) -> str:
         else:
             content.append({"type": "text", "text": "(대표 이미지 없음)"})
     content.append({"type": "text", "text": text})
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_scene_direction", 
         model="claude-sonnet-4-6", max_tokens=200, system=system, messages=[{"role": "user", "content": content}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))

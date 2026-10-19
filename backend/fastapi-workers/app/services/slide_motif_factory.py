@@ -21,6 +21,7 @@ from PIL import Image
 
 from app.services import slide_motifs
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
 
 UNIT_COST_KRW = 339            # Gemini 이미지 1장(기존 소재 생성 실적)
@@ -63,7 +64,7 @@ def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
         return llm_call(system, [{"role": "user", "content": prompt}], 3000)
     from anthropic import Anthropic
 
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_motif_factory", 
         model="claude-sonnet-4-6", max_tokens=3000, system=system, messages=[{"role": "user", "content": prompt}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))
@@ -82,7 +83,7 @@ def _default_vision_call(system: str, text: str, images: list[bytes]) -> str:
 
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.standard_b64encode(images[0]).decode()}},
                {"type": "text", "text": text}]
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_motif_factory", 
         model="claude-sonnet-4-6", max_tokens=300, system=system, messages=[{"role": "user", "content": content}],
     )
     return "".join(block.text for block in response.content if hasattr(block, "text"))

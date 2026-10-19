@@ -27,6 +27,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from app.services.slide_icons import ACCENT, ICON_HINTS, ICON_NAMES, draw_icon
 
+from app.utils.claude_ledger import claude_create
 logger = logging.getLogger(__name__)
 
 CANVAS = (1920, 1080)
@@ -98,7 +99,7 @@ def _call_llm(system: str, prompt: str, *, llm_call=None) -> str:
 
     from anthropic import Anthropic
 
-    response = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"]).messages.create(
+    response = claude_create(purpose="slide_overlay_plan", 
         model="claude-sonnet-4-6",
         max_tokens=4000,
         system=system,

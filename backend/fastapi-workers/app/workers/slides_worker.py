@@ -44,9 +44,10 @@ from app.services.slide_kling import generate_slide_kling_clip
 from app.services.slide_motion_parts import compose_motion_part, is_countable, part_phrase
 from app.services.slide_timing import apply_tts_windows, phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
-from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
-from app.services.slide_landmark_judge import looks_foreign
-from app.services.slide_sequence import audit_sequence_sync, design_sequence, render_sequence_clip
+from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan, carry_locked_scenes
+from app.services.slide_landmark_judge import looks_foreign_cached
+from app.utils.claude_ledger import bind_job, carry_job
+from app.services.slide_sequence import attach_sequences, audit_sequence_sync, design_sequence, render_sequence_clip
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
     CANVAS,
@@ -252,7 +253,13 @@ class _NullProgress:
 class SlidesWorker:
     """images_worker.ImagesWorker와 같은 호출 계약의 슬라이드형 워커."""
 
-    def generate(
+    def generate(self, *args, **kwargs):
+        """이 작업(job)의 Claude 호출을 원장에 기록하도록 묶어서 실제 생성을 실행한다."""
+        job_id = kwargs.get("job_id", args[1] if len(args) > 1 else 0)
+        with bind_job(job_id):
+            return self._generate_impl(*args, **kwargs)
+
+    def _generate_impl(
         self,
         scenes_meta: list | None = None,
         job_id: int = 0,
@@ -389,11 +396,15 @@ class SlidesWorker:
         plan_replaced_after_review = bool(edit_plan) and not plan_matches(edit_plan, briefs) and not plan_only
         # 계획서만 만드는 요청은 명시적인 (재)생성이므로 항상 새로 만든다(재사용은 실행에만 적용한다).
         if plan_only or not plan_matches(edit_plan, briefs):
+            previous_plan = edit_plan
             edit_plan = build_edit_plan(
                 briefs, job_id=job_id,
                 highlight_end_index=(highlight_end - 1) if highlight_end else None,
             )
             if edit_plan:
+                # 잠근 장면은 다시 만들지 않고 이전 결정을 그대로 옮긴다(좋았던 부분이 재생성하면서 바뀌지 않게).
+                if carry_locked_scenes(edit_plan, previous_plan):
+                    edit_plan = attach_sequences(edit_plan)   # 옮긴 뒤 구간 서명이 같은 시퀀스는 재사용하고 바뀐 구간만 다시 설계한다
                 edit_plan["timeline"] = {"source": timeline_source, "total_seconds": round(sum(b["duration"] for b in briefs.values()), 2)}
                 audit_sequence_sync(edit_plan)           # 타임라인 출처를 기록한 뒤 다시 점검한다
                 save_plan(edit_plan, DATA_DIR)
@@ -462,7 +473,7 @@ class SlidesWorker:
                 # Kling 후작업은 요청이 길어(수 분) 동시 요청 수를 제한한다.
                 workers = min(SLIDE_MAX_WORKERS, KLING_UPGRADE_MAX_WORKERS) if kling_upgrade else SLIDE_MAX_WORKERS
                 with ThreadPoolExecutor(max_workers=workers) as pool:
-                    generated.extend(pool.map(render, targets))
+                    generated.extend(pool.map(carry_job(render), targets))
             else:
                 generated.extend(render(item) for item in targets)
         except BaseException:
@@ -1266,7 +1277,7 @@ class SlidesWorker:
             foreign = False
             if usable and checked:
                 # 2026-10-19 운영자 지적: 한국 증시 문장에 타이베이 101·이스탄불 모스크가 나왔다 — 고른 뒤 한 번 더 예/아니오로 확인한다.
-                foreign, foreign_reason = looks_foreign(str(check_path), narration)
+                foreign, foreign_reason = looks_foreign_cached(job_dir / "landmark_cache.json", clip["pixabay_id"], str(check_path), narration)
                 if foreign:
                     logger.warning("슬라이드 장면 %s 스톡이 외국 랜드마크로 보여 쓰지 않음: %s", index, foreign_reason)
             Path(check_path).unlink(missing_ok=True)

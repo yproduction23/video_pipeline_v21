@@ -84,6 +84,8 @@ class ProviderRequestAudit:
         enforce_request_lock: bool = True,
     ) -> None:
         self._path = path
+        self.ledger_path = path          # 공급자 코드가 같은 원장에 다른 요청(Fal 대체 등)을 남길 때 쓴다
+        self.scene_key = scene_key
         self._scene_key = scene_key
         self._provider = provider
         self._model = model
@@ -685,6 +687,51 @@ def record_openai_image_cost(job_id: int, actual_usd: float, *, scene_key: str |
         ledger["total_krw"] = int(ledger.get("total_krw", 0)) + amount
         limit = int(rates["max_budget_per_video_krw"])
         ledger["budget_overrun_krw"] = max(0, ledger["total_krw"] - limit)
+        _write_ledger(path, ledger)
+    return ledger
+
+
+def record_fal_image_fallback(ledger_path: Path, *, scene_key: str | None = None) -> None:
+    """Gemini 계정 오류로 Fal.ai가 대신 만든 이미지 1장을 원장에 남긴다(이전에는 기록이 없어 비용을 알 수 없었다).
+
+    단가는 설정(FAL_FLUX_IMAGE_COST_USD)이 있을 때만 금액을 계산한다. 설정이 없으면 금액 0 + cost_status=price_not_configured로 요청 수만 남긴다."""
+    rates = runtime_config.get()
+    unit_usd = float(os.getenv("FAL_FLUX_IMAGE_COST_USD", "0") or 0)
+    amount = _krw(unit_usd, float(rates["usd_krw"])) if unit_usd > 0 else 0
+    with _ledger_lock(ledger_path):
+        ledger = _load_ledger(ledger_path)
+        item = {
+            "kind": "fal_image", "provider": "fal", "model": "flux", "count": 1, "amount_krw": amount,
+            "cost_status": "estimated_unverified_price" if unit_usd > 0 else "price_not_configured",
+            "reason": "gemini_account_error_fallback", "at": datetime.now(timezone.utc).isoformat(),
+        }
+        if scene_key:
+            item["scene_key"] = scene_key
+        ledger["items"].append(item)
+        ledger["total_krw"] = int(ledger.get("total_krw", 0)) + amount
+        _write_ledger(ledger_path, ledger)
+
+
+def record_claude_usage(job_id: int, *, purpose: str, model: str, input_tokens: int, output_tokens: int) -> dict[str, Any]:
+    """Claude 호출 1번의 사용 토큰(실측)과 추정 원화 비용을 작업 원장에 기록한다.
+
+    금액은 토큰 × 설정 단가의 추정치라 cost_status=estimated_unverified_price로 표시한다(공식 가격표 미확인, Anthropic 콘솔 Usage와 대조 필요).
+    영상 1건 총비용 한도 계산에 합산된다."""
+    from app.utils.claude_ledger import INPUT_USD_PER_MTOK, OUTPUT_USD_PER_MTOK
+
+    rates = runtime_config.get()
+    usd = input_tokens / 1_000_000 * INPUT_USD_PER_MTOK + output_tokens / 1_000_000 * OUTPUT_USD_PER_MTOK
+    amount = _krw(usd, float(rates["usd_krw"]))
+    path = _job_path(job_id, "cost_ledger.json")
+    with _ledger_lock(path):
+        ledger = _load_ledger(path)
+        ledger["items"].append({
+            "kind": "claude_request", "provider": "anthropic", "model": model, "purpose": purpose,
+            "input_tokens": int(input_tokens), "output_tokens": int(output_tokens), "estimated_usd": round(usd, 6),
+            "amount_krw": amount, "cost_status": "estimated_unverified_price", "at": datetime.now(timezone.utc).isoformat(),
+        })
+        ledger["total_krw"] = int(ledger.get("total_krw", 0)) + amount
+        ledger["budget_overrun_krw"] = max(0, ledger["total_krw"] - int(rates["max_budget_per_video_krw"]))
         _write_ledger(path, ledger)
     return ledger
 

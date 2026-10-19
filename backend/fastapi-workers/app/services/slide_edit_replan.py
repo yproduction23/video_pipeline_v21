@@ -335,6 +335,31 @@ def trim_excess_stock_overlays(plan: dict) -> dict:
     return updated
 
 
+def carry_locked_scenes(plan: dict, previous: dict | None) -> list[int]:
+    """이전 계획서에서 잠근(locked) 장면의 결정(배경·검색어·후편집)을 새 계획서에 그대로 옮긴다. 옮긴 장면 번호를 돌려준다.
+
+    2026-10-19 운영자 요청: 수정할 때 전체를 다시 만들지 말고 고칠 부분만 바꾼다 — 좋았던 부분이 다시 만들면서 이상하게 변하는 일이 많았다.
+    내레이션이 같은 장면만 옮기며(다르면 그 장면은 새로 계획한 결과를 쓴다), 길이·자막 줄 시각은 새 계획서(TTS 실제 구간)의 값을 그대로 쓴다."""
+    if not previous:
+        return []
+    old = {s["index"]: s for s in previous.get("scenes", []) if s.get("locked")}
+    carried: list[int] = []
+    for scene in plan.get("scenes", []):
+        before = old.get(scene["index"])
+        if not before or before.get("narration") != scene.get("narration"):
+            continue
+        keep_keys = ("background", "stock_queries", "photo_brief", "overlay", "fallback_key_text", "reason", "carry_from", "locked")
+        for key in keep_keys:
+            if key in before:
+                scene[key] = json.loads(json.dumps(before[key]))
+            else:
+                scene.pop(key, None)
+        carried.append(scene["index"])
+    if carried:
+        plan["locked_scenes"] = carried
+    return carried
+
+
 def build_edit_plan_with_repair(
     briefs: dict[int, dict], *, job_id: int, highlight_end_index: int | None = None, llm_call=None,
 ) -> dict | None:
