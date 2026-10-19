@@ -45,7 +45,8 @@ from app.services.slide_motion_parts import compose_motion_part, is_countable, p
 from app.services.slide_timing import apply_tts_windows, phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan
-from app.services.slide_sequence import render_sequence_clip
+from app.services.slide_landmark_judge import looks_foreign
+from app.services.slide_sequence import audit_sequence_sync, design_sequence, render_sequence_clip
 from app.services.slide_progress import SlideProgress
 from app.services.slide_overlay import (
     CANVAS,
@@ -394,6 +395,7 @@ class SlidesWorker:
             )
             if edit_plan:
                 edit_plan["timeline"] = {"source": timeline_source, "total_seconds": round(sum(b["duration"] for b in briefs.values()), 2)}
+                audit_sequence_sync(edit_plan)           # 타임라인 출처를 기록한 뒤 다시 점검한다
                 save_plan(edit_plan, DATA_DIR)
         if plan_only:
             # 2026-10-16 운영자 요청: 계획서만 만들고 멈춘다 — 이미지·영상은 한 장도 만들지 않는다(비용 0).
@@ -446,7 +448,7 @@ class SlidesWorker:
                 overlay_plan=overlay_plan.get(index),
                 banner=banner_plan.get(index),
                 base_plan=base_plans.get(index),
-                sequence=sequences_by_scene.get(index), ai_miss_state=ai_miss_state,
+                sequence=sequences_by_scene.get(index), ai_miss_state=ai_miss_state, edit_plan=edit_plan,
                 # 전체 실행에서만 배경을 재사용한다. 단일 장면 다시 생성은 새 결과를 원하는 요청이다.
                 reuse_base=scene_indices is None and index not in cache_conflicts,
                 kling_upgrade=kling_upgrade,
@@ -508,6 +510,16 @@ class SlidesWorker:
             if scene.get("overlay_failure_reason")
         ]
 
+        blank = [scene["index"] for scene in generated if "board_without_graphic" in (scene.get("quality_flags") or [])]
+        if blank:
+            review_reasons.append(f"빈 칠판 장면 {len(blank)}개({blank}): 스톡·AI 배경·그림 설계가 모두 실패했습니다 — 다시 생성하거나 직접 확인해 주세요.")
+        if edit_plan:
+            audit = audit_sequence_sync(edit_plan)
+            if audit["out_of_sync"]:
+                review_reasons.append(f"그래픽 싱크 어긋남 {len(audit['out_of_sync'])}건(말하는 순간과 0.7초 넘게 차이): {[(r['scene'], r['delta']) for r in audit['out_of_sync'][:5]]}")
+            if (edit_plan.get("timeline") or {}).get("source") == "estimate":
+                review_reasons.append("TTS 실제 장면 구간을 쓰지 못해 추정 길이로 만들었습니다 — 그래픽 싱크가 어긋날 수 있습니다.")
+
         if plan_failed:
             review_reasons.append(
                 "편집 계획서·오버레이 계획 생성 실패(Claude) — 모든 장면이 배경만 사용됐습니다. 다시 생성이 필요합니다."
@@ -546,7 +558,7 @@ class SlidesWorker:
         used_pixabay_ids: set[int], kling_state: dict | None = None,
         overlay_plan: dict | None = None, banner: dict | None = None, reuse_base: bool = False,
         base_plan: dict | None = None, sequence: dict | None = None, ai_miss_state: dict | None = None,
-        kling_upgrade: bool = False,
+        kling_upgrade: bool = False, edit_plan: dict | None = None,
     ) -> dict:
         narration = str(
             scene.get("subtitle_text") or scene.get("content") or scene.get("text") or ""
@@ -641,7 +653,13 @@ class SlidesWorker:
                         if phrase:
                             overlay_plan = {"type": "key_text", "text": phrase, "icon": None, "explain": True, "source": "fallback_phrase"}
                         else:
-                            out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "board_without_graphic"]))
+                            # 빈 화면 방지(2026-10-19 운영자 조건): 글 없는 칠판 대신 이 장면만 한 구간으로 보고 정리 카드·그림 도식을 다시 설계한다.
+                            redesigned = self._design_board_fallback(index, edit_plan)
+                            if redesigned:
+                                sequence = redesigned
+                                out["fallback_sequence"] = True
+                            else:
+                                out["quality_flags"] = list(dict.fromkeys([*out.get("quality_flags", []), "board_without_graphic"]))
                     rendered = True
             if not rendered:
                 if kling_state is not None and kling_state["streak"] < MAX_CONSECUTIVE_KLING:
@@ -674,7 +692,7 @@ class SlidesWorker:
             "overlays": [],
         }
         try:
-            if sequence and base_visual_type == "slide_board" and not out.get("base_fallback"):
+            if sequence and base_visual_type == "slide_board" and (not out.get("base_fallback") or out.get("fallback_sequence")):
                 # 회색 배경 구간은 장면 경계를 넘어 이어지는 모션 시퀀스가 화면을 담당한다(장면 몫만 잘라 낸다).
                 self._render_sequence_scene(
                     index=index, duration=duration, job_dir=job_dir, out=out, sequence=sequence,
@@ -1245,7 +1263,20 @@ class SlidesWorker:
             check_path = job_dir / f"scene_{index:03d}_stock_check.png"
             checked = _extract_first_frame_at(str(video_path), str(check_path), 1.2)
             usable = _frame_is_usable(str(check_path)) if checked else True
+            foreign = False
+            if usable and checked:
+                # 2026-10-19 운영자 지적: 한국 증시 문장에 타이베이 101·이스탄불 모스크가 나왔다 — 고른 뒤 한 번 더 예/아니오로 확인한다.
+                foreign, foreign_reason = looks_foreign(str(check_path), narration)
+                if foreign:
+                    logger.warning("슬라이드 장면 %s 스톡이 외국 랜드마크로 보여 쓰지 않음: %s", index, foreign_reason)
             Path(check_path).unlink(missing_ok=True)
+            if foreign:
+                with _PIXABAY_LOCK:
+                    used_pixabay_ids.discard(clip["pixabay_id"])
+                for leftover in (video_path, frame_path):
+                    Path(leftover).unlink(missing_ok=True)
+                out["stock_miss_reason"] = "foreign_landmark"
+                return False
             if not usable:
                 # 안개·흰 하늘뿐인 밝은 영상, 단색 영상: 자막이 안 읽히므로 스톡 미적중으로 처리한다.
                 logger.warning("슬라이드 장면 %s 스톡 클립이 너무 밝거나 단조로워 쓰지 않음", index)
@@ -1360,6 +1391,24 @@ class SlidesWorker:
             out["quality_flags"] = list(dict.fromkeys([
                 *out.get("quality_flags", []), "kling_failed_static_fallback",
             ]))
+
+    @staticmethod
+    @staticmethod
+    def _design_board_fallback(index: int, edit_plan: dict | None) -> dict | None:
+        """스톡·AI 배경이 모두 실패한 장면 하나를 칠판 구간으로 보고 시퀀스(정리 카드·그림 도식)를 다시 설계한다. 실패하면 None."""
+        if not edit_plan:
+            return None
+        try:
+            plan = json.loads(json.dumps(edit_plan))
+            scene = next(item for item in plan["scenes"] if item["index"] == index)
+            scene.update(background="board", overlay=None)
+            sequence = design_sequence([scene], plan)
+            if sequence:
+                sequence["id"] = 0
+            return sequence
+        except Exception:
+            logger.exception("장면 %s 빈 칠판 대체 시퀀스 설계 실패", index)
+            return None
 
     @staticmethod
     def _claim_ai_replacement(state: dict | None) -> bool:

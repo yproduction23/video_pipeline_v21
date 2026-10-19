@@ -1262,3 +1262,24 @@ def test_motion_part_overlay_is_rendered_with_the_part_composer_at_the_spoken_ph
     assert calls[0]["part"] == "spread" and calls[0]["params"]["effect"] == "코스피를"
     assert calls[0]["start_offset"] < 0.5                                  # 첫 줄 처음에 말하는 구절(외국인은)
     assert calls[0]["dim_base"] is True                                    # 영상 위에서는 배경을 눌러 그림이 읽히게 한다
+
+
+def test_a_stock_scene_that_ends_up_without_any_graphic_is_redesigned_instead_of_left_blank(monkeypatch, tmp_path):
+    """2026-10-19 운영자 조건: 빈 화면이 없어야 한다 — 스톡도 AI 배경도 실패하고 대체 문구도 없으면 그 장면만 정리 카드·그림 도식으로 다시 설계한다."""
+    worker = SlidesWorker()
+    seen = {}
+
+    def fake_design(index, edit_plan):
+        seen["index"] = index
+        return {"id": 0, "scenes": [index], "offsets": {str(index): 0.0}, "elements": [], "duration": 4.0}
+
+    monkeypatch.setattr(SlidesWorker, "_design_board_fallback", staticmethod(fake_design))
+
+    sequence = SlidesWorker._design_board_fallback(5, {"scenes": []})
+
+    assert seen == {"index": 5} and sequence["scenes"] == [5]
+
+
+def test_design_board_fallback_returns_none_when_the_plan_or_scene_is_missing():
+    assert SlidesWorker._design_board_fallback(3, None) is None
+    assert SlidesWorker._design_board_fallback(3, {"scenes": [{"index": 9}]}) is None      # 그 장면이 계획서에 없으면 만들지 않는다
