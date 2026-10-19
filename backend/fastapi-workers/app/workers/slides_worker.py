@@ -103,6 +103,85 @@ _GENERIC_STOCK_QUERIES = ("business office", "city skyline")
 BASE_CACHE_VERSION = "slide-base-v1"
 
 
+# 2026-10-19 운영자 요청("대본이 바뀐 것도 아닌데 왜 글자·숫자·그림·모션을 다시 생성하나"): 전체 실행에서도 입력이 그대로인 장면은
+# 지난 합성 결과(장면 영상·이미지)를 다시 쓴다. 지문(입력 + 합성 코드)이 같고 파일이 모두 있을 때만 재사용한다.
+# 폐기한 전략: 전체 실행마다 모든 장면을 다시 합성 — 비용은 없었지만 시간이 길고 좋았던 장면이 바뀔 위험이 있었다.
+_RENDER_CODE_FILES = (
+    "workers/slides_worker.py", "services/slide_sequence.py", "services/slide_overlay.py", "services/slide_templates.py",
+    "services/slide_motion_parts.py", "services/slide_timing.py", "services/slide_icons.py", "services/slide_motifs.py",
+    "services/slide_logos.py", "services/slide_background.py", "services/slide_kling.py",
+    "utils/statistic_chart_card.py", "utils/intro_motion.py",
+)
+_RENDER_ACTION_FLAGS = ("board_without_graphic",)       # 다시 시도해야 하는 결과는 재사용하지 않는다
+
+
+def _render_code_hash() -> str:
+    """합성 코드가 바뀌면 지난 결과를 쓰지 않도록 합성 모듈 소스의 해시를 지문에 넣는다(코드 개선이 조용히 누락되지 않게)."""
+    digest = hashlib.sha256()
+    root = Path(__file__).resolve().parents[1]
+    for name in _RENDER_CODE_FILES:
+        try:
+            digest.update((root / name).read_bytes())
+        except OSError:
+            digest.update(name.encode("utf-8"))
+    return digest.hexdigest()[:16]
+
+
+_RENDER_CODE_HASH = _render_code_hash()
+
+
+def _render_record_path(job_dir: Path, index: int) -> Path:
+    return job_dir / f"scene_{index:03d}_render.json"
+
+
+def _scene_fingerprint(job_dir: Path, index: int, *, scene: dict, base_plan, overlay_plan, banner, sequence) -> str:
+    """장면 합성에 영향을 주는 입력 전부(장면 기록·계획서 결정·후편집·배너·시퀀스·배경 재사용 기록)의 지문."""
+    caches = {}
+    for path in sorted(job_dir.glob(f"scene_{index:03d}_*_cache.json")):
+        try:
+            caches[path.name] = path.read_text(encoding="utf-8")
+        except OSError:
+            caches[path.name] = ""
+    payload = json.dumps(
+        {"code": _RENDER_CODE_HASH, "scene": scene, "base": base_plan, "overlay": overlay_plan, "banner": banner,
+         "sequence": sequence, "caches": caches},
+        ensure_ascii=False, sort_keys=True, default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _recorded_files_exist(out: dict) -> bool:
+    paths = [out.get(key) for key in ("image_path", "stock_video_path")]
+    existing = [p for p in paths if isinstance(p, str) and p]
+    return bool(existing) and all(Path(p).is_file() and Path(p).stat().st_size > 0 for p in existing)
+
+
+def _load_render_record(job_dir: Path, index: int, fingerprint: str) -> dict | None:
+    """지문이 같고 기록된 파일이 모두 있으며 다시 시도할 문제가 없는 지난 합성 결과."""
+    try:
+        record = json.loads(_render_record_path(job_dir, index).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    out = record.get("out") if isinstance(record, dict) else None
+    if record.get("fingerprint") != fingerprint or not isinstance(out, dict) or not _recorded_files_exist(out):
+        return None
+    if out.get("slide_generation_error") or out.get("overlay_failure_reason") or out.get("kling_failure_reason"):
+        return None
+    if any(flag in (out.get("quality_flags") or []) for flag in _RENDER_ACTION_FLAGS):
+        return None
+    return out
+
+
+def _save_render_record(job_dir: Path, index: int, fingerprint: str, out: dict) -> None:
+    try:
+        path = _render_record_path(job_dir, index)
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps({"fingerprint": fingerprint, "out": out}, ensure_ascii=False, default=str), encoding="utf-8")
+        os.replace(temp, path)
+    except (OSError, TypeError, ValueError):
+        logger.warning("슬라이드 장면 %s 합성 기록 저장 실패(다음에 재사용만 못 함)", index)
+
+
 def _base_cache_key(narration: str) -> str:
     return hashlib.sha256(f"{BASE_CACHE_VERSION}|{narration}".encode("utf-8")).hexdigest()
 
@@ -525,8 +604,20 @@ class SlidesWorker:
             sequences_by_scene = {}
         banner_plan = self._banner_schedule(scenes_meta, banner_index, {i for i, _ in targets})
 
+        reuse_rendered = scene_indices is None and not kling_upgrade   # 전체 실행에서만 지난 합성 결과를 재사용한다
+
         def render(item: tuple[int, dict]) -> dict:
             index, scene = item
+            inputs = {"scene": scene, "base_plan": base_plans.get(index), "overlay_plan": overlay_plan.get(index),
+                      "banner": banner_plan.get(index), "sequence": sequences_by_scene.get(index)}
+            if reuse_rendered:
+                inputs = json.loads(json.dumps(inputs, ensure_ascii=False, default=str))   # 합성 중 입력이 바뀌어도 지문은 시작 시점 값이다
+                previous = _load_render_record(job_dir, index, _scene_fingerprint(job_dir, index, **inputs))
+                if previous:
+                    previous["render_reused"] = True
+                    previous["base_reused"] = True       # 장면 전체를 다시 쓰므로 배경도 재사용한 것이다(비용 집계·기존 소비처 호환)
+                    progress.scene_done(index, previous)
+                    return previous
             out = self._render_scene(
                 index=index, scene=scene, job_id=job_id, job_dir=job_dir,
                 used_pixabay_ids=used_pixabay_ids, kling_state=kling_state,
@@ -538,6 +629,9 @@ class SlidesWorker:
                 reuse_base=scene_indices is None and index not in cache_conflicts,
                 kling_upgrade=kling_upgrade,
             )
+            if reuse_rendered:
+                # 합성 뒤 상태(배경 재사용 기록 포함)의 지문으로 저장해야 다음 실행에서 같은 입력이 일치한다.
+                _save_render_record(job_dir, index, _scene_fingerprint(job_dir, index, **inputs), out)
             progress.scene_done(index, out)
             return out
 

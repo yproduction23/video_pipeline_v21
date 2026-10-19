@@ -1363,3 +1363,63 @@ def test_a_neighbouring_still_background_is_slowly_zoomed_and_no_neighbour_means
     assert from_still["stock_video_path"].endswith("scene_005_continue.mp4")
     assert _continue_previous_backgrounds([alone], tmp_path, total=21) == []       # 이웃에 배경이 없으면 그대로 두고 검수 사유로 남는다
     assert "board_without_graphic" in alone["quality_flags"]
+
+
+def _count_renders(monkeypatch):
+    calls = []
+    original = SlidesWorker._render_scene
+
+    def counting(self, **kw):
+        calls.append(kw["index"])
+        return original(self, **kw)
+
+    monkeypatch.setattr(SlidesWorker, "_render_scene", counting)
+    return calls
+
+
+def _setup_reuse(monkeypatch, tmp_path, texts):
+    scenes = [{"content": t, "start_seconds": i * 4, "end_seconds": i * 4 + 4} for i, t in enumerate(texts)]
+    monkeypatch.setattr("app.workers.slides_worker.prepare_job_scenes", lambda **kw: _prepared(scenes))
+    _stub_base_layer(monkeypatch, tmp_path, stock=True)
+    monkeypatch.setattr("app.workers.slides_worker.assess_visual_alignment", lambda scenes, **kw: {"reviewed": []})
+    monkeypatch.setattr("app.workers.slides_worker.DATA_DIR", tmp_path)
+
+
+def test_full_run_reuses_unchanged_scenes_and_renders_only_the_changed_one(monkeypatch, tmp_path):
+    """2026-10-19 운영자 요청: 대본이 그대로인 장면은 전체 실행에서도 다시 합성하지 않는다."""
+    calls = _count_renders(monkeypatch)
+    _setup_reuse(monkeypatch, tmp_path, ["첫 장면입니다.", "둘째 장면입니다."])
+    SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+    assert sorted(calls) == [0, 1]
+
+    calls.clear()
+    again = SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+    assert calls == [] and all(s.get("render_reused") for s in again["scenes"])
+    assert [s["index"] for s in again["scenes"]] == [0, 1]
+
+    _setup_reuse(monkeypatch, tmp_path, ["첫 장면입니다.", "둘째 장면이 바뀌었습니다."])
+    changed = SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+    assert calls == [1]
+    assert changed["scenes"][0].get("render_reused") is True and not changed["scenes"][1].get("render_reused")
+
+
+def test_render_reuse_is_skipped_for_single_scene_runs_missing_files_and_code_changes(monkeypatch, tmp_path):
+    calls = _count_renders(monkeypatch)
+    _setup_reuse(monkeypatch, tmp_path, ["첫 장면입니다.", "둘째 장면입니다."])
+    SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+
+    calls.clear()
+    SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}", scene_indices=[1])
+    assert calls == [1]                                        # 문제 장면 다시 생성은 새 결과를 만든다
+
+    calls.clear()
+    frame = next((tmp_path / "jobs" / "1" / "slides").glob("scene_000_*.png"), None)
+    assert frame is not None
+    frame.unlink()                                             # 기록된 파일이 사라지면 다시 만든다
+    SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+    assert 0 in calls and 1 not in calls
+
+    calls.clear()
+    monkeypatch.setattr("app.workers.slides_worker._RENDER_CODE_HASH", "changed-render-code")
+    SlidesWorker().generate(job_id=1, tts_meta_json=None, script_meta_json="{}")
+    assert sorted(calls) == [0, 1]                             # 합성 코드가 바뀌면 개선이 누락되지 않게 모두 다시 만든다
