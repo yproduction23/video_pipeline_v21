@@ -63,3 +63,12 @@ def test_photo_is_regenerated_once_more_strictly_and_then_rejected(tmp_path):
     with pytest.raises(BackgroundRejected):
         ensure_photo_background(make, str(out), vision_call=_vision([{"photo": False, "has_text": True, "reason": "text"}]), prompt="p")
     assert made == [False, True]                                  # 재시도는 한 번뿐
+
+
+def test_gate_allows_incidental_signage_but_still_forbids_figures_headlines_and_brand_names():
+    """2026-10-19 운영자 결정: 배경에 작게 보이는 간판 글자는 중요하지 않다. 수치(가격·퍼센트·시세·그래프)는 생성형 이미지에 넣지 않는 프로젝트 규칙이라 계속 거절한다."""
+    from app.services.slide_background import _GATE_SYSTEM
+
+    assert "간판" in _GATE_SYSTEM and "부수적인" in _GATE_SYSTEM
+    for forbidden in ("숫자", "가격", "퍼센트", "시세", "그래프", "제목", "브랜드"):
+        assert forbidden in _GATE_SYSTEM
