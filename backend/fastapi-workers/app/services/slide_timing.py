@@ -161,3 +161,64 @@ def apply_tts_windows(scenes: list[dict]) -> bool:
         scene["end_seconds"] = round(end, 3)
         scene["duration"] = round(end - start, 3)
     return True
+
+
+# ---- 속도(2026-10-19 운영자 피드백: 싱크는 맞추되 글이 읽기 전에 사라지고 전체적으로 빠르다) ----
+READ_BASE_SECONDS = 1.4          # 글 한 줄을 읽는 데 필요한 기본 시간
+READ_PER_CHAR_SECONDS = 0.17     # 글자당 추가 시간(초당 약 6글자)
+PART_ANIM_SECONDS = 4.0          # 연상 부품 한 장면 안의 진행 시간(이전 3.5초)
+PART_PEAK_RATIO = 0.55           # 부품의 핵심 장면(받침이 눌림·선이 꺾임 등)이 오는 진행 비율 — 이 지점이 말하는 순간에 온다
+PART_MIN_START_SECONDS = 0.25
+
+
+def read_seconds(kind: str, content: dict | None) -> float:
+    """요소 하나가 화면에 있어야 읽을 수 있는 최소 시간(초). 글자 수·항목 수로 정한다."""
+    content = content or {}
+    if kind == "text":
+        return READ_BASE_SECONDS + READ_PER_CHAR_SECONDS * len(str(content.get("text") or ""))
+    if kind == "number":
+        return 2.2 + READ_PER_CHAR_SECONDS * len(str(content.get("label") or ""))
+    if kind == "list":
+        items = content.get("items") or []
+        return 1.8 + 1.3 * len(items) + READ_PER_CHAR_SECONDS * 0.5 * sum(len(str(i)) for i in items)
+    if kind == "flow":
+        nodes = content.get("nodes") or []
+        return 1.8 + 1.0 * len(nodes)
+    if kind in ("bars", "rows"):
+        items = content.get("items") or content.get("rows") or []
+        return 2.4 + 0.7 * len(items)
+    if kind == "streak":
+        return 3.5
+    return 1.2
+
+
+def overlay_read_seconds(overlay: dict | None) -> float:
+    """장면 단위 후편집(계획서 overlay)이 화면에 있어야 읽을 수 있는 최소 시간."""
+    overlay = overlay or {}
+    kind = overlay.get("type")
+    if kind == "key_text":
+        return read_seconds("text", {"text": overlay.get("text")})
+    if kind == "big_number":
+        return read_seconds("number", {"label": overlay.get("label")})
+    if kind in ("bullet_list",):
+        return read_seconds("list", {"items": overlay.get("items")})
+    if kind == "flow":
+        return read_seconds("flow", {"nodes": overlay.get("nodes")})
+    if kind in ("stat_chart", "compare_numbers"):
+        return read_seconds("bars", {"items": overlay.get("items") or overlay.get("rows")})
+    if kind == "logo_row":
+        return 1.8
+    return 1.2
+
+
+def part_timing(spoken: float | None, duration: float, *, total: float | None = None) -> tuple[float, float]:
+    """연상 부품의 (시작 시각, 진행 시간).
+
+    핵심 장면(진행의 PART_PEAK_RATIO 지점)이 그 구절을 말하는 순간에 오도록 먼저 천천히 시작한다 — 말하는 순간에야 시작하면 앞에서 빈 화면이 길었다.
+    total은 여러 장면에 걸친 부품의 전체 시간이다(첫 장면 기준 시작만 정한다)."""
+    available = float(total if total is not None else duration)
+    anim = max(min(available - PART_MIN_START_SECONDS - 0.5, PART_ANIM_SECONDS if total is None else max(total - 1.0, PART_ANIM_SECONDS)), 0.8)
+    if spoken is None:
+        return round(min(0.35, max(duration - 1.0, PART_MIN_START_SECONDS)), 2), round(anim, 2)
+    start = min(max(spoken - PART_PEAK_RATIO * anim, PART_MIN_START_SECONDS), max(duration - 1.0, PART_MIN_START_SECONDS))
+    return round(start, 2), round(anim, 2)

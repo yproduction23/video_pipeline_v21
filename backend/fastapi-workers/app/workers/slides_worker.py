@@ -42,7 +42,7 @@ from app.services.scene_preparation import prepare_job_scenes
 from app.services.slide_background import ensure_photo_background, generate_korean_slide_background
 from app.services.slide_kling import generate_slide_kling_clip
 from app.services.slide_motion_parts import compose_motion_part, is_countable, part_phrase
-from app.services.slide_timing import apply_tts_windows, phrase_offset, scene_chunks
+from app.services.slide_timing import apply_tts_windows, overlay_read_seconds, part_timing, phrase_offset, scene_chunks
 from app.services.slide_edit_plan import fallback_key_phrase, load_plan, plan_matches, save_plan
 from app.services.slide_edit_replan import build_edit_plan_with_repair as build_edit_plan, carry_locked_scenes
 from app.services.slide_landmark_judge import looks_foreign_cached
@@ -832,6 +832,9 @@ class SlidesWorker:
         base_offset = 0.0 if carry else (
             DEFAULT_OVERLAY_OFFSET if spoken is None else min(max(spoken - 0.15, 0.2), max(duration - 1.0, 0.2))
         )
+        if not carry and overlay_plan.get("type") != "motion_part":
+            # 읽기 전에 장면이 끝나 사라지지 않게: 장면이 끝나기 전 읽는 시간이 남도록 늦게 시작하는 후편집은 앞당긴다.
+            base_offset = min(base_offset, max(duration - overlay_read_seconds(overlay_plan), 0.2))
         spec["start_offset"] = base_offset
         carry_kwargs = {"fade_in_seconds": 0.05, "motion": "none"} if carry else {}
         if carry:
@@ -923,12 +926,18 @@ class SlidesWorker:
             clip_path = job_dir / f"scene_{index:03d}_part.mp4"
             span = overlay_plan.get("span") or {}
             continued = bool(span.get("index"))
+            # 연상 부품은 핵심 장면이 말하는 순간에 오도록 먼저 천천히 시작한다(계획서와 같은 계산).
+            part_start, part_anim = part_timing(
+                phrase_offset(scene.get("caption_chunks_rel") or [], self._overlay_phrase(overlay_plan)), duration,
+            )
+            if not span.get("anim"):
+                base_offset = part_start
             if not compose_motion_part(
                 base_path=str(base), base_is_video=bool(base_video), output_path=str(clip_path), duration=duration,
                 part=overlay_plan["part"], params=overlay_plan["params"], dim_base=dim_base,
                 # 이어지는 장면은 앞 장면에서 진행된 만큼 처음부터 떠 있고, 마지막 장면에서만 사라진다.
                 start_offset=0.0 if continued else base_offset, progress_offset=float(span.get("elapsed_before") or 0.0),
-                anim_total=float(span["anim"]) if span.get("anim") else None, fade_out=bool(span.get("last", True)),
+                anim_total=float(span["anim"]) if span.get("anim") else part_anim, fade_out=bool(span.get("last", True)),
             ):
                 raise RuntimeError("움직임 부품 합성 실패")
             out["stock_video_path"] = str(clip_path)
@@ -1014,7 +1023,7 @@ class SlidesWorker:
             return False
         params = {"value": overlay_plan["value"], "label": overlay_plan.get("label", ""), "icon": overlay_plan.get("icon")}
         clip_path = job_dir / f"scene_{index:03d}_counter.mp4"
-        anim = max(min(duration - base_offset - 0.6, 2.4), 0.8)
+        anim = max(min(duration - base_offset - 0.6, 3.0), 0.8)      # 카운트업은 천천히(이전 2.4초)
         if index == 0:
             # 영상 첫 장면(후킹): 말하기 전에 천천히 올라가기 시작해 그 구절을 말하는 순간에 값에 도착한다.
             landing = base_offset + 0.4

@@ -285,7 +285,7 @@ def test_the_opening_graphic_starts_moving_before_the_first_phrase_and_lands_whe
 
     first = opened[0]
     assert first["at"] == OPENING_START_SECONDS and first["opening"] is True
-    assert 1.4 <= first["enter"] <= 2.0                      # 1.7 + 0.4 = 2.1초에 완성 → 0.2초부터 약 1.9초 동안 천천히
+    assert 1.8 <= first["enter"] <= 2.4                      # 1.7 + 0.6 = 2.3초에 완성 → 0.2초부터 약 2.1초 동안 천천히
     assert opened[1]["at"] == 2.4                            # 뒤따르는 요소는 그대로
     untouched = _open_with_motion([dict(e) for e in elements], [{"index": 5}])
     assert untouched[0]["at"] == 1.7 and "enter" not in untouched[0]

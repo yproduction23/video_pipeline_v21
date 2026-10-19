@@ -1123,7 +1123,7 @@ def test_scene_overlay_appears_when_its_phrase_is_spoken_not_at_scene_start(monk
     result = worker.generate(job_id=1, tts_meta_json=_timed_tts(), script_meta_json="{}")
 
     offset = seen["composed"][0]["start_offset"]
-    assert 1.6 <= offset <= 2.2        # 둘째 줄(2.0초)이 시작될 때, 약간 앞서 나온다
+    assert 1.2 <= offset <= 2.2        # 둘째 줄(2.0초)이 시작될 때 나오되, 장면이 끝나기 전 읽는 시간이 남도록 필요하면 앞당긴다
     assert result["scenes"][0]["slide_layers"]["overlays"][0]["start_offset"] == offset
 
 

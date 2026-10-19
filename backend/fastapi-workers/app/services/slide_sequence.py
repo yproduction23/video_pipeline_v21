@@ -28,7 +28,7 @@ from app.services.slide_icon_judge import fill_missing_icons_in_topics, strip_un
 from app.services.slide_text_judge import drop_fake_lists_in_topics, fix_key_texts_in_topics
 from app.services.slide_title_judge import fix_titles_in_topics
 from app.services.slide_streak import streak_sprite as _streak_sprite
-from app.services.slide_timing import duplicates_subtitle, phrase_offset
+from app.services.slide_timing import duplicates_subtitle, phrase_offset, read_seconds
 from app.services.slide_motifs import PREFIX as MOTIF_PREFIX, motif_prompt_hint, motif_sprite, resolve_motif
 from app.services.slide_templates import expand_topic
 from app.services.slide_overlay import (
@@ -56,27 +56,27 @@ SLOTS = {
 KINDS = {"text", "number", "icon", "arrow", "bars", "list", "rows", "flow", "streak"}
 ANIMS = {"rise", "draw", "count", "grow"}  # 튀어나옴(pop)은 산만해 쓰지 않는다
 # 한 요소가 나타나는 데 걸리는 시간(초)
-ENTER_SECONDS = {"text": 0.32, "number": 0.7, "icon": 0.32, "arrow": 0.6, "bars": 0.8, "row": 0.4, "node": 0.35,
-                 "item": 0.35, "title": 0.32}
-EXIT_FADE_SECONDS = 0.25
+ENTER_SECONDS = {"text": 0.5, "number": 1.0, "icon": 0.5, "arrow": 0.8, "bars": 1.2, "row": 0.6, "node": 0.55,
+                 "item": 0.55, "title": 0.5}         # 2026-10-19 운영자 피드백: 전체적으로 빠른 감 — 등장을 느리게
+EXIT_FADE_SECONDS = 0.45
 # 하단 자막(영상 하단 약 y 900 이후)과 겹치지 않도록 요소 아래쪽 한계, 좌우·모서리 자리의 최대 폭.
 SUBTITLE_SAFE_BOTTOM = 890
 SIDE_SLOT_MAX_WIDTH = 820
 WIDE_SLOT_MAX_WIDTH = 1500
 _SIDE_SLOTS = {"left", "right", "upper_left", "upper_right", "lower_left", "lower_right"}
 OPENING_LATEST_SECONDS = 99.0  # 사용 안 함: 첫 요소도 그 구절을 말하는 순간에 나온다(2026-10-18 피드백: 말하기 전에 먼저 뜨면 싱크가 안 맞는다)
-SENTENCE_LINGER_SECONDS = 1.0  # 문장이 끝난 뒤 그래픽이 남아 있는 시간
+SENTENCE_LINGER_SECONDS = 1.6  # 문장이 끝난 뒤 그래픽이 남아 있는 시간
 # 2026-10-16 운영자 요청: 구조와 애니메이션 순서는 복잡하지 않고 단순하며 보기 편해야 한다.
 # 20번 Job 1:17~1:33 재현(2초마다 같은 자리에서 서로 다른 아이콘 교체, 빈 화면) 뒤 레퍼런스 10~33초를 다시 분석해
 # 개수 제한이 아니라 "주제 단위로 쌓고, 주제가 바뀔 때만 비운다"로 바꿨다(레퍼런스는 5~6개가 동시에 있어도 짝지어져 읽힌다).
 MIN_TOPIC_SECONDS = 4.0              # 주제(한 가지 이야기)의 최소 길이: 이보다 짧으면 앞 주제에 합친다
 MAX_TOPIC_SECONDS = 11.0             # 한 주제가 이보다 길게 정지해 있으면 재설계·보충한다
-FIXED_TOPIC_MIN_SECONDS = 2.5        # 템플릿 주제는 합치지 않으므로 이보다 짧으면 버린다
+FIXED_TOPIC_MIN_SECONDS = 3.0        # 템플릿 주제는 합치지 않으므로 이보다 짧으면 버린다
 MAX_ELEMENTS_PER_TEMPLATE = 8
 MIN_ELEMENT_SECONDS = 1.5            # 주제가 끝나기 전 이만큼도 안 남으면 새 요소를 만들지 않는다
 OPENING_START_SECONDS = 0.2         # 영상 첫 장면의 첫 그래픽이 움직이기 시작하는 시각(후킹: 첫 음성 전에 화면이 비지 않게)
 OPENING_ENTER_MIN, OPENING_ENTER_MAX = 1.0, 3.4   # 오프닝 그래픽이 천천히 움직이며 말하는 순간에 완성되는 시간(초)
-ANCHOR_LEAD_SECONDS = 0.4              # 그래픽이 나타나기 시작해 완성될 때까지(2026-10-19: 말하는 순간에 완성되게)
+ANCHOR_LEAD_SECONDS = 0.6              # 그래픽이 나타나기 시작해 완성될 때까지(2026-10-19: 말하는 순간에 완성되게)
 RED_TOPICS_PER_SEQUENCE = 0          # 빨간 글 강조 주제 수 — 2026-10-19 운영자 결정: 쓰지 않는다(정리 카드·그림으로 대체)
 RED_TEXT_MIN_GAP_SECONDS = 20.0      # 앞 빨간 글 강조와 이만큼 떨어져야 다음 빨간 글을 쓴다
 TOPIC_OVERLAP_SECONDS = 0.12         # 주제 전환 때 앞 주제 요소를 남겨 두는 시간(화면이 비는 깜빡임 방지)
@@ -763,6 +763,8 @@ def _expire_stale_topics(elements: list[dict], run: list[dict], plan: dict) -> l
         if limit is None:
             continue
         limit = max(limit, max(e["at"] for e in group) + 2.5) + SENTENCE_LINGER_SECONDS
+        # 읽기 전에 사라지지 않게: 요소마다 필요한 읽는 시간(글자 수·항목 수)을 보장한다(운영자 피드백 2026-10-19).
+        limit = max(limit, max(e["at"] + read_seconds(e["kind"], e.get("content")) for e in group))
         for element in group:
             element["until"] = round(max(min(element["until"], limit), element["at"] + 0.6), 2)
     return elements
@@ -1288,7 +1290,7 @@ def expand_primitives(sequence: dict) -> list[dict]:
             prims.append({**base, "kind": "arrow", "at": at, "pos": (cx, cy), "direction": content["direction"]})
         elif kind == "streak":
             prims.append({**base, "kind": "streak", "at": at, "pos": (cx, cy), "count": content["count"],
-                          "phrase": content["phrase"], "enter": min(max(1.0 + 0.45 * content["count"], 2.5), 6.5)})
+                          "phrase": content["phrase"], "enter": min(max(1.4 + 0.5 * content["count"], 3.0), 7.5)})
         elif kind == "bars":
             prims.append({**base, "kind": "bars", "at": at, "pos": (cx, cy), "title": content.get("title", ""),
                           "items": content["items"]})

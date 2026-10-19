@@ -256,7 +256,7 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
     if not concepts:
         return plan
     from app.services.slide_motion_parts import part_phrase, validate_part
-    from app.services.slide_timing import overlay_start_offset
+    from app.services.slide_timing import part_timing, phrase_offset
 
     scenes = plan["scenes"]
     by_index = {s["index"]: s for s in scenes}
@@ -323,11 +323,13 @@ def apply_concepts(plan: dict, concepts: dict | None) -> dict:
             span.append(follower)
             total += scene["duration"]
         head_scene = by_index[index]
-        head_start = overlay_start_offset(head_scene.get("chunks") or [], part_phrase(part, params), head_scene["duration"])
+        spoken = phrase_offset(head_scene.get("chunks") or [], part_phrase(part, params))
         if len(span) > 1:
+            head_start, _ = part_timing(spoken, head_scene["duration"], total=total)
             anim = max(min(total - head_start - 0.5, MAX_ANIM_SECONDS), 3.0)
         else:
-            anim = max(min(head_scene["duration"] - head_start - 0.4, 3.5), 0.8)
+            # 핵심 장면이 말하는 순간에 오도록 먼저 천천히 시작한다(2026-10-19 운영자 결정, 빈 칠판 방지)
+            head_start, anim = part_timing(spoken, head_scene["duration"])
         chosen.append({"index": index, "start": start, "part": part, "params": params, "span": span, "anim": anim,
                        "head_start": head_start, "concept": concept})
         occupied.update(span)

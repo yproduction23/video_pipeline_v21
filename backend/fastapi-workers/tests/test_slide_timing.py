@@ -90,3 +90,27 @@ def test_scene_windows_follow_the_tts_contract_like_the_assembly_does():
     assert [(c["start"], c["end"]) for c in rel] == [(0.37, 2.3), (2.5, 4.3)]  # 장면 안 상대 시각이 0으로 깨지지 않는다
     # 계약 시각이 없으면 건드리지 않는다
     assert tts_windows([{"duration": 4.0}]) is None and apply_tts_windows([{"duration": 4.0}]) is False
+
+
+def test_read_time_grows_with_text_and_items_so_text_never_vanishes_before_it_can_be_read():
+    """2026-10-19 운영자 피드백: 글이 읽기 전에 없어진다 — 요소마다 글자 수·항목 수로 읽는 시간을 정한다."""
+    from app.services.slide_timing import overlay_read_seconds, read_seconds
+
+    short, long_ = read_seconds("text", {"text": "금리 상승"}), read_seconds("text", {"text": "미국 장기금리가 방향을 틀면"})
+    assert 1.8 < short < long_ and long_ > 3.0
+    assert read_seconds("list", {"items": ["가", "나", "다"]}) > read_seconds("list", {"items": ["가", "나"]})
+    assert read_seconds("flow", {"nodes": [{}, {}, {}]}) > read_seconds("flow", {"nodes": [{}, {}]})
+    assert overlay_read_seconds({"type": "key_text", "text": "지수를 끌어내렸습니다"}) > 3.0
+
+
+def test_motion_part_starts_early_so_its_key_moment_lands_on_the_spoken_phrase():
+    """2026-10-19 운영자 결정: 연상 부품은 핵심 장면(진행의 55% 지점)이 말하는 순간에 오도록 먼저 천천히 시작한다 — 말하는 순간에야 시작하면 앞이 비었다."""
+    from app.services.slide_timing import PART_ANIM_SECONDS, PART_PEAK_RATIO, part_timing
+
+    start, anim = part_timing(4.2, 5.6)                  # "하방"을 4.2초에 말하는 5.6초 장면(3:44 재현)
+    assert anim == PART_ANIM_SECONDS and abs((start + PART_PEAK_RATIO * anim) - 4.2) < 0.05   # 핵심 장면이 말하는 순간
+    assert start < 2.2                                                                      # 이전에는 약 4초를 비워 뒀다
+    early, _ = part_timing(0.5, 5.0)
+    assert early == 0.25                                                                    # 말이 장면 첫머리면 바로 시작
+    none_start, _ = part_timing(None, 5.0)
+    assert none_start <= 0.35                                                               # 시각 정보가 없으면 기본값
